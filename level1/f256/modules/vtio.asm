@@ -867,6 +867,8 @@ GetStat             cmpa      #SS.EOF             is this the EOF call?
                     lbeq      SSFBRgs             yes, go process
                     cmpa      #SS.DfPal           get default colors?
                     beq       SSDfPal             yes, go process
+	            cmpa      #SS.GetScreenMem    Allocate Screen Memory
+		    lbeq      SSGetScreenMem	  yes, go process
                     comb                          set the carry
                     ldb       #E$UnkSvc           load the "unknown service" error
                     rts                           return
@@ -935,18 +937,18 @@ SSJoy               lda         IORA              get the joystick value
                     ldy         #255              initialize right/bottom value in Y
                     lsra                          shift out UP
                     bcc         s1@               branch if carry clear
-                    stx         R$Y,u             else store left value in caller's Y
+                    stx         R$Y,x             else store left value in caller's Y
 s1@                 lsra                          shift out DOWN
                     bcc         s2@               branch if carry clear
-                    sty         R$Y,u             else store right value in caller's Y
+                    sty         R$Y,x             else store right value in caller's Y
 s2@                 lsra                          shift out LEFT
                     bcc         s3@               branch if carry clear
-                    stx         R$X,u             else store up value in caller's X
+                    stx         R$X,x             else store up value in caller's X
 s3@                 lsra                          shift out RIGHT
                     bcc         s4@               branch if carry clear
-                    sty         R$X,u             else store right value in caller's X
+                    sty         R$X,x             else store right value in caller's X
 * A now contains (BUTTON 2 | BUTTON 1 | BUTTON 0) in lower 3 bits
-s4@                 sta         R$A,u             store buttons in caller's A
+s4@                 sta         R$A,x             store buttons in caller's A
                     clrb                          clear carry
                     rts                           return
 
@@ -992,6 +994,141 @@ SSDfPal
                     clrb                          no error
                     rts                           return
 
+;;; SS.GetScreenMem
+;;;
+;;; F256 Graphics Bitmap screen is 320x240 (NTSC 60 hz 76.8K) or 320x200 (PAL 70hz 64k)
+;;; Allocates 76.8K for Graphics Screen and returns Address of 8K boundary
+;;; Need 10 blocks (80k)
+;;; Set up Screen 1, 2, or 3 to use new memory range. Screen 1,2,3 are layers.
+;;; All 3 Screens(layers) can be shown at the same time
+;;; Turn on graphics page (bit 2) at register $FC00
+;;; Bit 1 will overlay text on top of graphics layer
+;;;
+;;; Graphics Control Register
+;;; |Address| 7 |   6   |   5    |    4    |   3    |   2   |   1   |  0   |
+;;; | $FFC0 | X | GAMMA | SPRITE |   TILE  | BITMAP | GRAPH | OVRLY | TEXT |
+;;; | $FFC1 | X |   X   |FON_SET |FON_OVRLY|MON_SLP | DBL_Y | DBL_X |CLK_70|
+;;; Graphic Layers 1-3 can be Bitmaps or Tiles
+;;; | $FFC2 | X |       LAYER 1 (6,5,4)    |        | Layer 0 (2,1,0)      |
+;;; | $FFC3 | X |   X   |   X    |    X    |   X    | Layer 2 (2,1,0)      |
+;;; 0=000BM0;1=001BM1;2=010BM2;4=100TM0;5=101TM1;6=110TM2
+;;;
+;;; Three Bitmap locations can be stored in TinyVicky Chip.  MMU Page $C0
+;;; |Address |Bitmap|  7  |  6  |  5  |  4  |  3  |  2  |  1  |  0   |
+;;; |$18_1000|      |                             |   CLUT    |ENABLE|
+;;; |$18_1001|  0   | AD7 | AD6 | AD5 | AD4 | AD3 | AD2 | AD1 | AD0  |
+;;; |$18_1002|      |AD15 |AD14 |AD13 |AD12 |AD11 |AD10 | AD9 | AD8  |
+;;; |$18_1003|      |                             |AD18 |AD17 | AD16 |
+;;; ------------------------------------------------------------------
+;;; |$18_1008|      |                             |   CLUT    |ENABLE|	
+;;; |$18_1009|  1   | AD7 | AD6 | AD5 | AD4 | AD3 | AD2 | AD1 | AD0  |
+;;; |$18_100A|      |AD15 |AD14 |AD13 |AD12 |AD11 |AD10 | AD9 | AD8  |
+;;; |$18_100B|      |                             |AD18 |AD17 | AD16 |
+;;; ------------------------------------------------------------------
+;;; |$18_1010|      |                             |   CLUT    |ENABLE|	
+;;; |$18_1011|  2   | AD7 | AD6 | AD5 | AD4 | AD3 | AD2 | AD1 | AD0  |
+;;; |$18_1012|      |AD15 |AD14 |AD13 |AD12 |AD11 |AD10 | AD9 | AD8  |
+;;; |$18_1013|      |                             |AD18 |AD17 | AD16 |	
+;;; 
+;;; Entry:  R$A = Standard output
+;;; 	    R$X = Bitmap number 0-3 (3 is don't map to bitmap)
+;;; 	    R$Y = Screen (Layer) Number from 0-3 (3 is don't map to screen)
+;;;
+;;; Exit:   R$X = Starting block# for graphics screen
+;;;
+;;; Error:  B = A non-zero error code
+;;;
+;;; GetStat Y=path descriptor, X=pointer to caller registers, U=Device memory area
+SSGetScreenMem
+*		    ** Allocate Memory
+		    ldb	      #10		  Need 10 8k Blocks from highram	
+	            os9	      F$AlHRAM		  Allocate Ram, put starting block# in D
+               	    bcc       cont@               Check for error, continue if no error
+	            ldb       #E$MFull            Set error code to Memory Full error and return
+		    rts
+*		    ** Test Bitmap#, if 0-2 set bitmap, if 3 skip	
+cont@	            pshs      y			  Save path desciptor to stack
+		    ldy	      R$X,x		  Get x from caller's registers	  
+		    cmpy      #$03		  If y = 3, then not mapping, just allocate
+                    beq       end@                and proceed to exit
+* 		    ** Store starting block# for bitmap in V.BMXBlock
+		    pshs      d,y		  Save block# and bitmap#(should be 0-2) on stack
+		    tfr	      y,d                 
+		    leay      V.BM0Block,u        Calc address for block storage BM0,BM1 or BM2
+		    lda	      1,s		  load block# from stack
+	            sta	      b,y	  	  Store block # in V.[BMX]Block where [X] is 0,1 or 2
+		    puls      y,d
+*		    ** Store physical address of bitmap in TinyVicky BM0, BM1 or BM2
+		    pshs      cc
+		    orcc      #IntMasks           mask interrupts
+	            lda       #$C0                Get the MMU Block for bitmap control
+                    sta       MAPSLOT             store it in the MMU slot to map it in
+		    puls      cc
+*                   ** Calculate starting address at 1000,1008,1010
+	            pshs      b,y		  push block# and bitmap# to stack		  
+		    tfr	      y,d                 b will be bitmap#
+		    lda	      #$08		  multiply by 8
+		    mul
+		    tfr	      d,y		  d should be 0,8,or 16
+		    leay      1000,y              load y with address of BM0,BM1 or BM2 addr
+*                   ** Convert b from block number to physical address
+		    ldb	      ,s		  load b with block# from stack
+		    clra			  clear a, block # is in b
+		    ls1b                          multiply block# by $20 to get top 16 bytes x2
+		    rola			  of physical address (ex $3F*$20 = $07E0)
+		    ls1b                          x4
+		    rolb
+		    lslb                          x8
+		    rolb
+		    lslb                          x16
+		    rolb
+		    ldlb			  x32 ($20)
+		    rolb                          
+*		    ** Load Bitmap start block physcial address into Vicky BM0, BM1 or BM2
+		    pshs      x,a
+		    tfr       y,x
+		    lda       #00000001		  enable bitmapX
+		    sta	      IOADDR,x
+		    leax      1,x
+		    puls      a                   pull high byte of bitmap addrses
+		    clr	      IOADDR,x		  clear AD7-AD0
+		    leax      1,x
+		    stb	      IOADDR,x		  store AD15-AD8
+		    leax      1,x
+		    sta	      IOADDR,x            store AD18-AD16
+*		    ** Assign Bitmap to screen
+		    ldy	      R$Y,x		  get the screen number
+		    ldd	      R$X,x               get the bitmap number, b=bitmap#
+		    lda	      $FFC2
+bm0@                cmpy      #$00		  test for BM0
+		    bne	      bm1@		  if not, go to BM1
+		    anda      #11110000           this is BM0, clear BM0 values
+		    sta	      $FFC2		  Store them
+		    bra	      end@
+bm1@		    cmpy      #$01		  test for BM1
+		    bne	      bm2@                if not, go to BM2
+		    anda      #00001111           clear the BM1 bits
+		    sta	      $FFC2
+		    lslb                          shift bitmap# 4 bits for layer 1
+		    lslb
+		    lslb
+		    lslb
+		    addb      $FFC2		  add it
+		    stb	      $FFC2		  store it
+		    bra	      end@
+bm2@		    cmpy      #$02                test for BM2
+		    bne	      end@
+		    lda	      $FFC3               clear layer 2
+		    anda      #11110000
+		    sta	      $FFC3
+		    addb      $FFC3		  add bitmap#
+		    stb	      $FFC3
+		    puls      x	                  clean up stack
+		    puls      b,y
+		    puls      y
+		    clra
+end@		    std       R$X,x		  block # in b, save to caller's x
+		    rts
 *
 * SetStat
 *

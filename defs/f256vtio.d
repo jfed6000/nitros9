@@ -33,6 +33,13 @@ V.WWidth            RMB       1                   the window width
 V.WHeight           RMB       1                   the window height
 
 V.EscParms          RMB       20
+
+* Store starting page for bitmaps.  Must be in first 512K of ram
+* $01_0000-$07_FFFF (OS9 Memory Blocks $01-$3F)
+V.BM0Block	    RMB	      1			  bitmap0 block
+V.BM1Block	    RMB	      1			  bitmap1 block
+V.BM2Block	    RMB	      1			  bitmap2 block
+
 * DWSet Parameters
 V.DWType            set       V.EscParms+0
 V.DWStartX          set       V.EscParms+1
