@@ -28,9 +28,9 @@ edition             set       2
 * We can use a different MMU slot if we want.
 MAPSLOT             equ       MMU_SLOT_1
 MAPSLOT2            equ       MMU_SLOT_2
-IOADDR              equ       (MAPSLOT-MMU_SLOT_0)*$2000
-IOADDR2             equ       (MAPSLOT2-MMU_SLOT_0)*$2000
-G.ScrStart          equ       IOADDR
+SCRIOADDR           equ       (MAPSLOT-MMU_SLOT_0)*$2000
+SCRIOADDR2          equ       (MAPSLOT2-MMU_SLOT_0)*$2000
+G.ScrStart          equ       SCRIOADDR
 
                     mod       eom,name,tylg,atrv,start,size
 
@@ -61,10 +61,12 @@ InitDisplay         pshs      u                   save important registers
 
 * Put F256 graphics into text mode.
                     ldd       #80*256+60
+		    clr	      V.ST,u		  0=Term, 1=Gfx
                     std       V.WWidth,u
                     lda       #Mstr_Ctrl_Text_Mode_En enable text mode
-                    sta       MASTER_CTRL_REG_L
-                    clr       MASTER_CTRL_REG_H
+		    clrb
+                    std       MASTER_CTRL_REG_L
+                    std	      V.V_MCR,u		  Store MCR in MCR copy
                     clr       BORDER_CTRL_REG
                     clr       BORDER_COLOR_R
                     clr       BORDER_COLOR_G
@@ -76,9 +78,9 @@ InitDisplay         pshs      u                   save important registers
                     sta       MAPSLOT             store it in the MMU slot to map it in
                     ldd       #0                  get the clear value
 x1@                 tfr       d,x                 transfer it to X
-                    stb       IOADDR,x            store at $0000 off of X
-                    stb       IOADDR+$400,x       store at $0400 off of X
-                    stb       IOADDR+$800,x       store at $0800 off of X
+                    stb       SCRIOADDR,x            store at $0000 off of X
+                    stb       SCRIOADDR+$400,x       store at $0400 off of X
+                    stb       SCRIOADDR+$800,x       store at $0800 off of X
                     incb                          increment the counter
                     bne       x1@                 loop until complete
 
@@ -104,10 +106,10 @@ InstallFont         leax      fontmod,pcr         point to the font module
                     tfr       y,x                 transfer Y to X
                     lda       #$C1                get the font MMU block
                     sta       MAPSLOT             store it in the MMU slot to map it in
-                    ldy       #IOADDR             get the address to write to
+                    ldy       #SCRIOADDR             get the address to write to
 loop@               ldd       ,x++                get two bytes of font data
                     std       ,y++                and store it
-                    cmpy      #IOADDR+2048        are we at the end?
+                    cmpy      #SCRIOADDR+2048        are we at the end?
                     bne       loop@               branch if not
 
 * Initialize the cursor.
@@ -147,9 +149,9 @@ loop@               ldd       ,x++                get two bytes from the source
                     rts                           return
 
 * Clear memory at IOADDR with the contents of D.
-clr                 ldx       #IOADDR
+clr                 ldx       #SCRIOADDR
 loop@               std       ,x++
-                    cmpx      #IOADDR+80*61
+                    cmpx      #SCRIOADDR+80*61
                     bne       loop@
                     rts
 
@@ -163,8 +165,8 @@ loop@               std       ,x++
 *    CC = carry set on error
 *    B  = error code
 *
-Init                stu       >D.KbdSta           store the device memory pointer
-                    leax      DefaultHandler,pcr  get the default character processing routine
+*Init                stu       >D.KbdSta           store the device memory pointer
+Init                leax      DefaultHandler,pcr  get the default character processing routine
                     stx       V.EscVect,u         store it in the vector
                     ldb       #$10                assume this foreground/background
                     stb       V.FBCol,u           store it in our foreground/background color variable
@@ -1248,17 +1250,21 @@ InitGrfDisplay      pshs      a,b                  save it on the stack
 * Put F256 graphics into graphics mode and zero out all values.
                     ldd       #40*256+60
                     std       V.WWidth,u
-                    lda       #Mstr_Ctrl_Graph_Mode_En+
-                    sta       MASTER_CTRL_REG_L
-                    clr       MASTER_CTRL_REG_H
+		    lda	      #1
+		    sta	      V.ST,u		  0=Term, 1=Gfx
+                    lda       #Mstr_Ctrl_Graph_Mode_En
+		    clrb
+        	    std       MASTER_CTRL_REG_L	  write MCR
+                    std	      V.V_MCR,u		  Store MCR in MCR copy
                     clr       BORDER_CTRL_REG
                     clr       BORDER_COLOR_R
                     clr       BORDER_COLOR_G
                     clr       BORDER_COLOR_B
                     ldd       #0
-                    std       V.BMOBLk,u          Clear BMOBlk & BM0Cl_En
-                    std       V.BM1BLk,u          Clear BM1Blk & BM1Cl_En
-                    std       V.BM2BLk,u          Clear BM2Blk & BM2Cl_En
+		    std	      V.V_LayerCTL	  Clear layer control register copy
+                    std       V.BM0Blk,u          Clear BMOBlk & BM0Cl_En
+                    std       V.BM1Blk,u          Clear BM1Blk & BM1Cl_En
+                    std       V.BM2Blk,u          Clear BM2Blk & BM2Cl_En
                     std       V.CLUTBlk,u         Clear CLUTBlk & CLUT
                     std       V.TM0,u
                     std       V.TM0MapX,u
@@ -1327,8 +1333,8 @@ InitGrfDisplay      pshs      a,b                  save it on the stack
 ;;; GetStat Y=path descriptor, X=pointer to caller registers, U=Device memory area
 GfxGetScreenMem
 * Allocate Memory
-                    ldb	      #10		  Need 10 8k Blocks from highram	
-	            os9	      F$AlHRAM		  Allocate Ram, put starting block# in D
+                    ldb	      #10		  Need 10 8k Blocks from highram
+		    os9	      F$AlHRAM		  Allocate Ram, put starting block# in D
                	    bcc       cont@               Check for error, continue if no error
 	            ldb       #E$MFull            Set error code to Memory Full error and return
  		    rts
@@ -1364,11 +1370,14 @@ map@		    pshs      b,x		  Save block# and bitmap#(should be 0-2) on stack
 * Load Bitmap start block physical address into Vicky BM0, BM1 or BM2
 		    pshs      a
 		    lda       #00000001		  enable bitmapX
-		    sta	      IOADDR,x+            IOADDR is logical addr $2000
+		    sta	      SCRIOADDR,x            IOADDR is logical addr $2000
+		    leax      1,x
 		    puls      a                   pull high byte of bitmap addrses
-		    clr	      IOADDR,x+		  clear AD7-AD0
-		    stb	      IOADDR,x+		  store AD15-AD8
-		    sta	      IOADDR,x            store AD18-AD16
+		    clr	      SCRIOADDR,x		  clear AD7-AD0
+		    leax      1,x
+		    stb	      SCRIOADDR,x		  store AD15-AD8
+		    leax      1,x
+		    sta	      SCRIOADDR,x            store AD18-AD16
 * Assign Bitmap to screen layer
 	            puls      x,b                 x = bitmap number, b = block #
                     pshs      b                   push block#
@@ -1395,7 +1404,7 @@ sl1@		    cmpy      #$01		  test for BM1
 sl2@		    cmpy      #$02                test for BM2
 		    bne	      setresult@
 		    lda	      $FFC3               clear layer 2
-		    anda      #11110000
+		    anda      %11110000
 		    sta	      $FFC3
 		    addb      $FFC3		  add bitmap#
 		    stb	      $FFC3
@@ -1427,13 +1436,13 @@ loop@               bsr	      write_bgra
 
 write_bgra          pshs      b			  push rrrgggbb value
 	            pshs      b			  push red (red is high 3 bits)
-	            asl	      b                   shift to high 3 bits green
-	            asl       b
-	            asl       b
+	            aslb      			  shift to high 3 bits green
+	            aslb      
+	            aslb      
 	            tfr       b,a                 copy green to a
-	            asl	      a                   shift to high 3 bits blue
-	            asl       a
-	            asl       a
+	            asla                   	  shift to high 3 bits blue
+	            asla      
+	            asla      
 	            anda      %11100000           blue - mask low 5 bits
 	            andb      %11100000           green - mask low 5 bits
 	            std       ,x++		  write blue,green : inc x to r,a
@@ -1478,41 +1487,56 @@ RefreshVicky        ldd       V.V_MCR,u           load Master Control Register
                     ldx       #$1100
                     lbsr      WriteFullConfig
                     ldd       V.TM0MapX
-                    sta       IOADDR,x++
-                    stb       IOADDR,x++
+                    sta       SCRIOADDR,x
+		    leax      2,x
+                    stb       SCRIOADDR,x
+		    leax      2,x
                     ldd       V.TM0ScrlX,u
-                    std       IOADDR,x++
+                    std       SCRIOADDR,x
+		    leax      2,x
                     ldd       V.TM0ScrlY,u
-                    std       IOADDR,X++
+                    std       SCRIOADDR,x
+		    leax      2,x
 * TM1
                     lda       V.TM1,u             tile size and enable
                     ldb       V.TM1Blk,u          Starting block of tile map
                     lbsr      WriteFullConfig
                     ldd       V.TM1MapX
-                    sta       IOADDR,x++
-                    stb       IOADDR,x++
+                    sta       SCRIOADDR,x
+		    leax      2,x
+                    stb       SCRIOADDR,x
+		    leax      2,x
                     ldd       V.TM1ScrlX,u
-                    std       IOADDR,x++
+                    std       SCRIOADDR,x
+		    leax      2,x
                     ldd       V.TM1ScrlY,u
-                    std       IOADDR,X++
+                    std       SCRIOADDR,x
+		    leax      2,x
 * TM2
                     lda       V.TM2,u             tile size and enable
                     ldb       V.TM2Blk,u          Starting block of tile map
                     lbsr      WriteFullConfig
                     ldd       V.TM2MapX
-                    sta       IOADDR,x++
-                    stb       IOADDR,x++
+                    sta       SCRIOADDR,x
+		    leax      2,x
+                    stb       SCRIOADDR,x
+		    leax      2,x
                     ldd       V.TM2ScrlX,u
-                    std       IOADDR,x++
+                    std       SCRIOADDR,x
+		    leax      2,x
                     ldd       V.TM2ScrlY,u
-                    std       IOADDR,X++
+                    std       SCRIOADDR,X
+		    leax      2,x
 * TS0
                     ldx       #$1180              Tile sets start at $1180 in $C0
                     tfr       u,y                 Use y as index
-tsloop@             ldb       V.TS0Blk,y+         load block#
+tsloop@             ldb       V.TS0Blk,y         load block#
+		    leay      1,y
                     lbsr      WriteAddrOnly       write address
-                    ldb       V.TS0Blk,y+         load Square/linear setting
-                    stb       IOADDR,x+           write setting
+                    ldb       V.TS0Blk,y         load Square/linear setting
+		    leay      1,y
+                    stb       SCRIOADDR,x            write setting
+		    leax      1,x
                     cmpx      $11A0               stop at $1180+$20=$11A0
                     bne       tsloop@
 * CLUT              
@@ -1546,27 +1570,31 @@ end@                rts
 
                     
 ;;; Writes Bitmap config where a=CLUT/Enable, b=Block#, x=address offset
-WriteFullConfig     sta       IOADDR,x+            write clut/enable setting
+WriteFullConfig     sta       SCRIOADDR,x            write clut/enable setting
+		    leax      1,x
 WriteAddrOnly       clra                          BM1 Blk2Addr, store in Vicky
                     bsr       Blk2Addr
-                    clr	      IOADDR,x+		  clear AD7-AD0
-		    stb	      IOADDR,x+		  store AD15-AD8
-		    sta	      IOADDR,x+            store AD18-AD16
+                    clr	      SCRIOADDR,x		  clear AD7-AD0
+		    leax      1,x
+		    stb	      SCRIOADDR,x		  store AD15-AD8
+		    leax      1,x
+		    sta	      SCRIOADDR,x           store AD18-AD16
+		    leax      1,x
                     rts
                     
 * Block to Address: Convert block# to high 16 bits in D
 * b = block#, a = 0.  d = high 16 bits of address
 * Try to replace with math coprocessor multiply in Vicky?
 Blk2Addr            clra			  clear a, block # is in b
-		    ls1b                          multiply block# by $20 to get top 16 bits x2
+		    lslb                          multiply block# by $20 to get top 16 bits x2
 		    rola			  of physical address (ex $3F*$20 = $07E0)
-		    ls1b                          x4
+		    lslb                          x4
 		    rola                          roll carry into a
 		    lslb                          x8
 		    rola                          roll carry into a
 		    lslb                          x16
 		    rola                          roll carry into a
-		    ldlb			  x32 ($20)
+		    lslb			  x32 ($20)
 		    rola
                     rts
 

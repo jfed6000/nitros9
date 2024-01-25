@@ -30,7 +30,7 @@ V.IBufH             RMB       1                   the input buffer head pointer
 V.IBufT             RMB       1                   the input buffer tail pointer
 
 V.WWidth            RMB       1                   the window width
-V.WHeight           RMB       1                   the window height
+V.WHeight           RMB       1                   the window heightx
 
 V.EscParms          RMB       20
 * DWSet Parameters
@@ -97,7 +97,7 @@ V.CLUT              RMB       1			  Which CLUTs are active 00001111
 * A tile map could be 2.4K (40x30) to 132K (256x256)
 
 V.TM0	    	    RMB	     1	     	  	  Bit4 is Tile Size (1=8x8,0=16x16) Bit0 is enable
-V.TMOBlk	    RMB	     1			  Starting Block# of Tile Map
+V.TM0Blk	    RMB	     1			  Starting Block# of Tile Map
 V.TM0MapX	    RMB	     1			  Map Size X (max 255)
 V.TM0MapY	    RMB	     1			  Map Size Y (max 255)
 V.TM0ScrlX          RMB      2			  2 bytes for scroll X info
