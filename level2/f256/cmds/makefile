@@ -11,7 +11,7 @@ AFLAGS      += -I$(3RDPARTY)/packages/brainfuck
 AFLAGS      += -I$(3RDPARTY)/packages/cpm
 AFLAGS      += -I../defs
 LFLAGS		+= -L$(NITROS9DIR)/lib
-LFLAGS		+= -lf256
+LFLAGS		+= -lf256l2
 LFLAGS		+= -lnet -lalib
 
 BASIC09	= basic09 runb inkey syscall
@@ -38,7 +38,7 @@ all:	$(DEPENDS) $(CMDS) shell utilpak1
 # Some commands depend on net.o
 $(NOSLIB)/net.o:
 	cd $(NOSLIB); make
-	
+
 runb:	runb.asm
 	$(AS) $(AFLAGS) $< $(ASOUT)$@
 	$(MERGE) $@ $(SUBS)>$@.tmp
