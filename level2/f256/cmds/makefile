@@ -20,7 +20,7 @@ CPM     = cpm
 CMDS_DW = inetd dw telnet httpd
 CMDS    = asm attr backup binex build cmp copy \
 		date dcheck debug ded deiniz del deldir devs dir dirsort disasm \
-		display dmem dmode dsave dump echo edit error exbin \
+		display dmem dmode dsave dump echo edit error exbin fstatus \
 		format free help ident iniz irqs link list load login \
 		makdir mdir megaread merge mfree minted mmap modpatch padrom park \
 		pmap proc procs prompt pwd pxd rename save setime shellplus \

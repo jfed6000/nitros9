@@ -33,7 +33,7 @@ RBFNXSD	= $(MD)/llfnxsd.sb $(MD)/s0.dd
 SCF		 = $(MD)/scf.mn
 
 # SCF video terminal
-SCVT		 = $(MD)/vtio.dr $(MD)/term.dt
+SCVT		 = $(MD)/vtio.dr $(MD)/term.dt 
 
 # Font & palette
 FONT		 = $(MD)/phoenixegafont.sb

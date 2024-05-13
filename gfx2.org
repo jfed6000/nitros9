@@ -1,0 +1,42 @@
+gfx2 - reapply gfxscreen branch to new branch
+
+Old branch would compile but not run correctly.  Need to start fresh
+and apply changes individually to see what is breaking.
+
+* Changes and Compile Tests
+** defs/f256vtio.d
++ apply changes and add new gfx variables to file
++ Compiled and tested, everything works
++ Prior issue may have been ORG 0 command which put the keyboard buffer at 0
+  + that would have broken the whole system
+** level1/f256/modules/vtio.asm
++ add code for f256 graphic
++ compiled and tested, term still works
+** level1/f256/modules/gfx1.asm
++ add device descriptor
+  TODO: Change memory address  *DONE*
+  + change physical controller address to $C001
+** level2/f256/modules/makefile
++ add gfx1.dt to line 23 in scf section
+** level2/f256/bootfiles/makefile
++ add gfx1.dt to scf video termial line 36
+* Structure
+** Globals
+*** os9.d
+  + D.CCMem is defined in os9.d at 616 which points to graphics global memory pointer ($1000)
+*** krn.asm  
+  + D.CCMem is set to $1000 in krn.asm line 296
+*** cocovtio.d
+  + G.CurDev line 624 = current device's static memory pointer
+  + G.CurDevFl line 606 = current device flag
+  + G.WinType line 614 = current device's V.Type
+  + G.PrWMPt line 625 = previous window staties mem pointer
+** Init vtio.asm
+  + stores U in G.Curdev line 198
+  + Gets process decriptor and makes current process, lines 221-222 (why?)
+    #+begin_src
+      ldd       <D.SysPrc           get system process desc ptr
+      std       <D.Proc             make current process
+    #+end_src
+** Init cowin.asm
+  + Co Modules has init for window table. line 208

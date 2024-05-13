@@ -27,7 +27,9 @@ edition             set       2
 
 * We can use a different MMU slot if we want.
 MAPSLOT             equ       MMU_SLOT_1
+MAPSLOT2            equ       MMU_SLOT_2
 MAPADDR             equ       (MAPSLOT-MMU_SLOT_0)*$2000
+MAPADDR2            equ       (MAPSLOT2-MMU_SLOT_0)*$2000
 G.ScrStart          equ       MAPADDR
 
                     mod       eom,name,tylg,atrv,start,size
@@ -170,13 +172,25 @@ Init                leax      DefaultHandler,pcr  get the default character proc
                     clra                          set D..
                     clrb                          to $0000
                     std       V.CurRow,u          set the current row and column
-                    lbsr      InitDisplay         initialize the display
-
+* Term or gfx screen?  Do init based on device type
+                    lda       <IT.PAR,y           get the dev ctrl reg from device descriptor
+                    sta       V.ST,u              Store 1=gfx or 0=term in V.ST (Screen Type)
+		    ifeq      Level-2
+                    bne       InitGfx@            if 1=gfx, then init graphics display
+                    lbsr      InitDisplay         initialize term display
+                    bra       cont@
+InitGfx@            lbsr      InitGrfDisplay      initialize graphics display
+		    rts
+		    else
+		    lbsr      InitDisplay
+		    endc
+* END Term or gfx screen
+*
 * Tell the keyboard to start scanning.
 * Do this FIRST before turning off LEDs, or else keyboard fails to respond after
 * a reset. +BGP+
 *
-                    lda       #$FF                load the RESET command
+cont@               lda       #$FF                load the RESET command
                     lbsr       SendToPS2           send it to the keyboard
                     lda       #$AA                we expect an $AA response
                     lbsr       ReadFromPS2         read from the keyboard
@@ -807,9 +821,94 @@ DWSelect
 DWEnd               lbra      ResetHandler
 
 Do1B                cmpa      #$20                is it the window mode?
-                    bne       IsIt21              branch if not
+                    bne       IsIt15              branch if not
                     leax      Do1B20,pcr          else point to the vector
                     lbra      SetHandler          and set the handler
+IsIt15		    cmpa      #$15
+		    bne	      IsIt16
+*		    lda	      #$40
+*		    lbsr      DefaultHandler
+*		    lbsr      InitGrfDisplay
+*		    lda       #$41
+*		    lbsr      DefaultHandler
+		    pshs      a,x,y,b
+		    ldx	      #0
+		    ldy	      #0
+		    lda	      V.BM0Blk,u
+		    bne	      IsIt15GS
+		    lbsr      GfxGetScreenMem
+IsIt15GS	    lda	      #$42
+*		    lbsr      DefaultHandler
+		    lbsr      StartGrfDisplay
+		    puls      a,x,y,b
+		    lbra      DWEnd
+IsIt16		    cmpa      #$16		  $16 is a point, need XXXXYYCC
+		    lbne      IsIt18
+		    leax      Do16XX,pcr
+		    lbra      SetHandler
+Do16XX	    	    sta	      V.GCX,u
+		    lda	      V.BM0Blk,u
+*		    lbsr      PrintNum
+		    leax      Do16XXXX,pcr
+		    lbra      SetHandler
+Do16XXXX	    sta	      V.GCX+1,u
+		    leax      Do16XXXXYY,pcr
+		    lbra      SetHandler
+Do16XXXXYY	    sta	      V.GCY,u
+		    leax      Do16XXXXYYCC,pcr
+		    lbra      SetHandler
+Do16XXXXYYCC	    sta	      V.GCOLOR,u
+		    ldd	      #320		   multiply 320*Y in math coprocessor ($140)
+		    stb	      $FEE0		   put 320 in the math coprocessor 
+		    sta	      $FEE1
+		    lda	      #$40
+*		    lbsr      DefaultHandler
+		    clra
+		    ldb	      V.GCY,u	           load Y into b
+		    stb	      $FEE2		   put y in low bit of math coprocessor
+		    sta	      $FEE3		   put 0 in high bit of math coprocessor
+		    ldb	      $FEF0		   load low result Bit0
+		    lda	      $FEF1		   load middle result Bit1
+		    addd      V.GCX,u		   add x coordinate
+		    sta	      V.GCADDR+1,u	   put mid byte in GC Address
+		    stb	      V.GCADDR+2,u	   put low byte in GC Address
+		    stb	      V.GCAD8K+1,u	   put low byte in GC 8K window address
+		    lda	      #0		   Clear A w/o clearing carry bit
+		    bcc	      Do16Cont		   if carry bit set, then high bit is 1
+		    lda	      #1
+Do16Cont	    ora	      $FEF2		   or with high bit from multiplication 
+		    sta	      V.GCADDR,u	   put high bit in Graphic Cursor Address
+		    ldb	      V.GCADDR+1,u	   compute the block we need (320*Y+X) div 8192
+		    lsrb
+		    lsrb
+		    lsrb
+		    lsrb
+		    lsrb
+		    tsta
+		    beq	      DoSetPixel
+		    orb	      #8
+DoSetPixel	    addb      V.BM0Blk,u
+		    pshs      cc
+		    orcc      #IntMasks           mask interrupts
+                    stb       MAPSLOT             store it in the MMU slot to map it in
+		    ldd	      V.GCADDR+1,u	  Load bitmap address
+		    anda      #%00011111
+		    addd      #MAPADDR
+		    std	      V.GCAD8K,u
+		    tfr	      d,x
+*		    lbsr      PrintNum
+*		    tfr       b,a
+*		    lbsr      PrintNum
+		    lda	      V.GCOLOR,u
+		    sta	      ,x
+		    puls      cc
+		    lbra      DWEnd
+IsIt18		    cmpa      #$18
+		    bne	      IsIt21
+*		    lda	      #$43
+*		    lbsr      DefaultHandler
+		    lbsr      StartTextScreen
+		    lbra      DWEnd
 IsIt21              cmpa      #$21                is it DWSelect?
                     bne       IsIt24              branch if not
                     lbra      DWSelect
@@ -1340,6 +1439,460 @@ DoSHIFTUp           clr       V.SHIFT,u           clear the SHIFT key state
 DoALTUp             clr       V.ALT,u             clear the ALT key state
                     bra       SetDefaultHandler   and branch to set the default handler
 
+
+StartTextScreen	    pshs      a,b,x
+		    ldx	      #TXT.Base
+		    clrb
+                    ldd       #80*256+60
+                    std       V.WWidth,u
+		    clr       V.ST,u
+                    lda       #1
+                    sta       MASTER_CTRL_REG_L,x
+                    clr       MASTER_CTRL_REG_H,x
+*                    clr       BORDER_CTRL_REG,x
+*                    clr       BORDER_COLOR_R,x
+*                    clr       BORDER_COLOR_G,x
+*                    clr       BORDER_COLOR_B,x
+*                    clr       VKY_TXT_CURSOR_CTRL_REG,x
+		    puls      a,b,x,pc
+		    
+********************************************************************
+* vtio Graphics for the F256 Level 2 only
+********************************************************************
+		    ifeq      Level-2
+InitGrfDisplay      pshs      a,b,x                  save it on the stack
+		    ldx       #TXT.Base
+* Put F256 graphics into graphics mode and zero out all values.
+*                    ldd       #80*256+60
+*                    std       V.WWidth,u
+*		    lda	      #1
+**		    sta	      V.ST,u		  0=Term, 1=Gfx
+**                    lda       #Mstr_Ctrl_Graph_Mode_En
+*		    lda	      #12
+*		    clrb
+*        	    sta       MASTER_CTRL_REG_L,x	  write MCR
+*                    std	      V.V_MCR,u		  Store MCR in MCR copy
+*                    clr       BORDER_CTRL_REG,x
+*                    clr       BORDER_COLOR_R,x
+*                    clr       BORDER_COLOR_G,x
+*                    clr       BORDER_COLOR_B,x
+                    ldd       #0
+		    std	      V.V_LayerCTL,u	  Clear layer control register copy
+                    std       V.BM0Blk,u          Clear BMOBlk & BM0Cl_En
+                    std       V.BM1Blk,u          Clear BM1Blk & BM1Cl_En
+                    std       V.BM2Blk,u          Clear BM2Blk & BM2Cl_En
+                    std       V.CLUTBlk,u         Clear CLUTBlk & CLUT
+                    std       V.TM0,u
+                    std       V.TM0MapX,u
+                    std       V.TM0ScrlX,u
+                    std       V.TM1,u
+                    std       V.TM1MapX,u
+                    std       V.TM1ScrlX,u
+                    std       V.TM2,u
+                    std       V.TM2MapX,u
+                    std       V.TM2ScrlX,u
+                    std       V.TS0Blk,u
+                    std       V.TS1Blk,u
+                    std       V.TS2Blk,u
+                    std       V.TS3Blk,u
+                    std       V.TS4Blk,u
+                    std       V.TS5Blk,u
+                    std       V.TS6Blk,u
+                    std       V.TS7Blk,u
+		    pshs      cc
+		    orcc      #IntMasks
+		    lda	      MAPSLOT
+		    pshs      a
+		    lda	      #$C0
+		    sta	      MAPSLOT
+		    ldd	      #MAPADDR
+		    addd      #$1000
+		    tfr	      d,x
+		    ldd	      #0
+DefGrafLoop	    sta	      b,x
+		    incb
+		    bne	      DefGrafLoop
+		    puls      a
+		    sta	      MAPSLOT
+		    puls      cc
+                    lbsr      Default_CLUT
+                    puls      b,a,x
+                    rts
+
+StartGrfDisplay	    pshs      a,b,x                  save it on the stack
+		    ldx       #TXT.Base
+* Put F256 graphics into graphics mode and zero out all values.
+                    ldd       #80*256+60
+                    std       V.WWidth,u
+		    lda	      #1
+*		    sta	      V.ST,u		  0=Term, 1=Gfx
+*                    lda       #Mstr_Ctrl_Graph_Mode_En
+		    lda	      #12
+		    clrb
+        	    sta       MASTER_CTRL_REG_L,x	  write MCR
+                    std	      V.V_MCR,u		  Store MCR in MCR copy
+                    clr       BORDER_CTRL_REG,x
+                    clr       BORDER_COLOR_R,x
+                    clr       BORDER_COLOR_G,x
+                    clr       BORDER_COLOR_B,x
+		    puls      b,a,x
+		    rts
+
+PrintNum	    sta      V.JAFTEST,u	
+		    lsra
+		    lsra
+		    lsra
+		    lsra
+		    bsr	     PrintNumDo
+		    lda	     V.JAFTEST,u
+		    anda     #%00001111
+		    bsr	     PrintNumDo
+		    lda	     V.JAFTEST,u
+		    rts
+PrintNumDo	    cmpa     #9
+		    bls      add48
+		    adda     #7
+add48		    adda     #48
+		    lbsr     DefaultHandler
+		    rts
+;;; GfxGetScreenMem
+;;;
+;;; F256 Graphics Bitmap screen is 320x240 (NTSC 60 hz 76.8K) or 320x200 (PAL 70hz 64k)
+;;; Allocates 76.8K for Graphics Screen and returns Address of 8K boundary
+;;; Need 10 blocks (80k)
+;;; Set up Screen 1, 2, or 3 to use new memory range. Screen 1,2,3 are layers.
+;;; All 3 Screens(layers) can be shown at the same time
+;;; Turn on graphics page (bit 2) at register $FC00
+;;; Bit 1 will overlay text on top of graphics layer
+;;;
+;;; Graphics Control Register
+;;; |Address| 7 |   6   |   5    |    4    |   3    |   2   |   1   |  0   |
+;;; | $FFC0 | X | GAMMA | SPRITE |   TILE  | BITMAP | GRAPH | OVRLY | TEXT |
+;;; | $FFC1 | X |   X   |FON_SET |FON_OVRLY|MON_SLP | DBL_Y | DBL_X |CLK_70|
+;;; Graphic Layers 1-3 can be Bitmaps or Tiles
+;;; | $FFC2 | X |       LAYER 1 (6,5,4)    |        | Layer 0 (2,1,0)      |
+;;; | $FFC3 | X |   X   |   X    |    X    |   X    | Layer 2 (2,1,0)      |
+;;; 0=000BM0;1=001BM1;2=010BM2;4=100TM0;5=101TM1;6=110TM2
+;;;
+;;; Three Bitmap locations can be stored in TinyVicky Chip.  MMU Page $C0
+;;; |Address |Bitmap|  7  |  6  |  5  |  4  |  3  |  2  |  1  |  0   |
+;;; |$18_1000|      |                             |   CLUT    |ENABLE|
+;;; |$18_1001|  0   | AD7 | AD6 | AD5 | AD4 | AD3 | AD2 | AD1 | AD0  |
+;;; |$18_1002|      |AD15 |AD14 |AD13 |AD12 |AD11 |AD10 | AD9 | AD8  |
+;;; |$18_1003|      |                             |AD18 |AD17 | AD16 |
+;;; ------------------------------------------------------------------
+;;; |$18_1008|      |                             |   CLUT    |ENABLE|	
+;;; |$18_1009|  1   | AD7 | AD6 | AD5 | AD4 | AD3 | AD2 | AD1 | AD0  |
+;;; |$18_100A|      |AD15 |AD14 |AD13 |AD12 |AD11 |AD10 | AD9 | AD8  |
+;;; |$18_100B|      |                             |AD18 |AD17 | AD16 |
+;;; ------------------------------------------------------------------
+;;; |$18_1010|      |                             |   CLUT    |ENABLE|	
+;;; |$18_1011|  2   | AD7 | AD6 | AD5 | AD4 | AD3 | AD2 | AD1 | AD0  |
+;;; |$18_1012|      |AD15 |AD14 |AD13 |AD12 |AD11 |AD10 | AD9 | AD8  |
+;;; |$18_1013|      |                             |AD18 |AD17 | AD16 |	
+;;; 
+;;; Entry:  A = Standard output
+;;; 	    X = Bitmap number 0-3 (3 is don't map to bitmap)
+;;; 	    Y = Screen (Layer) Number from 0-3 (3 is don't map to screen)
+;;;
+;;; Exit:   X = Starting block# for graphics screen
+;;;
+;;; Error:  B = A non-zero error code
+;;;
+;;; GetStat Y=path descriptor, X=pointer to caller registers, U=Device memory area
+GfxGetScreenMem
+* Allocate Memory
+                    ldb	      #10		  Need 10 8k Blocks from highram
+		    os9	      F$AlHRAM		  Allocate Ram, put starting block# in D
+               	    bcc       cont@               Check for error, continue if no error
+	            ldb       #E$MFull            Set error code to Memory Full error and return
+ 		    rts
+*		    ** Test Bitmap#, if 0-2 set bitmap, if 3 skip	
+cont@		    cmpx      #$03		  If x = 3, then not mapping, just allocate
+                    bne       map@                and proceed to exit
+                    tfr       d,x                 Put starting block# in x
+                    rts
+* Store starting block# for bitmap in V.BMXBlk
+map@		    pshs      b,x		  Save block# and bitmap#(should be 0-2) on stack
+	            tfr	      x,d                 a=0, b=bitmap#
+                    lslb			  multiply by 2 to get correct index	
+		    leax      V.BM0Blk,u          Calc address for block storage BM0,BM1 or BM2
+		    lda	      ,s		  load block# from stack
+	            sta	      b,x	  	  Store block # in V.[BMX]Block where [X] is 0, 1 or 2
+		    puls      x,b
+* Store physical address of bitmap in TinyVicky BM0, BM1 or BM2
+		    pshs      cc
+		    orcc      #IntMasks           mask interrupts
+		    lda	      MAPSLOT
+		    pshs      a
+	            lda       #$C0                Get the MMU Block for bitmap addresses
+                    sta       MAPSLOT             store it in the MMU slot to map it in
+*		    puls      cc		  move this to end
+* Calculate starting address at 1000,1008,1010
+	            pshs      b,x		  push block# and bitmap# to stack
+		    tfr	      x,d                 b will be bitmap#
+		    lda	      #$08		  multiply by 8 (to start at 0, 8 or 16)
+		    mul	      			  d should be 0,8,or 16
+		    addd      #MAPADDR
+		    addd      #$1000
+		    tfr	      d,x		  
+*		    leax      $1000,x             load x with address of BM0,BM1 or BM2 addr
+* Convert b from block number to physical address
+		    ldb	      ,s		  load b with block# from stack
+                    lbsr      Blk2Addr            convert blk# to high 16 bits of address in d
+*		    ldd	      #$06C0
+* Load Bitmap start block physical address into Vicky BM0, BM1 or BM2
+*		    pshs      a,b
+*		    lbsr      PrintNum
+*		    tfr	      b,a
+*		    lbsr      PrintNum
+*		    puls      a,b
+		    pshs      a
+		    lda       #%00000001	  enable bitmapX with CLUT 0
+		    sta	      ,x+           	  	 IOADDR is logical addr $2000
+		    clr	      ,x+		  clear AD7-AD0
+		    stb	      ,x+		  store AD15-AD8
+		    puls      a                   pull high byte of bitmap addrses
+		    sta	      ,x            store AD18-AD16
+*		    lbsr      PrintNum
+*		    tfr       b,a
+*		    lbsr      PrintNum
+* Assign Bitmap to screen layer
+	            puls      x,b                 x = bitmap number, b = block #
+                    pshs      b                   push block#
+	            tfr       x,d                 bitmap# now in b
+		    lda	      $FFC2
+sl0@                cmpx      #$00		  test for Screen layer 0
+		    bne	      sl1@		  if not, go to BM1
+		    anda      %11110000           this is BM0, clear BM0 values
+		    sta	      $FFC2		  Store them
+                    addb      $FFC2               Add bitmap# for Screen Layer 0
+                    stb       $FFC2               Store it
+		    bra	      setresult@
+sl1@		    cmpx      #$01		  test for BM1
+		    bne	      sl2@                if not, go to BM2
+		    anda      %00001111           clear the BM1 bits
+		    sta	      $FFC2
+		    lslb                          shift bitmap# 4 bits for layer 1
+		    lslb
+		    lslb
+		    lslb
+		    addb      $FFC2		  add it
+		    stb	      $FFC2		  store it
+		    bra	      end@
+sl2@		    cmpx      #$02                test for BM2
+		    bne	      setresult@
+		    lda	      $FFC3               clear layer 2
+		    anda      %11110000
+		    sta	      $FFC3
+		    addb      $FFC3		  add bitmap#
+		    stb	      $FFC3
+setresult@          puls      b	                  pull the block#
+		    clra
+                    tfr       d,x                 put block# in X
+		    clrb                          clear error
+		    puls      a
+		    sta	      MAPSLOT
+		    puls      cc
+end@		    rts
+
+;;; Default CLUT
+;;; Default the CLUT0 to rrrgggbb values
+;;; Mirrors code from TinyKernel
+*		    ** Map in CLUT Block
+Default_CLUT	    pshs      cc,a,b,x,y
+		    orcc      #IntMasks           mask interrupts
+		    lda	      MAPSLOT
+		    pshs      a
+	            lda       #$C1                Get the MMU Block for CLUT control
+                    sta       MAPSLOT             Map into MMU_SLOT_1=$2000-$3FFF
+*                   ** Loop to write rrrgggbb values to CLUT
+*                   ** b goes from 0-255, then wrap around to 0
+	            ldx	      #$2800              CLUT#0 is Blk $C1 at $800+$2000 for Map
+	            ldb	      #0		  starting color byte
+loop@               bsr	      write_bgra
+	            incb
+	            bne	      loop@
+		    puls      a
+		    sta	      MAPSLOT
+	            puls      y,x,b,a,cc,pc          pull registers and return
+*                   ** Default_Clut END	
+
+write_bgra          pshs      b			  push rrrgggbb value
+	            pshs      b			  push red (red is high 3 bits)
+	            aslb      			  shift to high 3 bits green
+	            aslb      
+	            aslb      
+	            tfr       b,a                 copy green to a
+	            asla                   	  shift to high 3 bits blue
+	            asla      
+	            asla      
+	            anda      %11100000           blue - mask low 5 bits
+	            andb      %11100000           green - mask low 5 bits
+	            std       ,x++		  write blue,green : inc x to r,a
+	            puls      a                   pull red into a
+	            anda      %11100000            red - mask low 5 bits
+	            clrb                          alpha is unused, just make zero
+	            std	      ,x++                write red,alpha
+	            puls      b,pc                pull rrrgggbb and return
+*		    ** write_bgra END	        
+
+
+;;; Refresh Vicky writes all the configuration information for the screen
+;;; to the Vicky registers, this includes Bitmaps, CLUTs, Tile Maps, and Tile Sets
+;;; Switching windows should trigger this to configure output for the active screen
+RefreshVicky        ldd       V.V_MCR,u           load Master Control Register
+		    ldx       #TXT.Base
+                    std       MASTER_CTRL_REG_L,x
+                    ldd       V.V_LayerCTL        load Layer Control Register
+                    std       VKY_RESERVED_00,x
+                    pshs      cc,a
+		    orcc      #IntMasks           mask interrupts
+	            lda       #$C0                get the MMU Block for bitmap addresses
+                    sta       MAPSLOT             map into MMU_SLOT_1=$2000-$3FFF
+                    puls      a,cc
+* BM0              
+                    lda       V.BM0Cl_En,u          load clut/enable settings
+                    ldb       V.BM0Blk,u
+                    ldx       #$1000
+                    lbsr      WriteFullConfig
+* BM1                                
+                    lda       V.BM1Cl_En,u          load clut/enable settings
+                    ldb       V.BM1Blk,u
+                    ldx       #$1008
+                    lbsr      WriteFullConfig
+* BM2
+                    lda       V.BM2Cl_En,u
+                    ldb       V.BM2Blk,u
+                    ldx       #$1016
+                    lbsr      WriteFullConfig
+* TileMap                                         Tile Map is also in $C0 at $1100
+                    lda       V.TM0,u             tile size and enable
+                    ldb       V.TM0Blk,u          Starting block of tile map
+                    ldx       #$1100
+                    lbsr      WriteFullConfig
+                    ldd       V.TM0MapX
+                    sta       MAPADDR,x
+		    leax      2,x
+                    stb       MAPADDR,x
+		    leax      2,x
+                    ldd       V.TM0ScrlX,u
+                    std       MAPADDR,x
+		    leax      2,x
+                    ldd       V.TM0ScrlY,u
+                    std       MAPADDR,x
+		    leax      2,x
+* TM1
+                    lda       V.TM1,u             tile size and enable
+                    ldb       V.TM1Blk,u          Starting block of tile map
+                    lbsr      WriteFullConfig
+                    ldd       V.TM1MapX
+                    sta       MAPADDR,x
+		    leax      2,x
+                    stb       MAPADDR,x
+		    leax      2,x
+                    ldd       V.TM1ScrlX,u
+                    std       MAPADDR,x
+		    leax      2,x
+                    ldd       V.TM1ScrlY,u
+                    std       MAPADDR,x
+		    leax      2,x
+* TM2
+                    lda       V.TM2,u             tile size and enable
+                    ldb       V.TM2Blk,u          Starting block of tile map
+                    lbsr      WriteFullConfig
+                    ldd       V.TM2MapX
+                    sta       MAPADDR,x
+		    leax      2,x
+                    stb       MAPADDR,x
+		    leax      2,x
+                    ldd       V.TM2ScrlX,u
+                    std       MAPADDR,x
+		    leax      2,x
+                    ldd       V.TM2ScrlY,u
+                    std       MAPADDR,X
+		    leax      2,x
+* TS0
+                    ldx       #$1180              Tile sets start at $1180 in $C0
+                    tfr       u,y                 Use y as index
+tsloop@             ldb       V.TS0Blk,y         load block#
+		    leay      1,y
+                    lbsr      WriteAddrOnly       write address
+                    ldb       V.TS0Blk,y         load Square/linear setting
+		    leay      1,y
+                    stb       MAPADDR,x            write setting
+		    leax      1,x
+                    cmpx      $11A0               stop at $1180+$20=$11A0
+                    bne       tsloop@
+* CLUT              
+                    ldb       V.CLUTBlk,u
+                    bne       CopyCLUT@            If CLUTBlk, not 0, then copy CLUT Mirror
+                    lbsr      Default_CLUT        If CLUTBlk is 0, then use Default CLUT
+                    bra       end@
+CopyCLUT@           lda       MAPSLOT2            Get current block in slot2
+                    pshs      a                   store it on the stack
+                    pshs      cc,a
+		    orcc      #IntMasks           mask interrupts
+	            lda       #$C1                get the MMU Block for CLUT Data
+                    sta       MAPSLOT             map into MMU_SLOT_1=$2000-$3FFF
+                    ldb       V.CLUTBlk,u         get the block containing the CLUT miror
+                    stb       MAPSLOT2            map into MMU_SLOT_2=$4000-$5FFF
+                    puls      a,cc
+                    ldx	      #$2800              CLUT#0 is Blk $C1 at $800+$2000 for Map
+                    ldy       #$5000              CLUT Mirror starts at $5000
+copyloop@           ldd       ,x++
+                    std       ,y++
+                    cmpy      #$6000
+                    bne       copyloop@
+                    puls      a                   pull original SLOT2 Block
+                    pshs      cc                  Restore MAPSLOT2 to prior block
+                    orcc      #IntMasks
+                    sta       MAPSLOT2
+                    puls      cc
+end@                rts                             
+                    
+                    
+
+                    
+;;; Writes Bitmap config where a=CLUT/Enable, b=Block#, x=address offset
+WriteFullConfig     sta       MAPADDR,x            write clut/enable setting
+		    leax      1,x
+WriteAddrOnly       clra                          BM1 Blk2Addr, store in Vicky
+                    bsr       Blk2Addr
+                    clr	      MAPADDR,x		  clear AD7-AD0
+		    leax      1,x
+		    stb	      MAPADDR,x		  store AD15-AD8
+		    leax      1,x
+		    sta	      MAPADDR,x           store AD18-AD16
+		    leax      1,x
+                    rts
+                    
+* Block to Address: Convert block# to high 16 bits in D
+* b = block#, a = 0.  d = high 16 bits of address
+* Try to replace with math coprocessor multiply in Vicky?
+Blk2Addr 	    clra			  clear a, block # is in b
+		    lslb                          multiply block# by $20 to get top 16 bits x2
+		    rola			  of physical address (ex $3F*$20 = $07E0)
+		    lslb                          x4
+		    rola                          roll carry into a
+		    lslb                          x8
+		    rola                          roll carry into a
+		    lslb                          x16
+		    rola                          roll carry into a
+		    lslb			  x32 ($20)
+		    rola
+*		    pshs     a,b
+*		    lbsr     PrintNum
+*		    tfr	     b,a
+*		    lbsr     PrintNum
+*		    puls     a,b
+                    rts
+		    endc
+* END Level 2 F256 Graphics 		    
+
+********************************************************************
+* PS/2 Tables
+********************************************************************
 * These tables map PS/2 key codes to characters in both non-SHIFT and SHIFT cases.
 * If the high bit of a character is set, it is a special flag and therefore
 * is handled differently. The special flags are:
