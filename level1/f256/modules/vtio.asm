@@ -843,7 +843,7 @@ IsIt15GS	    lda	      #$42
 		    puls      a,x,y,b
 		    lbra      DWEnd
 IsIt16		    cmpa      #$16		  $16 is a point, need XXXXYYCC
-		    lbne      IsIt18
+		    lbne      IsIt17
 		    leax      Do16XX,pcr
 		    lbra      SetHandler
 Do16XX	    	    sta	      V.GCX,u
@@ -901,6 +901,21 @@ DoSetPixel	    addb      V.BM0Blk,u
 *		    lbsr      PrintNum
 		    lda	      V.GCOLOR,u
 		    sta	      ,x
+		    puls      cc
+		    lbra      DWEnd
+IsIt17		    cmpa      #$17
+		    bne	      IsIt18
+		    pshs      cc
+		    orcc      #IntMasks
+		    lda	      MAPSLOT
+		    pshs      a
+		    ldb	      V.BM0Blk,u
+		    stb	      MAPSLOT
+		    ldx	      $2100
+		    lda	      $FF
+		    sta	      ,x
+		    puls      a
+		    sta	      MAPSLOT
 		    puls      cc
 		    lbra      DWEnd
 IsIt18		    cmpa      #$18
@@ -1516,6 +1531,9 @@ DefGrafLoop	    sta	      b,x
 		    sta	      MAPSLOT
 		    puls      cc
                     lbsr      Default_CLUT
+		    lda	      #0
+		    sta	      $FFC2
+		    sta	      $FFC3
                     puls      b,a,x
                     rts
 
@@ -1530,6 +1548,7 @@ StartGrfDisplay	    pshs      a,b,x                  save it on the stack
 		    lda	      #12
 		    clrb
         	    sta       MASTER_CTRL_REG_L,x	  write MCR
+		    stb	      MASTER_CTRL_REG_H,x
                     std	      V.V_MCR,u		  Store MCR in MCR copy
                     clr       BORDER_CTRL_REG,x
                     clr       BORDER_COLOR_R,x
@@ -1620,6 +1639,9 @@ map@		    pshs      b,x		  Save block# and bitmap#(should be 0-2) on stack
 		    lda	      ,s		  load block# from stack
 	            sta	      b,x	  	  Store block # in V.[BMX]Block where [X] is 0, 1 or 2
 		    puls      x,b
+		    clra
+		    sta	      $FFC2
+		    sta	      $FFC3
 * Store physical address of bitmap in TinyVicky BM0, BM1 or BM2
 		    pshs      cc
 		    orcc      #IntMasks           mask interrupts
@@ -1635,7 +1657,7 @@ map@		    pshs      b,x		  Save block# and bitmap#(should be 0-2) on stack
 		    mul	      			  d should be 0,8,or 16
 		    addd      #MAPADDR
 		    addd      #$1000
-		    tfr	      d,x		  
+		    tfr	      d,x
 *		    leax      $1000,x             load x with address of BM0,BM1 or BM2 addr
 * Convert b from block number to physical address
 		    ldb	      ,s		  load b with block# from stack
@@ -1647,13 +1669,21 @@ map@		    pshs      b,x		  Save block# and bitmap#(should be 0-2) on stack
 *		    tfr	      b,a
 *		    lbsr      PrintNum
 *		    puls      a,b
-		    pshs      a
+		    pshs      a			  push high byte of bitmap address
 		    lda       #%00000001	  enable bitmapX with CLUT 0
-		    sta	      ,x+           	  	 IOADDR is logical addr $2000
-		    clr	      ,x+		  clear AD7-AD0
+		    sta	      ,x+           	  enable bitmap with CLUT 0
+		    sta	      $3000
+		    lda	      #$0
+		    sta	      ,x+		  clear AD7-AD0
+		    sta	      $3001
 		    stb	      ,x+		  store AD15-AD8
+		    stb	      $3002
 		    puls      a                   pull high byte of bitmap addrses
-		    sta	      ,x            store AD18-AD16
+		    sta	      ,x            	  store AD18-AD16
+		    sta	      $3003
+		    lda	      #0
+		    sta	      $3008
+		    sta	      $3010
 *		    lbsr      PrintNum
 *		    tfr       b,a
 *		    lbsr      PrintNum
@@ -1727,11 +1757,11 @@ write_bgra          pshs      b			  push rrrgggbb value
 	            asla                   	  shift to high 3 bits blue
 	            asla      
 	            asla      
-	            anda      %11100000           blue - mask low 5 bits
-	            andb      %11100000           green - mask low 5 bits
+	            anda      #%11100000           blue - mask low 5 bits
+	            andb      #%11100000           green - mask low 5 bits
 	            std       ,x++		  write blue,green : inc x to r,a
 	            puls      a                   pull red into a
-	            anda      %11100000            red - mask low 5 bits
+	            anda      #%11100000            red - mask low 5 bits
 	            clrb                          alpha is unused, just make zero
 	            std	      ,x++                write red,alpha
 	            puls      b,pc                pull rrrgggbb and return

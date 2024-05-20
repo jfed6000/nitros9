@@ -15,6 +15,7 @@
 
                     ifp1
                     use       defsfile
+		    use       f256vtio.d
                     endc
 
 tylg                set       Prgrm+Objct
@@ -22,7 +23,12 @@ atrv                set       ReEnt+rev
 rev                 set       $00
 edition             set       3
 
+MAPSLOT             equ       MMU_SLOT_1
+MAPADDR             equ       (MAPSLOT-MMU_SLOT_0)*$2000
+
                     mod       eom,name,tylg,atrv,start,size
+
+
 
 freeblks            rmb       2
 mapsiz              rmb       2
@@ -38,8 +44,11 @@ bufstrt             rmb       2
 bufcur              rmb       2
 linebuf             rmb       80
 bitmapinfo	    rmb	      12
-
-
+clutdata	    rmb	      100
+MMUORIG		    rmb	      1
+MMUEDIT		    rmb	      1
+MMUACTIVE	    rmb	      1
+PDATA		    rmb	      5
 
 size                equ       .
 
@@ -52,9 +61,6 @@ Ftr                 fcs       "                   ==== ======"
                     fcs       "            Total: "
 
 
-MAPSLOT             equ       MMU_SLOT_1
-MAPADDR             equ       (MAPSLOT-MMU_SLOT_0)*$2000
-
 start               leax      linebuf,u           get line buffer address
                     stx       <bufstrt            and store it away
                     stx       <bufcur             current output position output buffer
@@ -65,33 +71,82 @@ start               leax      linebuf,u           get line buffer address
                     lbsr      wrbuf               ..print it
                     lbsr      tobuf               2nd line of header to output buffer
                     lbsr      wrbuf               ..print it
-* Map in Bitmap bank
+		    
+* Map in CLUT 0 and Bitmap bank
 		    pshs      cc
 		    orcc      #IntMasks           mask interrupts
 		    lda	      MAPSLOT
 		    pshs      a
+		    lda	      MMU_MEM_CTRL
+		    sta	      MMUORIG,U
+		    anda      #%00000011
+		    sta	      MMUACTIVE
+		    lsla
+		    lsla
+		    lsla
+		    lsla
+		    anda      #%00110000
+		    adda      MMUORIG,U
+		    sta	      MMUEDIT,U
+		    sta	      MMU_MEM_CTRL		    
+		    lda	      #$C1
+		    sta	      MAPSLOT
+		    lda	      MMUACTIVE,u
+		    sta	      MMU_MEM_CTRL
+		    ldb	      #20
+		    ldx	      #$2800
+		    leay      clutdata,u
+clutloop	    lda	      ,x+
+		    sta	      ,y+
+		    decb
+		    bne	      clutloop
+		    ldb	      #20
+		    ldx	      #$2BF0
+clutloop2	    lda	      ,x+
+		    sta	      ,y+
+		    decb
+		    bne	      clutloop2
+* Read in Bitmap registers
+		    lda	      MMUEDIT,u
+		    sta	      MMU_MEM_CTRL
 	            lda       #$C0                Get the MMU Block for bitmap addresses
                     sta       MAPSLOT             store it in the MMU slot to map it in
-		    ldd	      #MAPADDR
-		    addd      #$1000
-		    tfr	      d,x
+		    lda	      MMUACTIVE,u
+		    sta	      MMU_MEM_CTRL
+*		    ldd	      #MAPADDR
+*		    addd      #$1000
+*		    tfr	      d,x
+		    ldx	      #$3000
 		    leay      bitmapinfo,u
 		    ldd	      ,x++
 		    std	      ,y++
 		    ldd	      ,x++
 		    std	      ,y++
-		    leax      4,x
+		    ldx	      #$3008
 		    ldd	      ,x++
 		    std	      ,y++
 		    ldd	      ,x++
 		    std	      ,y++
-		    leax      4,x
+		    ldx	      #$3010
 		    ldd	      ,x++
 		    std	      ,y++
 		    ldd	      ,x++
 		    std	      ,y++
+		    lda	      MMUEDIT,u
+		    sta	      MMU_MEM_CTRL
+		    lda	      #$36
+		    sta	      MAPSLOT
+		    ldb	      #5
+		    ldx	      #$37C0
+		    leay      PDATA,u
+PDLOOP		    lda	      ,x+
+		    sta	      ,y+
+		    decb
+		    bne	      PDLOOP
 		    puls      a
 		    sta	      MAPSLOT
+		    lda	      MMUORIG,u
+		    sta	      MMU_MEM_CTRL
 		    puls      cc
 		    ldd	      #MAPADDR
 		    lbsr      buf4hex
@@ -125,7 +180,7 @@ contbm0		    lbsr      tobuf
 		    lda	      1,x
 		    lbsr      L0145
 		    lbsr      wrbuf
-		    leax      $08,x
+		    leax      $04,x
 		    incb
 		    cmpb      #3
 		    bne	      outloop
@@ -149,7 +204,34 @@ contbm0		    lbsr      tobuf
 		    lda	      $FFC3
 		    lbsr      L0145
 		    lbsr      wrbuf
-		    
+
+*write out CLUT data
+		    leay      cluttxt,pcr
+		    lbsr      tobuf
+		    lbsr      wrbuf
+		    leax      clutdata,u
+		    ldb	      #20
+clutoutloop	    lda	      ,x+
+		    lbsr      L0145
+		    lda	      #C$SPAC
+		    lbsr      bufchr
+		    decb
+		    bne	      clutoutloop
+		    lbsr      wrbuf
+		    ldb	      #20
+clutoutloop2	    lda	      ,x+
+		    lbsr      L0145
+		    lda	      #C$SPAC
+		    lbsr      bufchr
+		    decb
+		    bne	      clutoutloop2
+		    lbsr      wrbuf
+		    leax      PDATA,u
+		    ldb	      #5
+PDOUTLOOP	    lda	      ,x+
+		    lbsr      L0145
+		    decb
+		    bne	      PDOUTLOOP
 
 * All of the entries have been printed. Print the trailer and totals.
 alldone             leay      >Ftr,pcr
