@@ -180,71 +180,71 @@ start               leax      >IcptRtn,pcr
 
 * Show rest of banner
 SignOn
-		    
+                    
                     puls      u
-		    ifeq      Level-1
-		    lda       MMU_MEM_CTRL        get current MLUT -  MMU_MEM_CTRL $FFA0
+                    ifeq      Level-1
+                    lda       MMU_MEM_CTRL        get current MLUT -  MMU_MEM_CTRL $FFA0
                     sta       MMUST,u             store MMU State
                     ldb       MMU_SLOT_1          get current MMU SLOT 1 - MMU_SLOT_1 $FFA9
                     stb       MMUSL1,u            store MMU Slot 1
-		    lda       MMU_SLOT_7          get MMU slot 7 $FFAF
+                    lda       MMU_SLOT_7          get MMU slot 7 $FFAF
                     cmpa      #$07                is it Ram mode
-                    beq       ram@			
+                    beq       ram@                      
                     lda       #$11                enable editing Flash mode MLUT 1
                     bra       cont@
 ram@                lda       #$90                enable editing Ram mode MLUT 0
 cont@               sta       MMU_MEM_CTRL        update $FFA0
-		    endc
-		    ifeq      Level-2
-		    pshs      cc
-		    orcc      #IntMasks
-		    lda	      MMU_MEM_CTRL
-		    anda      #%00000011
-		    sta	      MMUST,U
-		    lsla
-		    lsla
-		    lsla
-		    lsla
-		    anda      #%00110000
-		    adda      MMUST,U
-		    sta	      MMU_MEM_CTRL
-		    lda	      MMU_SLOT_1
-		    pshs      a
-		    endc
+                    endc
+                    ifeq      Level-2
+                    pshs      cc
+                    orcc      #IntMasks
+                    lda       MMU_MEM_CTRL
+                    anda      #%00000011
+                    sta       MMUST,U
+                    lsla
+                    lsla
+                    lsla
+                    lsla
+                    anda      #%00110000
+                    adda      MMUST,U
+                    sta       MMU_MEM_CTRL
+                    lda       MMU_SLOT_1
+                    pshs      a
+                    endc
                     lda       #$C1                MMU Page $C1 to SLOT 1 - font memory
                     sta       MMU_SLOT_1          update $FFA9
-		    ifeq      Level-2
-		    lda	      MMUST,U
-		    sta	      MMU_MEM_CTRL
-		    endc
+                    ifeq      Level-2
+                    lda       MMUST,U
+                    sta       MMU_MEM_CTRL
+                    endc
                     leax      FONTS,pcr           point to custom FONTS
-                    ldy       #$2598              point to character 179	
+                    ldy       #$2598              point to character 179        
                     ldb       #$50                FONT byte count
 L1                  lda       ,x+                 load font byte
                     sta       ,y+                 update font glyph
                     decb                          decrement count
                     bne       L1
-		    ifeq      Level-1
+                    ifeq      Level-1
                     ldb       MMUSL1,u            restore MMU Slot 1 #$01
-                    stb       MMU_SLOT_1	    update MMU SLOT 1 $FFA9
+                    stb       MMU_SLOT_1            update MMU SLOT 1 $FFA9
                     lda       MMUST,u             restore MLUT #$00
                     sta       MMU_MEM_CTRL        update MMU $FFA0
-		    endc
-		    ifeq      Level-2
-		    lda	      MMUST,U
-		    lsla
-		    lsla
-		    lsla
-		    lsla
-		    anda      #%00110000
-		    adda      MMUST,u
-		    sta	      MMU_MEM_CTRL
-		    puls      a
-		    sta	      MMU_SLOT_1
-*		    lda	      MMUST,u
-*		    sta	      MMU_MEM_CTRL
-		    puls      cc
-		    endc 
+                    endc
+                    ifeq      Level-2
+                    lda       MMUST,U
+                    lsla
+                    lsla
+                    lsla
+                    lsla
+                    anda      #%00110000
+                    adda      MMUST,u
+                    sta       MMU_MEM_CTRL
+                    puls      a
+                    sta       MMU_SLOT_1
+*                   lda       MMUST,u
+*                   sta       MMU_MEM_CTRL
+                    puls      cc
+                    endc 
                     leax      Logo,pcr            point to Nitros-9 banner
                     ldy       #LogoLen
                     lda       #$01                standard output
@@ -380,146 +380,146 @@ Crash
                     bcc       FrkShell            OK, go start shell.
 DeadEnd             bra       DeadEnd
                     endc
-IcptRtn 	    rti
+IcptRtn             rti
 
 
 Logo                fcb        $1B,$33,$06,$1B,$32,$01,$0C                   set BG blue,FG wht, CLS, NewLine
-                    fcb	$1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB					center outline
-                    fcb	$1B,$32,$00,$5F,$5F,$5F,$1B,$32,$06,$5F	outline
-                    fcb	$5F,$5F,$5F,$1B,$32,$00,$5F,$5F,$1B,$32
-                    fcb	$06,$5F,$1B,$32,$00,$5F,$5F,$1B,$32,$06
-                    fcb	$5F,$5F,$5F,$5F,$1B,$32,$00,$5F,$5F,$1B
-                    fcb	$32,$06,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F        
-                    fcb	$1B,$32,$06,$5F,$5F,$5F,$5F,$1B,$32,$00
-                    fcb	$5F,$5F,$5F,$5F,$5F,$5F,$1B,$32,$0B,$5F
-                    fcb	$1B,$32,$06,$5F,$5F,$1B,$32,$00,$5F,$5F        
-                    fcb	$5F,$5F,$5F,$1B,$32,$0B,$5F,$1B,$32,$06
-                    fcb	$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$1B
-                    fcb	$32,$00,$5F,$5F,$5F,$5F,$5F,$1B,$32,$0B
-                    fcb	$5F,$1B,$32,$06,$5F,$5F,$5F,$DD,$DD,$DD
-                    fcb	$DD,$DD,$DD,$DD,$DD
-                    fcb	$1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB					center line
-                    fcb	$1B,$32,$02,$DB,$DB,$DB,$BC,$1B,$32,$06
-                    fcb	$DB,$DB,$DB,$1B,$32,$02,$DB,$DB,$1B,$32
-                    fcb	$00,$B3,$1B,$32,$08,$DB,$DB,$1B,$32,$00
-                    fcb	$B3,$1B,$32,$06,$DB,$1B,$32,$00,$5F,$5F	
-                    fcb	$1B,$32,$07,$DB,$DB,$1B,$32,$00,$B4,$5F
-                    fcb	$5F,$1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$1B,$32,$01,$B5,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$1B,$33,$0B,$B7,$1B,$33,$06,$1B
-                    fcb	$32,$0B,$B3,$1B,$32,$01,$B5,$DB,$DB,$DB
-                    fcb	$DB,$DB,$1B,$33,$0B,$B7,$1B,$33,$06,$1B
-                    fcb	$32,$0B,$B3,$1B,$32,$06,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$DB,$1B,$32,$01,$B5,$DB,$DB,$DB
-                    fcb	$DB,$DB,$1B,$33,$0B,$B7,$1B,$33,$06,$1B
-                    fcb	$32,$0B,$B3,$1B,$32,$06,$DB,$DB,$DB,$DB
-                    fcb	$DB,$1B,$32					end line 1
-                    fcb	$06,$DD,$DD,$DB,$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$DB,$DB,$DB				center line
-                    fcb	$1B,$32,$02,$DB,$DB,$BB,$DB,$BC,$1B,$32
-                    fcb	$06,$DB,$DB,$1B,$32,$02,$DB,$DB,$1B,$32
-                    fcb	$00,$B3,$5F,$5F,$1B,$32,$06,$DB,$1B,$32
-                    fcb	$00,$1B,$32,$07,$B9,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$1B,$32,$00,$B3,$1B,$32,$06,$DB
-                    fcb	$1B,$32,$00,$5F,$5F,$5F,$5F,$1B,$32,$0B
-                    fcb	$5F,$1B,$32,$06,$DB,$1B,$32,$01,$DB,$DB
-                    fcb	$1B,$32,$00,$B3,$1B,$32,$06,$DB,$DB,$DB
-                    fcb	$1B,$32,$01,$DB,$DB,$1B,$32,$0B,$B3,$1B
-                    fcb	$32,$01,$DB,$DB,$1B,$32,$00,$B4,$5F,$5F
-                    fcb	$5F,$1B,$32,$0B,$5F,$1B,$32,$06,$DB,$1B
-                    fcb	$32,$00,$5F,$5F,$5F,$5F,$5F,$5F,$1B,$32
-                    fcb	$06,$DB,$1B,$32,$01,$DB,$DB,$1B,$32,$00
-                    fcb	$B4,$5F,$5F,$1B,$32,$01,$DB,$DB,$1B,$32
-                    fcb	$0B,$B3					end line 2
-                    fcb	$1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB	center line
-                    fcb	$DB,$DB,$1B,$32,$02,$DB,$DB,$1B,$32,$06
-                    fcb	$DB,$1B,$32,$02,$BB,$DB,$BC,$1B,$32,$06
-                    fcb	$DB,$1B,$32,$02,$DB,$DB,$1B,$32,$00,$B3
-                    fcb	$1B,$32,$08,$DB,$DB,$1B,$32,$00,$B3,$1B
-                    fcb	$32,$06,$DB,$DB,$DB,$1B,$32,$07,$DB,$DB
-                    fcb	$1B,$32,$00,$B3,$1B,$32,$06,$DB,$DB,$DB
-                    fcb	$1B,$32,$05,$B5,$DB,$DB,$DB,$DB,$1B,$33
-                    fcb	$06,$1B,$33,$0B,$B7,$1B,$33,$06,$1B,$32
-                    fcb	$0B,$B3,$1B,$32,$01,$DB,$DB,$1B,$32,$00
-                    fcb	$B3,$1B,$32,$06,$DB,$DB,$DB,$1B,$32,$01
-                    fcb	$DB,$DB,$1B,$32,$0B,$B3,$1B,$32,$01,$B6
-                    fcb	$DB,$DB,$DB,$DB,$DB,$1B,$33,$0B,$B7,$1B
-                    fcb	$33,$06,$1B,$32,$0B,$B3,$1B,$32,$01,$DB
-                    fcb	$DB,$1B,$32,$0F,$DB,$1B,$32,$0C,$DB,$1B
-                    fcb	$32,$0B,$DB,$1B,$32,$00,$DB,$1B,$32,$06
-                    fcb	$DB,$1B,$32,$01,$B6,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$1B,$32,$0B,$B3				end line 3
-                    fcb	$1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB	center line
-                    fcb	$DB,$DB,$1B,$32,$02,$DB,$DB,$1B,$32,$06
-                    fcb	$DB,$DB,$1B,$32,$02,$BB,$DB,$BC,$DB,$DB
-                    fcb	$1B,$32,$00,$B3,$1B,$32,$08,$DB,$DB,$1B
-                    fcb	$32,$00,$B3,$1B,$32,$06,$DB,$DB,$DB,$1B
-                    fcb	$32,$07,$DB,$DB,$1B,$32,$00,$B4,$5F,$1B
-                    fcb	$32,$06,$DB,$DB,$1B,$32,$05,$DB,$DB,$1B
-                    fcb	$32,$00,$B3,$1B,$32,$06,$DB,$DB,$1B,$32
-                    fcb	$05,$DF,$1B,$32,$06,$DB,$1B,$32,$01,$DB
-                    fcb	$DB,$1B,$32,$00,$B4,$5F,$5F,$5F,$1B,$32
-                    fcb	$01,$DB,$DB,$1B,$32,$0B,$B3,$1B,$32,$06
-                    fcb	$DB,$1B,$32,$00,$5F,$5F,$5F,$5F,$1B,$32
-                    fcb	$01,$DB,$DB,$1B,$32,$0B,$B3,$1B,$32,$06
-                    fcb	$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$1B,$32
-                    fcb	$00,$5F,$5F,$5F,$5F,$1B,$32,$01,$DB,$DB
-                    fcb	$1B,$32,$0B,$B3				end line 4
-                    fcb	$1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB	
-                    fcb	$DB,$DB					center font
-                    fcb	$1B,$32,$02,$DB,$DB,$1B,$32,$06,$DB,$DB
-                    fcb	$DB,$1B,$32,$02,$BB,$DB,$DB,$DB,$1B,$32
-                    fcb	$00,$B3,$1B,$32,$08,$DB,$DB,$1B,$32,$00
-                    fcb	$B3,$1B,$32,$06,$DB,$DB,$DB,$1B,$32,$07
-                    fcb	$DB,$DB,$DB,$BA,$1B,$32,$06,$DB,$DB,$1B
-                    fcb	$32,$05,$DB,$DB,$1B,$32,$00,$B3,$1B,$32
-                    fcb	$06,$DB,$DB,$DB,$DB,$1B,$32,$01,$B6,$DB
-                    fcb	$DB,$DB,$DB,$DB,$DB,$B8,$1B,$32,$06,$DB
-                    fcb	$1B,$32,$01,$B9,$DB,$DB,$DB,$DB,$DB,$B8
-                    fcb	$1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$1B,$32,$01,$B9,$DB,$DB,$DB,$DB,$DB
-                    fcb	$B8						end line 5
-                    fcb	$1B,$32,$06,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$DB,$DB,$DB,$DB,$1B,$32,$01		reset FG white	
-LogoLen             equ	*-Logo
-ColorBar            fcb	$1B,$32,$06
-                    fcb	$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB	center bar
-                    fcb	$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$1B,$32,$02,$DF,$DF,$DF,$1B,$32,$08,$DF	color bar
-                    fcb	$DF,$DF,$1B,$32,$07,$DF,$DF,$DF,$1B,$32
-                    fcb	$05,$DF,$DF,$DF,$1B,$32,$0E,$DF,$DF,$DF
-                    fcb	$1B,$32,$04,$DF,$DF,$DF,$1B,$32,$01,$DF
-                    fcb	$DF,$DF,$1B,$32,$0F,$DF,$DF,$DF,$1B,$32
-                    fcb	$0C,$DF,$DF,$DF,$1B,$32,$0B,$DF,$DF,$DF
-                    fcb	$1B,$32,$03,$DF,$DF,$DF,$1B,$32,$0A,$DF
-                    fcb	$DF,$DF,$1B,$32,$0D,$DF,$DF,$DF,$1B,$32
-                    fcb	$09,$DF,$DF,$DF,$1B,$32,$00,$DF,$DF,$DF
-                    fcb	$1B,$32,$01					reset FG White
-CBLen               equ	*-ColorBar
-BLogo               fcb	$1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
-                    fcb	$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB		center line
-                    fcb	$1B,$32,$00,$5F,$5F,$5F,$5F,$5F,$5F,$5F
-                    fcb	$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F
-                    fcb	$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F
-                    fcb	$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F
-                    fcb	$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F
-                    fcb	C$CR,C$LF
-BLogoLen            equ	*-BLogo
-FONTS               fcb	$C0,$C0,$C0,$C0,$C0,$C0,$C0,$C0		char 179 right shadow
-                    fcb	$C0,$C0,$C0,$C0,$C0,$C0,$C0,$FF		char 180 right and underline shadow
-                    fcb	$07,$1F,$3F,$7F,$7F,$FF,$FF,$FF		char 181 left top rounded
-                    fcb	$FF,$FF,$FF,$7F,$7F,$3F,$1F,$07		char 182 left bottom rounded
-                    fcb	$E0,$F8,$FC,$FE,$FE,$FF,$FF,$FF		char 183 right top rounded
-                    fcb	$FF,$FF,$FF,$FE,$FE,$FC,$F8,$E0		char 184 right bottom rounded
-                    fcb	$0F,$1F,$3F,$7F,$7F,$3F,$1F,$0F		char 185 left end cap
-                    fcb	$FF,$FE,$FC,$F8,$F0,$E0,$C0,$80		char 186 right forward slant
-                    fcb	$FF,$7F,$3F,$1F,$0F,$07,$03,$01		char 187 left reverse slant
-                    fcb	$80,$C0,$E0,$F0,$F8,$FC,$FE,$FF		char 188 right reverse slant
+                    fcb $1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB                                 center outline
+                    fcb $1B,$32,$00,$5F,$5F,$5F,$1B,$32,$06,$5F outline
+                    fcb $5F,$5F,$5F,$1B,$32,$00,$5F,$5F,$1B,$32
+                    fcb $06,$5F,$1B,$32,$00,$5F,$5F,$1B,$32,$06
+                    fcb $5F,$5F,$5F,$5F,$1B,$32,$00,$5F,$5F,$1B
+                    fcb $32,$06,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F        
+                    fcb $1B,$32,$06,$5F,$5F,$5F,$5F,$1B,$32,$00
+                    fcb $5F,$5F,$5F,$5F,$5F,$5F,$1B,$32,$0B,$5F
+                    fcb $1B,$32,$06,$5F,$5F,$1B,$32,$00,$5F,$5F        
+                    fcb $5F,$5F,$5F,$1B,$32,$0B,$5F,$1B,$32,$06
+                    fcb $5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$1B
+                    fcb $32,$00,$5F,$5F,$5F,$5F,$5F,$1B,$32,$0B
+                    fcb $5F,$1B,$32,$06,$5F,$5F,$5F,$DD,$DD,$DD
+                    fcb $DD,$DD,$DD,$DD,$DD
+                    fcb $1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB                                 center line
+                    fcb $1B,$32,$02,$DB,$DB,$DB,$BC,$1B,$32,$06
+                    fcb $DB,$DB,$DB,$1B,$32,$02,$DB,$DB,$1B,$32
+                    fcb $00,$B3,$1B,$32,$08,$DB,$DB,$1B,$32,$00
+                    fcb $B3,$1B,$32,$06,$DB,$1B,$32,$00,$5F,$5F 
+                    fcb $1B,$32,$07,$DB,$DB,$1B,$32,$00,$B4,$5F
+                    fcb $5F,$1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$1B,$32,$01,$B5,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$1B,$33,$0B,$B7,$1B,$33,$06,$1B
+                    fcb $32,$0B,$B3,$1B,$32,$01,$B5,$DB,$DB,$DB
+                    fcb $DB,$DB,$1B,$33,$0B,$B7,$1B,$33,$06,$1B
+                    fcb $32,$0B,$B3,$1B,$32,$06,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$DB,$1B,$32,$01,$B5,$DB,$DB,$DB
+                    fcb $DB,$DB,$1B,$33,$0B,$B7,$1B,$33,$06,$1B
+                    fcb $32,$0B,$B3,$1B,$32,$06,$DB,$DB,$DB,$DB
+                    fcb $DB,$1B,$32                                     end line 1
+                    fcb $06,$DD,$DD,$DB,$DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$DB,$DB,$DB                             center line
+                    fcb $1B,$32,$02,$DB,$DB,$BB,$DB,$BC,$1B,$32
+                    fcb $06,$DB,$DB,$1B,$32,$02,$DB,$DB,$1B,$32
+                    fcb $00,$B3,$5F,$5F,$1B,$32,$06,$DB,$1B,$32
+                    fcb $00,$1B,$32,$07,$B9,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$1B,$32,$00,$B3,$1B,$32,$06,$DB
+                    fcb $1B,$32,$00,$5F,$5F,$5F,$5F,$1B,$32,$0B
+                    fcb $5F,$1B,$32,$06,$DB,$1B,$32,$01,$DB,$DB
+                    fcb $1B,$32,$00,$B3,$1B,$32,$06,$DB,$DB,$DB
+                    fcb $1B,$32,$01,$DB,$DB,$1B,$32,$0B,$B3,$1B
+                    fcb $32,$01,$DB,$DB,$1B,$32,$00,$B4,$5F,$5F
+                    fcb $5F,$1B,$32,$0B,$5F,$1B,$32,$06,$DB,$1B
+                    fcb $32,$00,$5F,$5F,$5F,$5F,$5F,$5F,$1B,$32
+                    fcb $06,$DB,$1B,$32,$01,$DB,$DB,$1B,$32,$00
+                    fcb $B4,$5F,$5F,$1B,$32,$01,$DB,$DB,$1B,$32
+                    fcb $0B,$B3                                 end line 2
+                    fcb $1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB center line
+                    fcb $DB,$DB,$1B,$32,$02,$DB,$DB,$1B,$32,$06
+                    fcb $DB,$1B,$32,$02,$BB,$DB,$BC,$1B,$32,$06
+                    fcb $DB,$1B,$32,$02,$DB,$DB,$1B,$32,$00,$B3
+                    fcb $1B,$32,$08,$DB,$DB,$1B,$32,$00,$B3,$1B
+                    fcb $32,$06,$DB,$DB,$DB,$1B,$32,$07,$DB,$DB
+                    fcb $1B,$32,$00,$B3,$1B,$32,$06,$DB,$DB,$DB
+                    fcb $1B,$32,$05,$B5,$DB,$DB,$DB,$DB,$1B,$33
+                    fcb $06,$1B,$33,$0B,$B7,$1B,$33,$06,$1B,$32
+                    fcb $0B,$B3,$1B,$32,$01,$DB,$DB,$1B,$32,$00
+                    fcb $B3,$1B,$32,$06,$DB,$DB,$DB,$1B,$32,$01
+                    fcb $DB,$DB,$1B,$32,$0B,$B3,$1B,$32,$01,$B6
+                    fcb $DB,$DB,$DB,$DB,$DB,$1B,$33,$0B,$B7,$1B
+                    fcb $33,$06,$1B,$32,$0B,$B3,$1B,$32,$01,$DB
+                    fcb $DB,$1B,$32,$0F,$DB,$1B,$32,$0C,$DB,$1B
+                    fcb $32,$0B,$DB,$1B,$32,$00,$DB,$1B,$32,$06
+                    fcb $DB,$1B,$32,$01,$B6,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$1B,$32,$0B,$B3                             end line 3
+                    fcb $1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB center line
+                    fcb $DB,$DB,$1B,$32,$02,$DB,$DB,$1B,$32,$06
+                    fcb $DB,$DB,$1B,$32,$02,$BB,$DB,$BC,$DB,$DB
+                    fcb $1B,$32,$00,$B3,$1B,$32,$08,$DB,$DB,$1B
+                    fcb $32,$00,$B3,$1B,$32,$06,$DB,$DB,$DB,$1B
+                    fcb $32,$07,$DB,$DB,$1B,$32,$00,$B4,$5F,$1B
+                    fcb $32,$06,$DB,$DB,$1B,$32,$05,$DB,$DB,$1B
+                    fcb $32,$00,$B3,$1B,$32,$06,$DB,$DB,$1B,$32
+                    fcb $05,$DF,$1B,$32,$06,$DB,$1B,$32,$01,$DB
+                    fcb $DB,$1B,$32,$00,$B4,$5F,$5F,$5F,$1B,$32
+                    fcb $01,$DB,$DB,$1B,$32,$0B,$B3,$1B,$32,$06
+                    fcb $DB,$1B,$32,$00,$5F,$5F,$5F,$5F,$1B,$32
+                    fcb $01,$DB,$DB,$1B,$32,$0B,$B3,$1B,$32,$06
+                    fcb $DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$1B,$32
+                    fcb $00,$5F,$5F,$5F,$5F,$1B,$32,$01,$DB,$DB
+                    fcb $1B,$32,$0B,$B3                         end line 4
+                    fcb $1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB 
+                    fcb $DB,$DB                                 center font
+                    fcb $1B,$32,$02,$DB,$DB,$1B,$32,$06,$DB,$DB
+                    fcb $DB,$1B,$32,$02,$BB,$DB,$DB,$DB,$1B,$32
+                    fcb $00,$B3,$1B,$32,$08,$DB,$DB,$1B,$32,$00
+                    fcb $B3,$1B,$32,$06,$DB,$DB,$DB,$1B,$32,$07
+                    fcb $DB,$DB,$DB,$BA,$1B,$32,$06,$DB,$DB,$1B
+                    fcb $32,$05,$DB,$DB,$1B,$32,$00,$B3,$1B,$32
+                    fcb $06,$DB,$DB,$DB,$DB,$1B,$32,$01,$B6,$DB
+                    fcb $DB,$DB,$DB,$DB,$DB,$B8,$1B,$32,$06,$DB
+                    fcb $1B,$32,$01,$B9,$DB,$DB,$DB,$DB,$DB,$B8
+                    fcb $1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$1B,$32,$01,$B9,$DB,$DB,$DB,$DB,$DB
+                    fcb $B8                                             end line 5
+                    fcb $1B,$32,$06,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$DB,$DB,$DB,$DB,$1B,$32,$01             reset FG white  
+LogoLen             equ *-Logo
+ColorBar            fcb $1B,$32,$06
+                    fcb $DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB center bar
+                    fcb $DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $1B,$32,$02,$DF,$DF,$DF,$1B,$32,$08,$DF color bar
+                    fcb $DF,$DF,$1B,$32,$07,$DF,$DF,$DF,$1B,$32
+                    fcb $05,$DF,$DF,$DF,$1B,$32,$0E,$DF,$DF,$DF
+                    fcb $1B,$32,$04,$DF,$DF,$DF,$1B,$32,$01,$DF
+                    fcb $DF,$DF,$1B,$32,$0F,$DF,$DF,$DF,$1B,$32
+                    fcb $0C,$DF,$DF,$DF,$1B,$32,$0B,$DF,$DF,$DF
+                    fcb $1B,$32,$03,$DF,$DF,$DF,$1B,$32,$0A,$DF
+                    fcb $DF,$DF,$1B,$32,$0D,$DF,$DF,$DF,$1B,$32
+                    fcb $09,$DF,$DF,$DF,$1B,$32,$00,$DF,$DF,$DF
+                    fcb $1B,$32,$01                                     reset FG White
+CBLen               equ *-ColorBar
+BLogo               fcb $1B,$32,$06,$DB,$DB,$DB,$DB,$DB,$DB,$DB
+                    fcb $DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB             center line
+                    fcb $1B,$32,$00,$5F,$5F,$5F,$5F,$5F,$5F,$5F
+                    fcb $5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F
+                    fcb $5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F
+                    fcb $5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F
+                    fcb $5F,$5F,$5F,$5F,$5F,$5F,$5F,$5F
+                    fcb C$CR,C$LF
+BLogoLen            equ *-BLogo
+FONTS               fcb $C0,$C0,$C0,$C0,$C0,$C0,$C0,$C0         char 179 right shadow
+                    fcb $C0,$C0,$C0,$C0,$C0,$C0,$C0,$FF         char 180 right and underline shadow
+                    fcb $07,$1F,$3F,$7F,$7F,$FF,$FF,$FF         char 181 left top rounded
+                    fcb $FF,$FF,$FF,$7F,$7F,$3F,$1F,$07         char 182 left bottom rounded
+                    fcb $E0,$F8,$FC,$FE,$FE,$FF,$FF,$FF         char 183 right top rounded
+                    fcb $FF,$FF,$FF,$FE,$FE,$FC,$F8,$E0         char 184 right bottom rounded
+                    fcb $0F,$1F,$3F,$7F,$7F,$3F,$1F,$0F         char 185 left end cap
+                    fcb $FF,$FE,$FC,$F8,$F0,$E0,$C0,$80         char 186 right forward slant
+                    fcb $FF,$7F,$3F,$1F,$0F,$07,$03,$01         char 187 left reverse slant
+                    fcb $80,$C0,$E0,$F0,$F8,$FC,$FE,$FF         char 188 right reverse slant
 
 emod
 eom                 equ       *
