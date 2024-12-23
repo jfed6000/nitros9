@@ -90,7 +90,7 @@ AltISR
 * This should hide the mouse after 4 to 5 seconds of inactivity
 HandleMSTimer	    tst	      MS_MEN             check if mouse cursor already off
 		    beq	      HandleSound	 if cursor already off, skip timer code
-		    inc	      V.MSTimer,u	         increment mouse auto-hide timer
+		    inc	      V.MSTimer,u        increment mouse auto-hide timer
 		    bne	      HandleSound	 if it is not zero, then skip
 		    clr	      MS_MEN		 if timer flips to 0, turn off mouse cursor
 		    ldd	      #640		 park mouse at right border
@@ -411,6 +411,7 @@ Init                stu       D.KbdSta
                     lbsr      InitKeyboard        initialize the keyboad
 		    ifgt      Level-1
                     lbsr      InitMouse
+		    clr	      V.SOLOnOff,u
 		    endc
 
                     ldx       >D.AltIRQ           get the current alternate IRQ vector
@@ -1094,6 +1095,7 @@ Do1B60_Param4
                     sta       2,x
                     lbra      ResetHandler
 
+
 ;;; ChgBackPal
 ;;;
 ;;; Change a foreground palette register.
@@ -1132,8 +1134,14 @@ IsIt60              cmpa      #$60                is it ChgForePal?
                     bne       IsIt61              branch if not
                     lbra      ChgForePal
 IsIt61              cmpa      #$61                is it ChgBackPal?
-                    bne       IsIt32              branch if not
+                    bne       IsIt62              branch if not
                     lbra      ChgBackPal
+IsIt62		    cmpa      #$62		  Change to Font0
+		    bne	      IsIt63
+		    lbra      ChgFont0
+IsIt63		    cmpa      #$63		  Change to Font1
+		    bne	      IsIt32
+		    lbra      ChgFont1		    
 IsIt32              cmpa      #$32                is it the foreground color code?
                     bne       IsIt33              branch if not
                     leax      FColor,pcr          else point to the vector
@@ -1158,6 +1166,22 @@ BColor              bsr       SetBackColor
                     lbra      ResetHandler        reset the handler
 Border              bsr       SetBorderColor
                     lbra      ResetHandler        reset the handler
+
+
+* Change to FontSet0
+ChgFont0            ldx       #TXT.Base
+                    ldb       MASTER_CTRL_REG_H,x
+		    andb      #~(FT_FSET)
+		    stb	      MASTER_CTRL_REG_H,X
+		    lbra      ResetHandler
+
+* Change to FontSet1
+ChgFont1	    ldx       #TXT.Base
+                    ldb       MASTER_CTRL_REG_H,x
+		    orb       #FT_FSET
+		    stb	      MASTER_CTRL_REG_H,X
+		    lbra      ResetHandler
+
 
 * BoldSw - do nothing.
 BoldSw              lbra      ResetHandler        reset the handler
@@ -1219,6 +1243,8 @@ GetStat             cmpa      #SS.EOF             is this the EOF call?
 		    ifgt      Level-1
 		    cmpa      #SS.Mouse
 		    beq	      GSMouse
+		    cmpa      #SS.DScrn	          SS.DScrn MCR to display text or graphics
+		    lbeq      GSDScrn
 		    endc
                     cmpa      #SS.Palet           get palettes?
                     beq       GSPalet             yes, go process
@@ -1226,6 +1252,8 @@ GetStat             cmpa      #SS.EOF             is this the EOF call?
                     lbeq      SSFBRgs             yes, go process
                     cmpa      #SS.DfPal           get default colors?
                     beq       GSDfPal             yes, go process
+		    cmpa      #SS.FntChar
+		    lbeq      GSFntChar	      
                     comb                          set the carry
                     ldb       #E$UnkSvc           load the "unknown service" error
                     rts                           return
@@ -1366,21 +1394,14 @@ GSPalet
 ;;; Entry:  A = The path number.
 ;;;         B = SS.FBRgs ($96)
 ;;;
-;;; Exit:   A = The foreground palette register number.
-;;;         B = The background palette register number.
+;;; Exit:   A = The foreground|backgroun palette register number.
 ;;;         X = The least significant byte of the border palette register number.
 ;;;        CC = Carry flag clear to indicate success.
 ;;;
 ;;; Error:  B = A non-zero error code.
 ;;;        CC = Carry flag set to indicate error.
-SSFBRGs             lda                 V.FBCol,u
-                    tfr                 a,b
-                    lsra
-                    lsra
-                    lsra
-                    lsra
-                    andb                #$0F
-                    std                 R$D,x
+SSFBRgs             lda                 V.FBCol,u
+                    sta                 R$A,x
                     ldd                 #0
                     std                 R$X,x
                     rts
@@ -1421,7 +1442,7 @@ GSDfPal
 SS.DMAFill          equ       $B0
 SetStat             ldx       PD.RGS,y            get caller's registers in X
                     cmpa      #SS.SSig            send signal on data ready?
-                    beq       SSSig               yes, go process
+                    lbeq       SSSig               yes, go process
                     cmpa      #SS.Relea           release signal on data ready?
                     lbeq      SSRelea             yes, go process
                     cmpa      #SS.DMAFill         DMA Fill?
@@ -1441,6 +1462,12 @@ SetStat             ldx       PD.RGS,y            get caller's registers in X
 		    lbeq      SSPalet		  SS.Palet assigns palette to bitmap
 		    cmpa      #SS.DfPal
 		    lbeq      SSDfPal		  SS.DfPal defines and populates a CLUT
+		    cmpa      #SS.FntLoadF
+		    lbeq      SSFntLoadF
+		    cmpa      #SS.FntChar
+		    lbeq      SSFntChar
+		    cmpa      #SS.SOLIRQ
+		    lbeq      SSSOLIRQ
   endc                                            
 		    comb                          set the carry
                     ldb       #E$UnkSvc           load the "unknown service" error
@@ -1515,7 +1542,322 @@ SSRelea             lda       PD.CPR,y            get the current process ID
                     clr       <V.SSigID,u         else clear process the ID
 ex@                 rts
 
-                    ifgt      Level-1
+
+*****************************************************************************
+* Level 2 only **************************************************************
+*****************************************************************************
+
+                    ifgt      Level-1		 Level 2 or greater only  
+
+;;; SS.SOLIRQ
+;;;
+;;; Start of Line Interrupt
+;;;
+;;; Add Start of Line Interrupt that will send a signal
+;;; to a process at the start of a line on the screen
+;;;
+;;; Entry: R$A = Value for signal
+;;;        R$X = Line # that triggers Interrupt
+;;;
+;;; Exit:  B = non-zero error code
+;;;       CC = carry flag clear to indicate success
+SSSOLIRQ            lda       V.SOLOnOff,u
+		    lbeq      SOL_TurnOn	  first SOL? need to init and turn on IRQ
+		    ldb	      V.SOLMax,u          load max table index
+		    cmpb      #7		  max table is 8 entries
+		    bne	      cont@		  continue if < 7
+		    ldb	      #204		  else: Device Table Full error
+		    orcc      #1
+		    lbra      ErrExit@
+cont@		    lslb
+		    lslb
+		    ldy	      R$X,x
+		    pshs      x,y
+		    leay      V.SOLTable,u
+		    leay      b,y	          last entry in table
+		    ldb	      V.SOLMax,u
+search@		    ldx	      2,y
+		    cmpx      2,s
+		    bgt	      insertval@          table value > new value
+		    inc       V.SOLMax,u	  table value < new value, move up
+		    stx	      6,s
+		    ldx	      ,y
+		    stx	      4,s
+		    leay      -4,y
+		    decb
+		    blt	      insertval@
+		    bra	      search@
+insertval@	    ldx	      2,s
+		    stx	      6,y
+		    ldx	      ,s
+		    ldb	      R$A,x	          put signal in b
+		    ldy	      <D.Proc		  put ProcId in a
+		    lda	      P$ID,y
+		    std	      V.SOLTable,u
+		    ldy	      R$X,x	          load line #
+		    sty	      V.SOLTable+2,u	  store in table
+		    puls      x,y
+		    rts
+SOL_TurnOn 	    pshs      x
+                    leay      V.SOLTable,u
+		    ldd	      R$X,x
+		    std	      2,y
+	            ldb	      R$A,x
+		    pshs      y
+		    ldy	      <D.Proc
+		    lda	      P$ID,y
+		    puls      y
+		    std	      ,y
+		    clr	      V.SOLMax,u
+		    clr	      V.SOLCurr,u
+		    inc	      V.SOLOnOff,u
+		    ldd       #INT_PENDING_0      get the pending interrupt pending address
+                    leax      SOL_Pckt,pcr        point to the IRQ packet
+                    leay      SOL_IRQSvc,pcr         and the service routine
+                    os9       F$IRQ               install the interrupt handler
+                    bcs       ErrExit@             branch if we have an issue
+                    lda       INT_MASK_0          else get the interrupt mask byte
+                    anda      #^INT_VKY_SOL        set the SOL interrupt
+                    sta       INT_MASK_0          and save it back
+		    puls      x
+SOL_ON		    ldd	      R$X,x
+		    exg	      a,b
+		    std	      $FFD9
+		    lda	      #1
+		    sta	      $FFD8
+ErrExit@	    rts
+
+
+SOL_IRQSvc	    ldb	      V.SOLCurr,u         Get current SOL index
+		    lslb      			  mult x4 bytes/row    
+		    lslb
+		    leay      V.SOLTable,u	  get the table
+		    ldd	      b,y		  load the current entry
+		    os9	      F$Send		  Send it to the process
+		    dec	      V.SOLCurr,u	  decrement the current index
+		    bge	      cont@		  if >=0 cont
+		    ldb	      V.SOLMax,u	  else: reset to Max
+		    stb	      V.SOLCurr,u
+cont@		    ldb	      V.SOLCurr,u         load new current index 
+		    lslb      			  mult x4 bytes/row
+		    lslb
+		    leay      b,y	          load next line value
+		    ldd	      2,y
+		    exg	      a,b	          switch high/low byte
+		    std	      $FFD9              write to SOL register
+		    rti
+
+***********************************************************************************
+* SS.SOLIRQ F$IRQ packet.
+SOL_Pckt            equ       *
+SOLPkt.Flip         fcb       %00000000           the flip byte
+SOLPkt.Mask         fcb       INT_VKY_SOL         the mask byte
+                    fcb       $F1                 the priority byte
+
+;;; GS.FntChar
+;;;
+;;; Copy a font character from font bank 0 or 1 to a user memory location
+;;;
+;;; Entry: R$A = font set 0 or 1
+;;;        R$X = pointer to 8 byte memory
+;;; 	   R$Y = font character to get (0-255)
+;;;
+;;; Exit:  B = non-zero error code
+;;;       CC = carry flag clear to indicate success
+
+
+;;; SS.FntChar
+;;;
+;;; Set a font character in font bank 0 or 1 from a user memory location
+;;;
+;;; Entry: R$A = font set 0 or 1
+;;;        R$X = pointer to 8 byte memory
+;;; 	   R$Y = font character to set (0-255)
+;;;
+;;; Exit:  B = non-zero error code
+;;;       CC = carry flag clear to indicate success
+
+;;; difference between get and set is just two lines specifying
+;;; source and destination.  So procedures are combined.
+GSFntChar          lda	      #0
+		    bra	      DoFontGetSet
+SSFntChar	    lda	      #1
+DoFontGetSet	    pshs      a	
+                    ldd	      R$Y,x	          get the char# and mulitply by 8
+		    lslb
+		    rola
+		    lslb
+		    rola
+		    lslb
+		    rola
+		    tfr       d,y	          transfer result to y
+		    lda       R$A,x		  add offset for font bank 0 or 1
+		    beq	      font0@
+font1@		    leay      FONT_1_OFFSET,y
+		    bra	      cont@
+font0@		    leay      FONT_0_OFFSET,y
+cont@		    leas      -2,s 	          reserve 2 bytes for mapped address
+		    pshs      x,u		  preserve x,u
+		    ldx	      #FONT_BLK		  map in $C1
+                    ldb       #$01                map 1 block at address x (x set on entry)
+                    os9       F$MapBlk		  map block into caller DAT
+		    bcc	      mapgood@		  if success, then continue
+		    puls      x,u		  else: error
+		    puls      a,x,pc              clean stack and return if error
+mapgood@            stu	      4,s		  store mapped address on stack [XUMO]
+		    ldd	      4,s		  load into d and add to y
+		    leay      d,y	          Y now contains address of font char
+		    puls      x,u		  restore x,u [MO]
+		    pshs      x,u
+		    ldx       <D.Proc
+		    lda	      P$Task,x		  copy data from caller to caller memory
+		    ldb	      P$Task,x
+		    ldx	      ,s
+		    tst	      6,s	          Get or Set?
+		    beq	      getfont@		  0 = getfont
+		    ldx	      R$X,x	          setfont: source is x
+		    tfr	      y,u		  destination is y
+		    bra	      contfont@
+getfont@	    ldu	      R$X,x		  getfont: destination is x
+		    tfr	      y,x		  source is y
+contfont@           ldy	      #8		  copy 8 bytes
+		    os9	      F$Move
+	    	    puls      x,u	          error or not, clear block and return
+		    puls      u                   pull blk addr and getset flag
+		    puls      a
+		    ldb	      #$01
+		    os9	      F$ClrBlk
+		    rts
+
+;;; SS.FntLoadF
+;;;
+;;; Load a font from a file.  File should be full path.
+;;; Don't load module into memory, just read directly from file.
+;;;
+;;; Entry: R$A = font set 0 or 1
+;;;        R$X = pointer to font name
+;;;
+;;; Exit:  B = non-zero error code
+;;;       CC = carry flag clear to indicate success
+
+SSFntLoadF          lda	      R$A,x
+		    beq	      font0@
+font1@		    ldy	      #FONT_1_OFFSET	  $1800
+		    bra	      storeaddr@
+font0@		    ldy	      #FONT_0_OFFSET	  $0000
+storeaddr@	    pshs      y	                  store font offset on stack [O]      
+		    leas      -2,s                reserve 2 bytes on stack for mapped addr [MO]
+* s= ADDR|OFFSET|name|		    
+*                   ****      map block into user dat and store address on stack
+		    pshs      x,u		  preserve x,u
+		    ldx	      #FONT_BLK		  map in $C1
+                    ldb       #$01                map 1 block at address x (x set on entry)
+                    os9       F$MapBlk
+		    bcc	      mapgood@		  if success, then continue
+		    puls      x,u		  else: error
+		    lbra      error@
+mapgood@            stu	      4,s		  store mapped address on stack [XUMO]
+		    puls      x,u		  restore x,u [MO]
+*		    ****      open file to read		    
+endcopy@	    ldx	      R$X,x	          pointer to file name in caller memory
+		    lda	      #READ.		  READ access mode
+		    os9	      I$Open		  
+		    bcc	      modulecheck@
+		    bra       errormap@
+* Verify that file is module.
+* Load file's first two bytes onto the stack to verify and check for $87DC
+modulecheck@        leas      -2,s	           add space to stack to store 2 bytes [DMO]
+		    leax      ,s		   load x with stack address
+		    lbsr      Rd2B2Mem
+ 		    puls      x  		   load x with the data [MO]
+		    cmpx      #$87CD		   check if module
+		    bcc	      getstart@		   if module, get start of data
+		    ldb	      #3
+		    bra	      errorclose@	   else, error
+* Module header byte $09-0A = Execution Offset.
+* This is the start of the data in a data module.
+getstart@           pshs      u			   seek to data start address in file [UMO]
+		    ldx	      #$00		   set high byte addr
+		    ldu	      #$09                 set low byte
+		    os9	      I$Seek
+		    bcc	      readaddr@		   if success, read font
+		    puls      u			   else error  [MO]
+		    ldb	      #4
+		    bra	      errorclose@
+* s= u|addr|offset		    
+readaddr@	    leas      -2,s		   add 2 bytes stack storage [DUMO]
+		    leax      ,s		   use the 2 bytes in stack to store addr
+		    lbsr      Rd2B2Mem	           read 2 bytes from file
+		    bcc	      seekaddr@		   if success, seek to data address
+		    leas      4,s		   else: clean stack and error [MO]
+		    bra	      errorclose@
+* s= addr|u|addr|offset		    
+seekaddr@	    puls      u 		   load u with low byte addr [UMO]
+* s= u|addr|offset
+		    ldx	      #0		   load x high byte
+		    os9	      I$Seek
+		    puls      u			   restore u [MO]
+* s=addr|offset		    
+		    ldx	      ,s		   ldx with mapblock address
+		    pshs      a			   store path# on stack [AMO]
+		    ldd	      3,s		   put offset in d   
+		    leax      d,x		   add offset to x
+		    puls      a			   restore path# [MO]
+		    ldy	      #$800		   read 2K of font data into it
+		    os9	      I$Read		   a=path x=addr y=#bytes
+errorclose@	    pshs      b			   [BMO]
+	            os9	      I$Close		   close the file
+		    puls      b			   [MO]
+errormap@	    ldu       ,s
+		    pshs      b
+		    ldb	      #$01
+		    os9       F$ClrBlk             Clear block from user space
+		    puls      b
+error@		    leas      4,s                  clear stack
+		    tstb
+		    beq	      quit@
+		    coma
+quit@		    rts
+		    
+
+
+;;; Rd2B2Mem
+;;; Read 2 bytes to addr
+;;;
+;;; Entry:  A = path #
+;;;         X = memory address to read to
+;;;
+;;; Exit:   B = a non-zero error code (F$MapBlk)
+;;;        CC = carry flag clear=success set=error
+;;;
+;;; I$Read reads data into the current process in D.Proc
+;;; To use I$Read for the system, assign system to D.Proc
+;;; Call I$Read, then change the processes back
+;;; Make sure to mask interrupts so processes don't switch while
+;;; the change is happening
+;;;
+Rd2B2Mem	    pshs      cc		  push cc and mask interrupts
+		    orcc      #IntMasks
+                    ldy       <D.Proc	          ldy with current process descriptor
+                    pshs      y			  store current proc descriptor on stack
+                    ldy       <D.SysPrc		  copy system proc descriptor to current
+                    sty       <D.Proc
+                    ldy       #$02                read 2 bytes from file 
+                    os9       I$Read
+                    puls      y	                  pull current proc descriptor from stack
+                    sty       <D.Proc		  and save it back
+                    bcs       errnomap@		  if I$Read error, then handle error
+		    puls      cc,pc		  if no error, pull cc and return
+errnomap@	    puls      cc		  if error, pull cc
+		    coma      			  set carry bit
+		    rts				  and return
+		    
+		    
+
+
+
+
+
 ;;; SS.AScrn
 ;;;
 ;;; Allocate a bitmap screen
@@ -1523,9 +1865,9 @@ ex@                 rts
 ;;; Entry: R$Y = bitmap# (0-2)
 ;;;        R$X = screentype (0=320x240, 1=320x200)
 ;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-;;;        X = Starting Page# of bitmap address
+;;; Exit:  B = non-zero error code.
+;;;       CC = carry flag clear to indicate success
+;;;        X = starting Page# of bitmap address
 SSAScrn             lda       R$Y+1,x             load the bitmap number
                     lsla                          multiply by 2
                     leay      V.BM0BLK,u
@@ -1583,6 +1925,29 @@ map@                lda       R$Y+1,x             load bitmap@
 noerror@            puls      cc,pc     
 error@              coma                          set carry bit on error
 end@                rts             
+
+
+;;;  GS.DScrn
+;;;  Get Display Screen Settings
+;;;
+;;; Return MCR values
+;;;
+;;; Entry: Nothing.  This returns values only
+;;;
+;;; Exit:  R$X = Vicky_MCR Low Byte
+;;;        R$Y = Vicky_MCR High Byte
+;;;
+GSDScrn             clr       R$X,x               load MCR low byte
+                    clr       R$Y,x               load MCR high byte
+                    ldy       #TXT.Base
+mcrlbit@            lda       MASTER_CTRL_REG_L,y   store new MCR low byte
+                    sta       R$X,x                 store copy in driver variables
+mcrhbit@            ldb       MASTER_CTRL_REG_H,y   store new MCR High byte     
+                    stb       R$Y+1,x           store copy in driver variables
+end@                clrb
+                    rts
+
+
 
 ;;;  SS.DScrn
 ;;;  Display Screen Settings
@@ -1750,21 +2115,14 @@ SSPalet             pshs      cc
 ;;;        (Caller must load data module)
 ;;;
 ;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-SSDfPal             pshs      cc,a,x,y,u
+;;;       CC = Carry flag clear=success set=error
+SSDfPal             pshs      a,x,y,u
 *                   **** Map in $C1 for CLUT Registers
-                    orcc      #IntMasks
-                    ldy       <D.Proc
-                    pshs      y,x
-                    ldy       <D.SysPrc
-                    sty       <D.Proc
-                    ldb       #$01
-                    ldx       #$C1
-                    os9       F$MapBlk
-                    bcs       errnomap@
-                    puls      y,x
-                    sty       <D.Proc
-                    puls      cc
+		    pshs      x
+		    ldx	      #$C1		
+		    lbsr      mapblock
+		    puls      x
+		    bcs       end@		  if error, end and return error code
 *                   **** Calculate CLUT offset              
                     pshs      u                   push map logical addr
                     lda       R$X+1,x
@@ -1772,7 +2130,7 @@ SSDfPal             pshs      cc,a,x,y,u
                     pshs      x                   push pointer to caller Regs
                     leax      clutlookup,pcr
                     ldd       a,x
-                    leau      d,u                 ldx with $1000 offset for CLUT0
+                    leau      d,u                 ldu with offset for CLUT
 *                   **** Start F$Move (with U from above)
                     ldx       ,s                  load pointer to caller Regs
                     ldx       R$Y,x               x=Get pointer to caller data
@@ -1788,19 +2146,61 @@ noerror@            puls      u
                     bsr       clearblock
                     clrb                          no error code
                     bra       end@
-errnomap@           puls      y,x                 come here on F$MapBlk error
-                    sty       <D.Proc
-                    puls      cc
-                    coma                          set carry bit on error
-                    bra       end@
 errormove@          puls      x
                     puls      u                   come here on F$Move error
                     bsr       clearblock
                     coma                          set carry bit on error
-end@                puls      u,y,x,a
-                    rts
+end@                puls      u,y,x,a,pc
 
+
+* on 6809, CLUTs are out of order.  Set order here.
 clutlookup          fdb       $1000,$1400,$0800,$0C00
+
+;;; mapblock
+;;; Map a block into the system process map
+;;;
+;;; Entry:  X = block to map (like $C1)
+;;;
+;;; Exit:   U = address of first block
+;;;         B = a non-zero error code (F$MapBlk)
+;;;        CC = carry flag clear=success set=error
+;;;
+;;; F$MapBlk only works to map for the current processin D.Proc
+;;; To use F$MapBlk for the system, assign system to D.Proc
+;;; Call F$MapBlk, then change the processes back
+;;; Make sure to mask interrupts so processes don't switch while
+;;; the change is happening
+;;;
+;;; Does not preserve a,b,x,y,u
+mapblock	    pshs      cc		  push cc and mask interrupts
+		    orcc      #IntMasks
+                    ldy       <D.Proc	          ldy with current process descriptor
+                    pshs      y			  store current proc descriptor on stack
+                    ldy       <D.SysPrc		  copy system proc descriptor to current
+                    sty       <D.Proc
+                    ldb       #$01                map 1 block at address x (x set on entry) 
+                    os9       F$MapBlk
+                    puls      y	                  pull current proc descriptor from stack
+                    sty       <D.Proc		  and save it back
+                    bcs       errnomap@		  if F$MapBlok error, then handle error
+		    puls      cc,pc		  if no error, pull cc and return
+errnomap@	    puls      cc		  if error, pull cc
+		    coma      			  set carry bit
+		    rts				  and return
+
+
+;;; clearblock
+;;; clear a mapped block from the system process map
+;;;
+;;; Entry:  U = address of first block to clear
+;;;
+;;; Exit:   Nothing
+;;;
+;;; F$ClrBlk only works with the current process, so assign
+;;; system process to current process, clear the block
+;;; then switch it back
+;;;
+;;; Does not preserve a,b
 
 clearblock          pshs      cc
                     orcc      #IntMasks           u=logical address of block on entry

@@ -121,6 +121,15 @@ KrnBlk              SET       $7
                   ENDC
 
 ********************************************************************
+* Custom SetStats for F256
+*
+		    org	      $C0
+SS.FntLoadM	    rmb	      1
+SS.FntLoadF         rmb	      1
+SS.FntChar	    rmb	      1
+SS.SOLIRQ	    rmb	      1
+
+********************************************************************
 * System control definitions
 *
 SYS0                equ       $FE00
@@ -486,6 +495,12 @@ CODECCtrl           equ       CODECStat
 *
 TEXT_LUT_FG         equ       $FF00
 TEXT_LUT_BG         equ       $FF40
+
+********************************************************************
+* F256 font definitions
+FONT_BLK            equ	      $C1
+FONT_0_OFFSET	    equ	      $0000
+FONT_1_OFFSET	    equ	      $1800
 
 ********************************************************************
 * F256 SD card interface definitions
