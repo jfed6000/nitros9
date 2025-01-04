@@ -162,10 +162,10 @@ V.FONTPATH	    FCC	     \/dd/sys/fonts/\
 V.FONTNAME	    RMB	     33
 
 * Start of Line Interrupt Handling
-V.SOLOnOff          RMB	     1
-V.SOLCurr  	    RMB	     1
-V.SOLMax   	    RMB	     1
-V.SOLTable 	    RMB	     32
+*V.SOLOnOff          RMB	     1
+*V.SOLCurr  	    RMB	     1
+*V.SOLMax   	    RMB	     1
+*V.SOLTable 	    RMB	     32
                     endc
 
 V.InBuf             RMB       KBufSz              the input buffer

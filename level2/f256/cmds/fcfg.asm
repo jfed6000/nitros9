@@ -22,6 +22,8 @@ edition        set       1
                mod       eom,name,tylg,atrv,start,size
 
 *        [Data Section - Variables and Data Structures Here]
+solpath	       rmb       1
+sstat	       rmb       1
 oldbg	       rmb       1
 oldfg	       rmb	 1
 newfg	       rmb	 1
@@ -68,6 +70,7 @@ fontdir	       fcc 	 "/dd/sys/fonts"
 start
 
 *        [Program Section - Program Code Here]
+	       clr       sstat,u
 	       lda	 #0
 	       ldb	 #SS.FBRgs
 	       os9	 I$GetStt
@@ -96,7 +99,11 @@ start
 	       leay	 header,pcr	     write out header
 	       lbsr	 tobuf
 	       lbsr	 wrbuf
-	       lbsr	 InstallSignals
+	       andcc	 #$FE
+	       bcs	 error@
+	       leay      sigdone,pcr
+	       lbsr	 tobuf
+	       lbsr	 wrbuf
 	       lbsr	 ldfontarr	     load font array with filenames from fontdir
 	       leay	 lddone,pcr	     write out header
 	       lbsr	 tobuf
@@ -112,20 +119,32 @@ start
 	       lbsr	 writelist
 	       lbsr	 wrtlabels
 	       lbsr      printfont
+	       lbsr	 InstallSignals
 keyloop@       lbsr	 handlekeyboard
 	       cmpa	 #113
 	       beq	 exit@
 	       cmpa 	 #$0D
 	       beq	 setfont
+	       cmpa	 #$75
+	       beq	 update@
 	       bra	 keyloop@
-setfont	       lbsr	 changesettings
+update@	       lbsr	 printfont
+	       bra	 keyloop@
+setfont	       lbsr	 RemoveSignals
+	       lbsr	 changesettings
 	       bcs	 error@
-exit@	       lbsr	 movecursor
+	       bra	 exit2@
+exit@	       lbsr	 RemoveSignals
+exit2@	       lbsr	 movecursor
 	       lbsr	 keyechoon
-	       lbsr	 clearscreen
+*	       lbsr	 clearscreen
 	       lbsr	 cursoron
 	       clrb
-error@         os9       F$Exit
+error@	       ldy	 #2
+	       lda	 #1
+	       leax	 font0on,pcr
+	       os9	 I$Write
+	       os9       F$Exit
 
 
 writeoldchars  ldb 	 #0
@@ -205,16 +224,16 @@ keyechoon      leax     >popts,u
                rts
 
 changesettings leay	drawbuf,u
-	       leax	fontdir,pcr
+	       leax	fontdir,pcr		load fontdir path
 	       ldb	#13
 fdirloop@      lda	,x+
 	       sta	,y+
 	       decb
 	       bne	fdirloop@
-	       lda	#$2F
-	       sta	,y+
-	       lda	<listitem
-	       lbsr	arrayidx
+	       lda	#$2F	                add extra slash
+	       sta	,y+			
+	       lda	<listitem		Get the list item
+	       lbsr	arrayidx		Get the index
 	       leax	1,x
 	       ldb	,x+
 fnameloop@     lda	,x+
@@ -222,7 +241,7 @@ fnameloop@     lda	,x+
 	       decb
 	       bne	fnameloop@
 	       lda	#$0D
-	       sta	,x
+	       sta	,y
 	       lda	#0
 	       leax	drawbuf,u
 	       ldy	#40
@@ -830,8 +849,14 @@ printfont	    leax      frow1,pcr
 		    os9	      I$Write
 		    ldb	      #0
 		    leax      drawbuf,u
-		    lda       #32
+		    lda	      sstat,u	          DEBUG
+		    beq	      good@		  DEBUG
+		    lda	      #$58		  DEBUG
+		    bra       loop1@		  DEBUG
+good@		    lda	      #$30		  DEBUG  
+*		    lda       #32		  DEBUG  
 loop1@		    sta	      ,x+
+		    lda	      #32
 		    incb
 		    cmpb      #32
 		    bne	      loop1@
@@ -884,42 +909,75 @@ loop5@		    stb	      ,x+
 		    os9	      I$Write
 		    rts
 
-InstallSignals	    leax      IcptRtn,pcr
+InstallSignals	    leax      cfIcptRtn,pcr
 		    os9	      F$Icpt
-		    lda	      #01
-		    ldx	      #320
+		    lda	      #UPDAT.+SHARE.
+		    leax      fsol,pcr
+		    os9	      I$Open
+		    bcc	      storesol@
+		    os9	      F$PErr
+		    tfr	      a,b
+		    os9	      F$PErr
+storesol@	    sta	      <solpath
+		    lda	      <solpath
+		    ldx	      #260
+		    ldy	      #$A0
+		    ldb	      #SS.SOLIRQ
+		    os9	      I$SetStt
+		    os9	      F$PErr
+		    lda	      <solpath
+		    ldx	      #400
+		    ldy	      #$A1
 		    ldb	      #SS.SOLIRQ
 		    os9	      I$SetStt
 		    rts
-		    lda	      #02
-		    ldx	      #368
-		    os9	      I$SetStt
-		    rts
 
-IcptRtn		    cmpb      $01
+fsol		    fcc	      \/fSOL\
+		    fcb	      $0D
+
+cfIcptRtn	    cmpb      #$A0
 		    beq	      changefont1@
-		    cmpb      $02
+		    cmpb      #$A1
 		    beq	      changefont0@
 		    bra	      exit@
-changefont1@	    ldb	      #SS.DScrn
-		    os9	      I$GetStt
+changefont1@	    lda	      #$0
+		    ldb	      #SS.DScrn
+		    os9	      I$GetStt	         DEBUG
 		    tfr	      y,d
 		    orb       #FT_FSET
 		    tfr	      d,y
 		    bra	      writeit@
-changefont0@	    ldb	      #SS.DScrn
-		    os9	      I$GetStt
+changefont0@	    lda	      #$0
+		    ldb	      #SS.DScrn
+		    os9	      I$GetStt	         DEBUG
 		    tfr	      y,d
 		    andb      #~(FT_FSET)
 		    tfr	      d,y
-writeit@            ldb	      #SS.DScrn
-		    os9	      I$SetStt
+writeit@	    lda	      #1
+		    ldb	      #SS.DScrn
+		    os9	      I$SetStt           DEBUG
 exit@               rti
 
-
+RemoveSignals	    lda	      <solpath
+		    ldx	      #260
+		    ldy	      #0
+		    ldb	      #SS.SOLIRQ
+		    os9	      I$SetStt
+		    lda	      <solpath
+		    ldx	      #400
+		    ldy	      #0
+		    ldb	      #SS.SOLIRQ
+		    os9	      I$SetStt
+		    lda	      <solpath
+		    os9	      I$Close
+		    rts
+		    
 header		    fcs	      /Configure A/
 writing		    fcs	      /Loading/
 lddone		    fcs	      /Load Done/
+sigdone		    fcs	      /Load Signal/
+icptdone	    fcs	      /ICPT Done/
+font0on		    fcb	      $1B,$62
 flabel		    fcb	      $02,$58,$27
 	            fcb	      $46,$2F,$66
 blabel		    fcb	      $02,$58,$2C		    

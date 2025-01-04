@@ -38,12 +38,15 @@ SCF		 = $(MD)/scf.mn
 SC16550	 = $(MD)/sc16550.dr $(MD)/t0_sc16550.dd
 
 # SCF video terminal
-SCVT_F256K	 = $(MD)/vtio.dr $(MD)/keydrv_f256k.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt
-SCVT_F256JR  = $(MD)/vtio.dr $(MD)/keydrv_ps2.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt
+SCVT_F256K	 = $(MD)/vtio.dr $(MD)/keydrv_f256k.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt 
+SCVT_F256JR  = $(MD)/vtio.dr $(MD)/keydrv_ps2.sb $(MD)/mousedrv_ps2.sb  $(MD)/term.dt
 
 # Font & palette
 FONT		 = $(FNT)/bannerfont.sb
 PALETTE	 = $(MD)/palette.sb
+
+#SOL
+SOL = $(MD)/SOLdrv.sb $(MD)/fSOL.dd 
 
 # SCF DriveWire virtual networking/window driver
 SCDWV = 	$(MD)/scdwv.dr $(SCDWV_NET) $(SCDWV_WIN)
@@ -73,6 +76,7 @@ BOOTFILE_SD_F256K = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
 		$(MD)/dds0.dd \
 		$(SC16550) \
+		$(SOL) \
 		$(CLOCK) \
 		$(MD)/sysgo \
 		$(MD)/kernel/krn
@@ -84,6 +88,7 @@ BOOTFILE_DW_F256K = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
 		$(MD)/ddx0.dd \
 		$(SC16550) \
+		$(SOL) \
 		$(CLOCK) \
 		$(MD)/sysgo \
 		$(MD)/kernel/krn
@@ -95,6 +100,7 @@ BOOTFILE_SD_F256JR = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
 		$(MD)/dds0.dd \
 		$(SC16550) \
+		$(SOL) \
 		$(CLOCK) \
 		$(MD)/sysgo \
 		$(MD)/kernel/krn
@@ -106,6 +112,7 @@ BOOTFILE_DW_F256JR = $(KERNELP2) \
 		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
 		$(MD)/ddx0.dd \
 		$(SC16550) \
+		$(SOL) \
 		$(CLOCK) \
 		$(MD)/sysgo \
 		$(MD)/kernel/krn

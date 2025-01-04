@@ -411,7 +411,7 @@ Init                stu       D.KbdSta
                     lbsr      InitKeyboard        initialize the keyboad
 		    ifgt      Level-1
                     lbsr      InitMouse
-		    clr	      V.SOLOnOff,u
+*		    clr	      V.SOLOnOff,u
 		    endc
 
                     ldx       >D.AltIRQ           get the current alternate IRQ vector
@@ -536,7 +536,7 @@ Write
 
 DefaultHandler      cmpa      #C$SPAC             is the character a space or greater?
                     lbcs      ChkESC              branch if not; go check for escape codes
-                    pshs      a                   else save the character to write
+RawWrite            pshs      a                   else save the character to write
                     lda       V.CurRow,u          get the current row
                     ldb       V.WWidth,u          and the number of columns
                     mul                           calculate the row we should be on
@@ -631,6 +631,8 @@ CurOff              ldx       #TXT.Base
 
 ChkESC              cmpa      #$1B                is the character ESC?
                     lbeq      EscHandler          if so, handle it
+		    cmpa      #$1C
+		    lbeq      OneSeeHandler
                     cmpa      #$1F                is this the 1F handler?
                     lbeq      OneEffHandler       if so, handle it
                     cmpa      #C$CR               is it a carriage return?
@@ -1182,7 +1184,6 @@ ChgFont1	    ldx       #TXT.Base
 		    stb	      MASTER_CTRL_REG_H,X
 		    lbra      ResetHandler
 
-
 * BoldSw - do nothing.
 BoldSw              lbra      ResetHandler        reset the handler
 
@@ -1202,6 +1203,13 @@ SetBackColor        anda      #$0F                mask out the upper 4 bits
                     andb      #$F0                mask out the lower 4 bits
                     bra       doout@              and do the OR
 
+
+OneSeeHandler	    leax      Do1C,pcr
+		    lbra	      SetHandler
+
+Do1C		    lbsr      RawWrite
+		    lbra      ResetHandler
+
 * Return special key status
 GSKySns 
 *            ldy       <D.CCMem            get ptr to CC mem
@@ -1213,20 +1221,7 @@ actv@               stb       R$A,x               save to caller reg
                     clrb                          return w/o error
                     rts
 
-* GetStat
-*
-* Entry:
-*    A  = function code
-*    Y  = address of path descriptor
-*    U  = address of device memory area
-*
-* Exit:
-*    CC = carry set on error
-*    B  = error code
-*
-****************************
-* Get status entry point
-* Entry: A=Function call #
+
 GetStat             cmpa      #SS.EOF             is this the EOF call?
                     beq       SSEOF               yes, exit without error
                     ldx       PD.RGS,y            else get the pointer to caller's registers (all other calls require this)
@@ -1466,8 +1461,8 @@ SetStat             ldx       PD.RGS,y            get caller's registers in X
 		    lbeq      SSFntLoadF
 		    cmpa      #SS.FntChar
 		    lbeq      SSFntChar
-		    cmpa      #SS.SOLIRQ
-		    lbeq      SSSOLIRQ
+*		    cmpa      #SS.SOLIRQ
+*		    lbeq      SSSOLIRQ
   endc                                            
 		    comb                          set the carry
                     ldb       #E$UnkSvc           load the "unknown service" error
@@ -1549,110 +1544,6 @@ ex@                 rts
 
                     ifgt      Level-1		 Level 2 or greater only  
 
-;;; SS.SOLIRQ
-;;;
-;;; Start of Line Interrupt
-;;;
-;;; Add Start of Line Interrupt that will send a signal
-;;; to a process at the start of a line on the screen
-;;;
-;;; Entry: R$A = Value for signal
-;;;        R$X = Line # that triggers Interrupt
-;;;
-;;; Exit:  B = non-zero error code
-;;;       CC = carry flag clear to indicate success
-SSSOLIRQ            lda       V.SOLOnOff,u
-		    lbeq      SOL_TurnOn	  first SOL? need to init and turn on IRQ
-		    ldb	      V.SOLMax,u          load max table index
-		    cmpb      #7		  max table is 8 entries
-		    bne	      cont@		  continue if < 7
-		    ldb	      #204		  else: Device Table Full error
-		    orcc      #1
-		    lbra      ErrExit@
-cont@		    lslb
-		    lslb
-		    ldy	      R$X,x
-		    pshs      x,y
-		    leay      V.SOLTable,u
-		    leay      b,y	          last entry in table
-		    ldb	      V.SOLMax,u
-search@		    ldx	      2,y
-		    cmpx      2,s
-		    bgt	      insertval@          table value > new value
-		    inc       V.SOLMax,u	  table value < new value, move up
-		    stx	      6,s
-		    ldx	      ,y
-		    stx	      4,s
-		    leay      -4,y
-		    decb
-		    blt	      insertval@
-		    bra	      search@
-insertval@	    ldx	      2,s
-		    stx	      6,y
-		    ldx	      ,s
-		    ldb	      R$A,x	          put signal in b
-		    ldy	      <D.Proc		  put ProcId in a
-		    lda	      P$ID,y
-		    std	      V.SOLTable,u
-		    ldy	      R$X,x	          load line #
-		    sty	      V.SOLTable+2,u	  store in table
-		    puls      x,y
-		    rts
-SOL_TurnOn 	    pshs      x
-                    leay      V.SOLTable,u
-		    ldd	      R$X,x
-		    std	      2,y
-	            ldb	      R$A,x
-		    pshs      y
-		    ldy	      <D.Proc
-		    lda	      P$ID,y
-		    puls      y
-		    std	      ,y
-		    clr	      V.SOLMax,u
-		    clr	      V.SOLCurr,u
-		    inc	      V.SOLOnOff,u
-		    ldd       #INT_PENDING_0      get the pending interrupt pending address
-                    leax      SOL_Pckt,pcr        point to the IRQ packet
-                    leay      SOL_IRQSvc,pcr         and the service routine
-                    os9       F$IRQ               install the interrupt handler
-                    bcs       ErrExit@             branch if we have an issue
-                    lda       INT_MASK_0          else get the interrupt mask byte
-                    anda      #^INT_VKY_SOL        set the SOL interrupt
-                    sta       INT_MASK_0          and save it back
-		    puls      x
-SOL_ON		    ldd	      R$X,x
-		    exg	      a,b
-		    std	      $FFD9
-		    lda	      #1
-		    sta	      $FFD8
-ErrExit@	    rts
-
-
-SOL_IRQSvc	    ldb	      V.SOLCurr,u         Get current SOL index
-		    lslb      			  mult x4 bytes/row    
-		    lslb
-		    leay      V.SOLTable,u	  get the table
-		    ldd	      b,y		  load the current entry
-		    os9	      F$Send		  Send it to the process
-		    dec	      V.SOLCurr,u	  decrement the current index
-		    bge	      cont@		  if >=0 cont
-		    ldb	      V.SOLMax,u	  else: reset to Max
-		    stb	      V.SOLCurr,u
-cont@		    ldb	      V.SOLCurr,u         load new current index 
-		    lslb      			  mult x4 bytes/row
-		    lslb
-		    leay      b,y	          load next line value
-		    ldd	      2,y
-		    exg	      a,b	          switch high/low byte
-		    std	      $FFD9              write to SOL register
-		    rti
-
-***********************************************************************************
-* SS.SOLIRQ F$IRQ packet.
-SOL_Pckt            equ       *
-SOLPkt.Flip         fcb       %00000000           the flip byte
-SOLPkt.Mask         fcb       INT_VKY_SOL         the mask byte
-                    fcb       $F1                 the priority byte
 
 ;;; GS.FntChar
 ;;;
@@ -1941,7 +1832,7 @@ GSDScrn             clr       R$X,x               load MCR low byte
                     clr       R$Y,x               load MCR high byte
                     ldy       #TXT.Base
 mcrlbit@            lda       MASTER_CTRL_REG_L,y   store new MCR low byte
-                    sta       R$X,x                 store copy in driver variables
+                    sta       R$X+1,x                 store copy in driver variables
 mcrhbit@            ldb       MASTER_CTRL_REG_H,y   store new MCR High byte     
                     stb       R$Y+1,x           store copy in driver variables
 end@                clrb
