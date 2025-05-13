@@ -46,8 +46,8 @@ SCVT_F256K       = $(MD)/vtio.dr $(MD)/keydrv_f256k.sb $(MD)/mousedrv_ps2.sb $(M
 SCVT_F256JR  = $(MD)/vtio.dr $(MD)/keydrv_ps2.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt
 
 # Font & palette
-FONT             = $(FNT)/bannerfont.sb
-PALETTE  = $(MD)/palette.sb
+#FONT		 = $(FNT)/bannerfont.sb
+#PALETTE	 = $(MD)/palette.sb
 
 #SOL
 SOL = $(MD)/SOLdrv.sb $(MD)/fSOL.dd 
