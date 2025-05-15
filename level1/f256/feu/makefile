@@ -190,7 +190,7 @@ f256jr.zip: booter_flash_f256jr
 	-rm -rf mapfiles
 	mkdir mapfiles
 	os9 ident -s $^ > mapfiles/bootlist
-	cp ../modules/kernel/*.map ../modules/kernel/*.list ../modules/*.map ../modules/*.list mapfiles
+#	cp ../modules/kernel/*.map ../modules/kernel/*.list ../modules/*.map ../modules/*.list mapfiles
 	zip $@ bulk.csv booter_0 booter_1 booter_2 mapfiles/*
 
 flash_f256jr: f256jr.zip

@@ -16,6 +16,9 @@ KERNELP2        = $(MD)/krnp2 $(MD)/init $(MD)/ioman
 # DriveWire support
 DWIO            = $(MD)/dwio.sb
 
+# PIPE
+PIPE	= $(MD)/pipeman.mn $(MD)/piper.dr $(MD)/pipe.dd
+
 # RBF
 RBF             = $(MD)/rbf.mn
 
@@ -78,8 +81,8 @@ CLOCK   = $(MD)/clock $(MD)/clock2_f256
 
 BOOTFILE_SD_F256K = $(KERNELP2) \
                 $(SCF) $(SCVT_F256K) \
-                $(FONT) $(PALETTE) \
                 $(DWIO) \
+		$(PIPE) \
                 $(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
                 $(RBFLASH) \
                 $(MD)/dds0.dd \
@@ -91,9 +94,9 @@ BOOTFILE_SD_F256K = $(KERNELP2) \
 
 BOOTFILE_DW_F256K = $(KERNELP2) \
                 $(SCF) $(SCVT_F256K) \
-                $(FONT) $(PALETTE) \
                 $(DWIO) \
-                $(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
+		$(PIPE) \
+		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
                 $(RBFLASH) \
                 $(MD)/ddx0.dd \
                 $(SOL) \
@@ -104,9 +107,9 @@ BOOTFILE_DW_F256K = $(KERNELP2) \
 
 BOOTFILE_SD_F256JR = $(KERNELP2) \
                 $(SCF) $(SCVT_F256JR) \
-                $(FONT) $(PALETTE) \
                 $(DWIO) \
-                $(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
+		$(PIPE) \
+		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
                 $(RBFLASH) \
                 $(MD)/dds0.dd \
                 $(SOL) \
@@ -117,9 +120,9 @@ BOOTFILE_SD_F256JR = $(KERNELP2) \
 
 BOOTFILE_DW_F256JR = $(KERNELP2) \
                 $(SCF) $(SCVT_F256JR) \
-                $(FONT) $(PALETTE) \
                 $(DWIO) \
-                $(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
+		$(PIPE) \
+		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
                 $(RBFLASH) \
                 $(MD)/ddx0.dd \
                 $(SOL) \
@@ -130,9 +133,9 @@ BOOTFILE_DW_F256JR = $(KERNELP2) \
 
 BOOTFILE_CART_F256JR = $(KERNELP2) \
                 $(SCF) $(SCVT_F256JR) \
-                $(FONT) $(PALETTE) \
-                $(DWIO) \
-                $(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
+		$(DWIO) \
+		$(PIPE) \
+		$(RBF) $(RBDW) $(RBSUPER) $(RBMEM) $(RBFNXSD) \
                 $(RBFLASH) \
                 $(MD)/ddc0.dd \
                 $(SOL) \
@@ -146,35 +149,35 @@ ALLOBJS         = bootfile_sd_f256k bootfile_dw_f256k bootfile_sd_f256jr bootfil
 all:    $(ALLOBJS)
 
 bootfile_sd_f256k: $(BOOTFILE_SD_F256K) $(DEPENDS)
-        $(MERGE) $(BOOTFILE_SD_F256K)>$@
-        ./padup256 $@
+	$(MERGE) $(BOOTFILE_SD_F256K)>$@
+	./padup256 $@
 
 bootfile_dw_f256k: $(BOOTFILE_DW_F256K) $(DEPENDS)
-        $(MERGE) $(BOOTFILE_DW_F256K)>$@
-        ./padup256 $@
+	$(MERGE) $(BOOTFILE_DW_F256K)>$@
+	./padup256 $@
 
 upload_f256jr: bootfile_dw_f256jr
-        upload bootfile_f256kr 8000
+	upload bootfile_f256kr 8000
 
 bootfile_sd_f256jr: $(BOOTFILE_SD_F256JR) $(DEPENDS)
-        $(MERGE) $(BOOTFILE_SD_F256JR)>$@
-        ./padup256 $@
+	$(MERGE) $(BOOTFILE_SD_F256JR)>$@
+	./padup256 $@
 
 bootfile_dw_f256jr: $(BOOTFILE_DW_F256JR) $(DEPENDS)
-        $(MERGE) $(BOOTFILE_DW_F256JR)>$@
-        ./padup256 $@
+	$(MERGE) $(BOOTFILE_DW_F256JR)>$@
+	./padup256 $@
 
 upload_f256jr: bootfile_dw_f256jr
-        upload bootfile_f256jr 8000
+	upload bootfile_f256jr 8000
 
 bootfile_cart_f256jr: $(BOOTFILE_CART_F256JR) $(DEPENDS)
-        $(MERGE) $(BOOTFILE_CART_F256JR)>$@
-        ./padup256 $@
+	$(MERGE) $(BOOTFILE_CART_F256JR)>$@
+	./padup256 $@
 
 trace:
-        @dump 0 20
-        @echo "            CCAABBDPXXXX YYYYUUUUSSSSPCPC"
-        @echo
+	@dump 0 20
+	@echo "            CCAABBDPXXXX YYYYUUUUSSSSPCPC"
+	@echo
 
 clean:
-        $(RM) $(ALLOBJS)
+	$(RM) $(ALLOBJS)
