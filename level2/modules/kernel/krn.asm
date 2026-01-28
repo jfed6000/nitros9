@@ -1155,16 +1155,17 @@ L0E9B               lda       ,u++                get a bank
                     dec       ,s                  done?
                   ENDC
                     bne       L0E9B               no, keep going
-                    ifeq      H6309
-* 6809 - 10 cyc down to 8
-*                   leas      1,s                 eat temporary stack
-                    puls      a,pc                eat temporary stack and return
-                  ENDC
 *>>>>>>>>>> Wildbits PORT
                   IFNE        wildbits
                     clr       MMU_MEM_CTRL        clear the DAT control flags
                   ENDC
 *<<<<<<<<<< Wildbits PORT
+                    ifeq      H6309
+* 6809 - 10 cyc down to 8
+*                   leas      1,s                 eat temporary stack
+                    puls      a,pc                eat temporary stack and return
+                  ENDC
+
 L0EA3               rts                           return
 
 *>>>>>>>>>> Wildbits PORT

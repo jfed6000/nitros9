@@ -62,6 +62,10 @@ fontmod             fcs       /font/
 palettemod          fcs       /palette/
 keydrvmod           fcs       /keydrv/
 msdrvmod            fcs       /mousedrv/             mouse driver module
+llpath              fcc       "/dd/CMDS/"
+llnam               fcs       "grfdrv256"
+		    fcb	      $0D
+
 
 *
 * VTIO Alternate IRQ routine - Entered from Clock every 1/60th of a second
@@ -131,7 +135,8 @@ sndoff              pshs      cc                 save the condition code registe
 g@                  puls      cc
 ex@                 jmp       [D.OrgAlt]         branch to the original alternate IRQ routine
 
-*******************************************************
+
+*******************************************************************
 * Bell ($07) (called via Bell vector D.Bell):
 *
 Bell                ldd       #$0F1F              A = start volume (15), B = duration counter
@@ -197,8 +202,9 @@ BellTone            tst       D.SndPrcID
                     clrb
                     puls      a,pc return
 exit 
- rts
-           
+                    rts
+
+*******************************************************************
 * Send data to CODEC and await its digestion.
 *
 * Entry: D = Value to send to CODEC.
@@ -237,8 +243,8 @@ InitPSG             pshs      cc                save the condition code register
                     lda       #%11111111                            set volume of channel to 3
                     sta       MAPADDR+PSG.Base
 
-                    stb       MAPSLOT restore it in the MMU slot
-                    puls      cc restore interrupts
+                    stb       MAPSLOT            restore it in the MMU slot
+                    puls      cc                 restore interrupts
 
 * WM8776 CODEC chip registers
 * R00 = [0000000][U][Z][AAAAAAA]             Headphone attenuation: U=Update, Z=Zero Crossing Detection, A=bB 1111001 default for 0dB
@@ -280,6 +286,7 @@ InitBELL            leax      Bell,pcr point to the bell emission code
                     stx       >D.Bell   save it in the system global's bell vector
                     rts
                     
+*******************************************************************
 * Initialize the display.
 * Note: interrupts come in already masked.
 InitDisplay         pshs      u                   save important registers
@@ -385,6 +392,7 @@ l@                  std       ,x++
                     bne       l@
                     rts
 
+*******************************************************************
 * Keyboard initialization  
 * NOTE: If we fail to find the 'keydrv' module, carry is returned set, but
 * the caller can chose to ignore the error condition.
@@ -410,6 +418,7 @@ ex@                 ldd       #0                  set D to 0
                     rts                           return to the caller
 
                     ifgt      Level-1
+*******************************************************************
 * Mouse initialization  
 * NOTE: If we fail to find the 'msdrv' module, carry is returned set, but
 * the caller can chose to ignore the error condition.
@@ -429,6 +438,308 @@ ex@                 ldd       #0                  set D to 0
                     std       V.MSDrvEPtr,u       clear the entry pointer
                     rts                           return to the caller
                     endc
+
+
+****************************************************************
+******             Start GrfDrv Init Routines             ******
+****************************************************************
+
+                    ifgt      Level-1
+****************************************************************
+* Init GrfDrv
+* This is a bit complicated.
+
+InitGrfDrv	    pshs      u,y
+		    ldd	      >GrfMem+gr.Entry	  check if grfdrv already loaded
+		    lbne      InitDevice	  yes, already initialized
+* Clear GrfMem area
+                    ldx       #GrfMem             point to GrfMem
+                    ldy       #256                Size
+clrgrf@             clr       ,x+
+                    leay      -1,y
+                    bne       clrgrf@
+		    lda	      #1	          **DEBUG**
+		    sta	      $1200               **DEBUG**
+* Link GrfDrv Module if in memory
+linkgrfdrv          leas      -2,s                buffer for process swap
+		    lbsr      tosysproc		  swap to system process
+		    lda       #Systm+Objct        ; Module type
+                    leax      llnam,pcr           ; "grfdrvf256"
+                    os9       F$NMLink            ; Try to link
+                    lbsr      toproc              ; Swap back
+                    bcc       setupgrfdrv         ; Found it
+		    tfr	      b,a
+		    sta	      $1201		  **DEBUG**
+                    cmpb      #E$MNF              ; Module not found?
+                    lbne      initerr             ; Other error
+* Load and Link GrfDrv if not linked
+loadgrfdrv	    lbsr      tosysproc
+                    lda       #Systm+Objct
+                    leax      llpath,pcr          ; "/dd/CMDS/grfdrvf256"
+                    ldu       <D.Proc
+                    os9       F$NMLoad
+                    lbsr      toproc
+                    lbcs      initerr
+		    pshs      a                   **DEBUG**
+		    lda	      #2	          **DEBUG** 
+		    sta	      $1201               **DEBUG**
+		    puls      a                   **DEBUG**
+
+* Setup grfdrv task
+setupgrfdrv         leas      2,s	          clean process buffer
+                    pshs      a
+                    lda       #GrfMem/256
+                    tfr       a,dp
+                    puls      a
+                    ldu       #GrfMem             Point to GRFDRV global mem	            
+                    
+*******************************************************************
+* Build 16-byte DAT image at GrfMem+gr.DATImg
+*******************************************************************
+                    ldx       #GrfMem+gr.DATImg
+		    stx	      $120A
+                    
+* Slot 0: Block 0 (shared)
+                    clra
+                    clrb
+                    std       ,x++              ; [0, 0]
+                    
+* Slots 1-5: Free (40KB workspace)
+                    ldd       #DAT.Free         ; Use system constant!
+                    std       ,x++              ; Slot 1
+                    std       ,x++              ; Slot 2
+                    std       ,x++              ; Slot 3
+                    std       ,x++              ; Slot 4
+                    std       ,x++              ; Slot 5
+
+
+		    
+* Get module's blocks
+                    pshs      x
+                    lda       #Systm+Objct
+                    leax      llnam,pcr
+                    ldy       >D.SysPrc
+                    leay      <P$DATImg,y
+                    os9       F$FModul
+                    puls      x
+                    lbcs      initerr2
+                    
+                    ldy       MD$MPDAT,u
+                    
+* Slot 6: GrfDrv code block 1
+                    clra                         ; First byte = 0
+                    ldd       ,y                ; Physical block
+                    std       ,x++
+		    std	      $1206
+                    
+* Slot 7: GrfDrv code block 2 (if >8K)
+                    ldd       2,y               ; Second physical block
+                    bne       has2
+                    ldd       #DAT.Free         ; Use system constant!
+                    bra       store7
+has2:
+                    clra
+store7:
+		    clra
+		    ldb	      #7
+                    std       ,x++
+		    std	      $1208		*DEBUG*
+                    
+*******************************************************************
+* Register as Task 1
+*******************************************************************
+                    ldy       >D.TskIPt           ; Task image pointer table
+                    ldx       #GrfMem+gr.DATImg   ; Our 8-byte DAT image
+                    stx       2,y                 ; Task 1 (offset 2)
+                    
+*******************************************************************
+* Setup stack and get entry point
+*******************************************************************
+* In the original CoWin, this really should be save to an "end of vars ptr" variable
+* not really sure we need this at this point.
+                    ldd       #$1CB0              ; Stack at top of workspace
+                    std       >GrfMem+gr.Stack
+
+ 		    clra
+                    tfr       a,dp                Set DP to 0 for Wind/CoGrf, which need it there
+                    inc       MD$Link+1,u         ; Increment link count
+                    
+* Get execution offset
+                    ldd       #0
+                    ldx       #M$Exec
+                    ldy       #GrfMem+gr.DATImg+12
+                    os9       F$LDDDXY
+		    std	      $1220
+                    ora       #$C0
+* end of new code
+*                    std       GrfMem+gr.Entry   Save it
+		    std	       $1114
+		    std	      $1210
+                    ldx	      #GrfMem+gr.Entry
+		    stx	      $1212
+*******************************************************************
+* Initialize screen table (5 screens)
+*******************************************************************
+                    ldx       #GrfMem+gr.ScrTbl
+                    ldb       #5
+
+clrScr              pshs      b,x
+                    ldb       #gr.ScrSz
+clrLoop             clr       ,x+
+                    decb
+                    bne       clrLoop
+                    puls      b,x
+                    leax      gr.ScrSz,x
+                    decb
+                    bne       clrScr
+
+*******************************************************************
+* Call GrfDrv Init
+*******************************************************************
+                    ldb       #GF.Init            ; Init function
+		    pshs      a                   **DEBUG**
+		    lda	      #3	          **DEBUG** 
+		    sta	      $1203               **DEBUG**
+		    puls      a                   **DEBUG**
+		    lbsr      CallGrfDrv
+                    lbcs      initerr3
+		    pshs      a                   **DEBUG**
+		    lda	      #4	          **DEBUG** 
+		    sta	      $1204               **DEBUG**
+		    puls      a                   **DEBUG**
+                    
+                    clrb                          ; Success
+                    puls      y,u,pc
+                    
+initerr2            leas      4,s
+initerr             leas      2,s
+initerr3            pshs      a                   **DEBUG**
+		    lda	      #5	          **DEBUG** 
+		    sta	      $1205               **DEBUG**
+		    puls      a                   **DEBUG**coma
+                    puls      y,u,pc		    
+
+*******************************************************************
+* Device-Specific Initialization
+*******************************************************************
+InitDevice
+                    ldu       2,s                 ; Device static mem
+                    ldy       ,s                  ; Path descriptor
+                    
+* Initialize device descriptor's static memory
+* Store default screen #, mode, etc.
+                    
+* Example:
+*   clr   V.CurScr,u        ; Current screen = 0
+*   clr   V.CurMode,u       ; Default mode
+                    
+                    clrb                          ; No error
+                    puls      y,u,pc
+                    
+
+*******************************************************************
+* Process swap routines (your existing code is fine)
+*******************************************************************
+tosysproc
+                    pshs      d
+                    ldd       <D.Proc
+                    std       4,s
+                    ldd       <D.SysPrc
+                    std       <D.Proc
+                    puls      d,pc
+                    
+toproc
+                    pshs      d
+                    ldd       4,s
+                    std       <D.Proc
+                    puls      d,pc
+
+*******************************************************************
+* CallGrfDrv - Call grfdrv function via task flip
+*
+* Entry: B = Function code (see GF.* definitions)
+*        A = Optional parameter (depends on function)
+*        X,Y,U = Function-specific parameters
+*
+* Exit:  Return values in registers (function-specific)
+*        Carry set on error, B = error code
+*
+* NOTE: ALL registers except SP may be modified by grfdrv
+*******************************************************************
+CallGrfDrv
+
+* Get grfdrv entry point
+                    ldx       >GrfMem+gr.Entry
+		    stx	      $1260
+		    orcc      #Entire
+                    beq       nogrf               ; Not initialized
+                    
+* Check if already in grfdrv (prevent recursion)
+*                   tst       >GrfMem+gr.Busy
+*                   bne       gbusy               ; Already busy
+		    pshs       d
+		    tfr	      cc,a
+		    sta	      >GrfMem+Gr.Temp
+		    puls      d
+		    
+*******************************************************************
+* Setup for Task Flip
+*******************************************************************
+                    orcc      #IntMasks               ; Set E bit, disable IRQ
+                    
+* Save current stack
+                    sts        >GrfMem+gr.Stack
+* Switch to system call stack
+                    lds       <D.CCStk
+                    
+*******************************************************************
+* Build RTI Frame
+*
+* When D.Flip1 does RTI, it will:
+* 1. Restore all registers from stack
+* 2. Jump to address in PC slot (we put grfdrv entry there)
+* 3. Now running in grfdrv's memory map
+*******************************************************************
+                    pshs      dp,x,y,u,pc         ; Save registers
+                    pshs      cc,d             ; Save CC, A, B
+                    
+* Overwrite PC with grfdrv entry
+                    stx       R$PC,s              ; X has entry address
+                    
+* Set E bit in stacked CC (tells RTI to restore all regs)
+                    lda       >GrfMem+Gr.Temp
+		    sta	      R$CC,s
+
+                    
+* Mark grfdrv as busy
+                    sta       >GrfMem+gr.Busy
+                    
+*******************************************************************
+* Flip to GrfDrv Task and Execute
+*******************************************************************
+                    jmp       [>D.Flip1]
+                    
+* <-- Execution continues here after grfdrv calls D.Flip0
+* Only SP, PC, and CC are guaranteed preserved
+* All other registers may contain return values
+ 
+* Restore caller's CC
+                    rts
+                    
+*******************************************************************
+* Error Handlers
+*******************************************************************
+nogrf               comb                          ; Set carry
+                    ldb       #E$UnkSvc           ; Unknown service
+                    rts
+                    
+gbusy               comb
+                    ldb       #E$NotRdy           ; Not ready (busy)
+                    rts
+		    endc
+
+
+*******************************************************************
 * Init              
 *
 * Entry:
@@ -453,6 +764,7 @@ Init                stu       D.KbdSta
                     lbsr      InitKeyboard        initialize the keyboad
                     ifgt      Level-1
                     lbsr      InitMouse
+		    lbsr      InitGrfDrv
                     endc
 
                     ldx       >D.AltIRQ           get the current alternate IRQ vector
@@ -461,8 +773,9 @@ Init                stu       D.KbdSta
                     stx       >D.AltIRQ           and place it in the global vector
 
                     clrb                          clear the carry and error code
-                    rts return to the caller
-                    
+                    rts                           return to the caller
+
+*******************************************************************
 * Term
 *
 * Entry:
@@ -497,6 +810,7 @@ Term                ldx       >D.OrgAlt   get the original alternate IRQ vector
 ex@                 clrb                          clear the carry
                     rts                           return to the caller
 
+*******************************************************************
 * Read
 *
 * Entry:
@@ -553,6 +867,7 @@ IncNCheck           incb                          increment the next character p
 ex@                 rts                           return
 
 
+*******************************************************************
 * Write
 *
 * Entry:
@@ -1303,14 +1618,6 @@ GetStat             cmpa      #SS.EOF             is this the EOF call?
                     lbeq      GSKySns             branch if so
                     cmpa      #SS.Joy             get joystick position?
                     beq       SSJoy               branch if so
-                    ifgt      Level-1
-                    cmpa      #SS.Mouse
-                    beq       GSMouse
-                    cmpa      #SS.DScrn           SS.DScrn MCR to display text or graphics
-                    lbeq      GSDScrn
-                    cmpa      #SS.FntChar
-                    lbeq      GSFntChar       
-                    endc
                     cmpa      #SS.Palet           get palettes?
                     beq       GSPalet             yes, go process
                     cmpa      #SS.FBRgs           get colors?
@@ -1420,31 +1727,7 @@ s4@                 sta       R$A,u               store buttons in caller's A
                     clrb                          clear carry
                     rts                           return
 
-                    ifgt      Level-1
-;;; SS.Mouse
-;;;
-;;; Returns the mouse information.
-;;;
-;;; Entry:  B  = SS.Mouse 
-;;;
-;;; Exit:   A = Button state.
-;;;         X = Horizontal position (0 - 640).
-;;;         Y = Vertical position (0 - 480).
-;;;        CC = Carry flag clear to indicate success.
-;;;
-;;; Error:  B = A non-zero error code.
-;;;        CC = Carry flag set to indicate error.
-GSMouse             lda       MS_XH
-                    ldb       MS_XL
-                    std       R$X,x
-                    lda       MS_YH
-                    ldb       MS_YL
-                    std       R$Y,x
-                    lda       V.MSButtons,u
-                    sta       R$A,x
-                    clrb                          clear carry
-                    rts   
-                    endc
+
 ;;; SS.Palet
 ;;;
 ;;; Return palette information.
@@ -1512,24 +1795,6 @@ SetStat             ldx       PD.RGS,y            get caller's registers in X
                     beq       SSDMAFill
                     cmpa      #SS.Tone
                     beq       SSTone
-                    ifgt Level-1                                            
-                    cmpa      #SS.AScrn           SS.AScrn allocated bitmap
-                    lbeq      SSAScrn
-                    cmpa      #SS.DScrn           SS.DScrn MCR to display text or graphics
-                    lbeq      SSDScrn
-                    cmpa      #SS.FScrn           SS.FScrn frees bitmap memory
-                    lbeq      SSFScrn
-                    cmpa      #SS.PScrn           SS.PScrn to set up layers
-                    lbeq      SSPScrn
-                    cmpa      #SS.Palet
-                    lbeq      SSPalet             SS.Palet assigns palette to bitmap
-                    cmpa      #SS.DfPal
-                    lbeq      SSDfPal             SS.DfPal defines and populates a CLUT
-                    cmpa      #SS.FntLoadF
-                    lbeq      SSFntLoadF
-                    cmpa      #SS.FntChar
-                    lbeq      SSFntChar
-                    endc                                            
                     comb                          set the carry
                     ldb       #E$UnkSvc           load the "unknown service" error
                     rts                           return
@@ -1602,574 +1867,6 @@ SSRelea             lda       PD.CPR,y            get the current process ID
                     bne       ex@                 branch if not
                     clr       <V.SSigID,u         else clear process the ID
 ex@                 rts
-
-                    ifgt      Level-1
-;;; GS.FntChar
-;;;
-;;; Copy a font character from font bank 0 or 1 to a user memory location
-;;;
-;;; Entry: R$A = font set 0 or 1
-;;;        R$X = pointer to 8 byte memory
-;;;        R$Y = font character to get (0-255)
-;;;
-;;; Exit:  B = non-zero error code
-;;;       CC = carry flag clear to indicate success
-
-
-;;; SS.FntChar
-;;;
-;;; Set a font character in font bank 0 or 1 from a user memory location
-;;;
-;;; Entry: R$A = font set 0 or 1
-;;;        R$X = pointer to 8 byte memory
-;;;        R$Y = font character to set (0-255)
-;;;
-;;; Exit:  B = non-zero error code
-;;;       CC = carry flag clear to indicate success
-
-;;; difference between get and set is just two lines specifying
-;;; source and destination.  So procedures are combined.
-GSFntChar           lda       #0
-                    bra       DoFontGetSet
-SSFntChar           lda       #1
-DoFontGetSet        pshs      a 
-                    ldd       R$Y,x               get the char# and mulitply by 8
-                    lslb
-                    rola
-                    lslb
-                    rola
-                    lslb
-                    rola
-                    tfr       d,y                 transfer result to y
-                    lda       R$A,x               add offset for font bank 0 or 1
-                    beq       font0@
-font1@              leay      FONT_1_OFFSET,y
-                    bra       cont@
-font0@              leay      FONT_0_OFFSET,y
-cont@               leas      -2,s                reserve 2 bytes for mapped address
-                    pshs      x,u                 preserve x,u
-                    ldx       #FONT_BLK           map in $C1
-                    ldb       #$01                map 1 block at address x (x set on entry)
-                    os9       F$MapBlk            map block into caller DAT
-                    bcc       mapgood@            if success, then continue
-                    puls      x,u                 else: error
-                    puls      a,x,pc              clean stack and return if error
-mapgood@            stu       4,s                 store mapped address on stack [XUMO]
-                    ldd       4,s                 load into d and add to y
-                    leay      d,y                 Y now contains address of font char
-                    puls      x,u                 restore x,u [MO]
-                    pshs      x,u
-                    ldx       <D.Proc
-                    lda       P$Task,x            copy data from caller to caller memory
-                    ldb       P$Task,x
-                    ldx       ,s
-                    tst       6,s                 Get or Set?
-                    beq       getfont@            0 = getfont
-                    ldx       R$X,x               setfont: source is x
-                    tfr       y,u                 destination is y
-                    bra       contfont@
-getfont@            ldu       R$X,x               getfont: destination is x
-                    tfr       y,x                 source is y
-contfont@           ldy       #8                  copy 8 bytes
-                    os9       F$Move
-                    puls      x,u                 error or not, clear block and return
-                    puls      u                   pull blk addr and getset flag
-                    puls      a
-                    ldb       #$01
-                    os9       F$ClrBlk
-                    rts
-
-;;; SS.FntLoadF
-;;;
-;;; Load a font from a file.  File should be full path.
-;;; Don't load module into memory, just read directly from file.
-;;;
-;;; Entry: R$X = pointer to font name
-;;;        R$Y = font set 0 or 1
-;;;
-;;; Exit:  B = non-zero error code
-;;;       CC = carry flag clear to indicate success
-
-SSFntLoadF          ldy       R$Y,x
-                    beq       font0@
-font1@              ldy       #$800               FONT_1_OFFSET   $0800
-                    bra       storeaddr@
-font0@              ldy       #FONT_0_OFFSET      $0000
-storeaddr@          pshs      y                   store font offset on stack [O]      
-                    leas      -2,s                reserve 2 bytes on stack for mapped addr [MO]
-* s= ADDR|OFFSET|                   
-*                   ****      map block into user dat and store address on stack
-                    pshs      x,u                 preserve x,u
-                    ldx       #FONT_BLK           map in $C1
-                    ldb       #$01                map 1 block at address x (x set on entry)
-                    os9       F$MapBlk
-                    bcc       mapgood@            if success, then continue
-                    puls      x,u                 else: error
-                    lbra      error@
-mapgood@            stu       4,s                 store mapped address on stack [XUMO]
-                    puls      x,u                 restore x,u [MO]
-*                   ****      open file to read             
-endcopy@            ldx       R$X,x               pointer to file name in caller memory
-                    lda       #READ.              READ access mode
-                    os9       I$Open              
-                    bcc       modulecheck@
-                    bra       errormap@
-* Verify that file is module.
-* Load file's first two bytes onto the stack to verify and check for $87DC
-modulecheck@        leas      -2,s                 add space to stack to store 2 bytes [DMO]
-                    leax      ,s                   load x with stack address
-                    lbsr      Rd2B2Mem
-                    puls      x                    load x with the data [MO]
-                    cmpx      #$87CD               check if module
-                    bcc       getstart@            if module, get start of data
-                    ldb       #3
-                    bra       errorclose@          else, error
-* Module header byte $09-0A = Execution Offset.
-* This is the start of the data in a data module
-getstart@           pshs      u                    seek to data start address in file [UMO]
-                    ldx       #$00                 set high byte addr
-                    ldu       #$09                 set low byte
-                    os9       I$Seek
-                    bcc       readaddr@            if success, read font
-                    puls      u                    else error  [MO]
-                    ldb       #4
-                    bra       errorclose@
-* s= u|addr|offset                  
-readaddr@           leas      -2,s                 add 2 bytes stack storage [DUMO]
-                    leax      ,s                   use the 2 bytes in stack to store addr
-                    lbsr      Rd2B2Mem             read 2 bytes from file
-                    bcc       seekaddr@            if success, seek to data address
-                    leas      4,s                  else: clean stack and error [MO]
-                    bra       errorclose@
-* s= addr|u|addr|offset             
-seekaddr@           puls      u                    load u with low byte addr [UMO]
-* s= u|addr|offset
-                    ldx       #0                   load x high byte
-                    os9       I$Seek
-                    puls      u                    restore u [MO]
-* s=addr|offset             
-*                   ldx       ,s                   ldx with mapblock address
-                    pshs      a                    store path# on stack [AMO]
-                    ldd       1,s                  put offset in d
-                    addd      3,s
-                    tfr       d,x
-*                   leax      d,x                  add offset to x
-                    puls      a                    restore path# [MO]
-                    ldy       #$800                read 2K of font data into it
-                    os9       I$Read               a=path x=addr y=#bytes
-errorclose@         pshs      b                    [BMO]
-                    os9       I$Close              close the file
-                    puls      b                    [MO]
-errormap@           ldu       ,s
-                    pshs      b
-                    ldb       #$01
-                    os9       F$ClrBlk             Clear block from user space
-                    puls      b
-error@              leas      4,s                  clear stack
-                    tstb
-                    beq       quit@
-                    coma
-quit@               rts
-                    
-
-;;; Rd2B2Mem
-;;; Read 2 bytes to addr
-;;;
-;;; Entry:  A = path #
-;;;         X = memory address to read to
-;;;
-;;; Exit:   B = a non-zero error code (F$MapBlk)
-;;;        CC = carry flag clear=success set=error
-;;;
-;;; I$Read reads data into the current process in D.Proc
-;;; To use I$Read for the system, assign system to D.Proc
-;;; Call I$Read, then change the processes back
-;;; Make sure to mask interrupts so processes don't switch while
-;;; the change is happening
-;;;
-Rd2B2Mem            pshs      cc                  push cc and mask interrupts
-                    orcc      #IntMasks
-                    ldy       <D.Proc             ldy with current process descriptor
-                    pshs      y                   store current proc descriptor on stack
-                    ldy       <D.SysPrc           copy system proc descriptor to current
-                    sty       <D.Proc
-                    ldy       #$02                read 2 bytes from file 
-                    os9       I$Read
-                    puls      y                   pull current proc descriptor from stack
-                    sty       <D.Proc             and save it back
-                    bcs       errnomap@           if I$Read error, then handle error
-                    puls      cc,pc               if no error, pull cc and return
-errnomap@           puls      cc                  if error, pull cc
-                    coma                          set carry bit
-                    rts                           and return
-
-                    
-;;; SS.AScrn
-;;;
-;;; Allocate a bitmap screen
-;;;
-;;; Entry: R$Y = bitmap# (0-2)
-;;;        R$X = screentype (0=320x240, 1=320x200)
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-;;;        X = Starting Page# of bitmap address
-SSAScrn             lda       R$Y+1,x             load the bitmap number
-                    lsla                          multiply by 2
-                    leay      V.BM0BLK,u
-                    lda       a,y                 see if there is a current block number
-                    beq       NewBitMap@          if zero, then no bitmap, make a new one
-                    ldb       #E$WADef            error: bitmap already defined
-                    sta       R$X+1,x             store the bitmap block# in X
-                    clr       R$X,x
-                    bra       error@
-NewBitMap@          ldb       R$X+1,x             get the window type (0 or 1)
-                    beq       tenblocks@          need 10 blocks for 320x240
-eightblocks         ldb       #$08                need 8 blocks for 320x200
-                    bra       GetMem@
-tenblocks@          ldb       #10                 need 10 8k Blocks from highram
-GetMem@             os9       F$AlHRAM            allocate ram, put starting block# in D
-                    bcc       map@                check for error, continue if no error
-                    ldb       #E$MFull            set error code to Memory Full error and return
-                    bra       error@
-*                   **** Store starting block# for bitmap in V.BMXBlk
-map@                lda       R$Y+1,x             load bitmap@
-                    lsla                          multiply by 2 to get correct index    
-                    leay      V.BM0Blk,u          calc address for block storage BM0,BM1 or BM2
-                    stb       a,y                 store block # in V.[BMX]Block where [BMX] is BM00, BM11 or BM2w
-                    clra
-                    std       R$X,x               store block # in X for return value
-*                   **** Store physical address of bitmap in TinyVicky BM0, BM1 or BM2
-                    pshs      cc
-                    orcc      #IntMasks           mask interrupts
-                    lda       MAPSLOT
-                    pshs      a
-                    lda       #$C0                get the MMU Block for bitmap addresses
-                    sta       MAPSLOT             store it in the MMU slot to map it in
-*                   **** Calculate starting address at 1000,1008,1010
-                    pshs      b                   push block# to stack
-                    ldb       R$Y+1,x             ldb with bitmap#
-                    lda       #$08                multiply by 8 (to start at 0, 8 or 16)
-                    mul                           d should be 0,8,or 16
-                    addd      #MAPADDR
-                    addd      #$1000
-                    tfr       d,y                 y is address of BM(0-2) registers
-*                   **** Convert b from block number to physical address
-                    ldb       ,s                  load b with block# from stack
-                    lbsr      Blk2Addr            convert blk# to high 16 bits of address in d
-*                   **** Load Bitmap start block physical address into Vicky BM0, BM1 or BM2
-                    pshs      a                   push high byte of bitmap address
-                    lda       #%00000001          enable bitmapX with CLUT 0
-                    sta       ,y+                 enable bitmap with CLUT 0
-                    puls      a                   
-                    std       ,y++
-                    lda       #$0
-                    sta       ,y+                 clear AD7-AD0
-                    puls      b,a
-                    sta       MAPSLOT
-noerror@            puls      cc,pc     
-error@              coma                          set carry bit on error
-end@                rts             
-
-
-;;;  GS.DScrn
-;;;  Get Display Screen Settings
-;;;
-;;; Return MCR values
-;;;
-;;; Entry: Nothing.  This returns values only
-;;;
-;;; Exit:  R$X = Vicky_MCR Low Byte
-;;;        R$Y = Vicky_MCR High Byte
-;;;
-GSDScrn             clr       R$X,x               load MCR low byte
-                    clr       R$Y,x               load MCR high byte
-                    ldy       #TXT.Base
-mcrlbit@            lda       MASTER_CTRL_REG_L,y   store new MCR low byte
-                    sta       R$X+1,x                 store copy in driver variables
-mcrhbit@            ldb       MASTER_CTRL_REG_H,y   store new MCR High byte     
-                    stb       R$Y+1,x           store copy in driver variables
-end@                clrb
-                    rts
-
-;;;  SS.DScrn
-;;;  Display Screen Settings
-;;;
-;;; Set MCR to display text or graphics or both
-;;;
-;;; Entry: R$X = Vicky_MCR Low Byte
-;;;        R$Y = Vicky_MCR High Byte
-;;;
-;;; Exit:  Nothing. This just sets the register and updates driver variables
-;;;
-SSDScrn             lda       R$X+1,x               load MCR low byte
-                    ldb       R$Y+1,x               load MCR high byte
-                    ldy       #TXT.Base
-mcrlbit@            cmpa      #FX_OMIT              If omit, don't change
-                    beq       mcrhbit@
-                    sta       MASTER_CTRL_REG_L,y   store new MCR low byte
-                    sta       V.V_MCR,u             store copy in driver variables
-mcrhbit@            cmpb      #FT_OMIT              if omit, don't change
-                    beq       end@
-                    stb       MASTER_CTRL_REG_H,y   store new MCR High byte     
-                    stb       V.V_MCR+1,u           store copy in driver variables
-end@                clrb
-                    rts
-
-;;;  SS.PScrn
-;;;  Position Screen Layers
-;;;
-;;;  Set layer to display a screen
-;;;
-;;; Entry: R$X = layer (0-2)
-;;;        R$Y = bitmap# (0-2), tilemap (4-6)
-;;;        
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-;;;
-SSPScrn             ldy       R$X,x                 x=layer
-                    lda       VKY_LAYER_CTRL_0
-sl0@                cmpy      #$00                  test for Screen layer 0
-                    bne       sl1@                  if not, go to layer 1
-                    anda      #%11110000            this is L0, clear L0 values
-                    adda      R$Y+1,x
-                    sta       VKY_LAYER_CTRL_0      store them
-                    bra       end@
-sl1@                cmpy      #$01                  test for layer 1
-                    bne       sl2@                  if not, go to layer 2
-                    anda      #%00001111            clear the Layer1 bits
-                    sta       VKY_LAYER_CTRL_0
-                    ldb       R$Y+1,x
-                    lslb                            shift bitmap# 4 bits for layer 1
-                    lslb
-                    lslb
-                    lslb
-                    addb      VKY_LAYER_CTRL_0      add it
-                    stb       VKY_LAYER_CTRL_0      store it
-                    rts
-sl2@                cmpy      #$02                  test for Layer2
-                    bne       end@
-                    ldb       R$Y+1,x
-                    stb       VKY_LAYER_CTRL_1      store BM# or TM# in L2
-                    clrb
-end@                rts
-
-;;; SS.FScrn
-;;;
-;;; Free a bitmap screen
-;;;
-;;; Entry: R$Y = bitmap# (0-2)
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-SSFScrn             lda       R$Y+1,x              get the bitmap#
-                    lsla                           multiply by 2
-                    leay      V.BM0Blk,u
-                    pshs      x
-                    ldb       a,y                  load block# for bitmapX
-                    bne       deallocate@          if not zero, continue
-                    ldb       #E$WUndef            window undefined
-                    coma
-                    puls      x,pc
-deallocate@         clra
-                    tfr       d,x
-                    ldy       #TXT.Base
-                    lda       MASTER_CTRL_REG_H,y  load in Vicky_MCR
-                    bita      #%00000001           Test for CLK_70
-                    beq       CLK_60@
-CLK_70@             ldb       #$08                 clk_70 only has 8 blocks
-                    bra       cont@
-CLK_60@             ldb       #$0A                 clk_60 is 10 blocks
-cont@               os9       F$DelRAM             Free RAM from starting at blockX
-                    puls      x                    recover x
-                    lda       R$Y+1,x              get the bitmap#
-                    lsla                           multiply by 2
-clr_bmvar@          leay      V.BM0Blk,u           clear the bitmap storage
-                    leay      a,y
-                    clra
-                    sta       ,y
-clr_bmReg@          pshs      cc                   clear the bitmap registers,disable bitmap
-                    orcc      #IntMasks            mask interrupts
-                    lda       MAPSLOT
-                    pshs      a                    preserve current mmu block
-                    lda       #$C0                 get the MMU Block for bitmap addresses
-                    sta       MAPSLOT              store it in the MMU slot to map it in
-* Calculate starting address at 1000,1008,1010
-                    ldb       R$Y+1,x              ldb with bitmap#
-                    clra
-                    lslb                           multiply by 8
-                    lslb
-                    lslb
-                    addd      #MAPADDR
-                    addd      #$1000
-                    tfr       d,y                  y is address of BM(0-2) registers
-* Load Bitmap start block physical address into Vicky BM0, BM1 or BM2
-                    clra                           enable bitmapX with CLUT 0
-                    sta       ,y+                  clear and disable bitmap with CLUT 0
-                    sta       ,y+                  clear AD7-AD0
-                    sta       ,y+                  clear AD15-AD8
-                    sta       ,y                   clear AD18-AD16
-                    puls      a
-                    sta       MAPSLOT
-                    puls      cc
-end@                rts
-
-;;; SS.Palet
-;;; Assign Palette to Bitmap
-;;;
-;;; Assign CLUT# to Bitmap#
-;;;
-;;; Entry: R$Y = bitmap# (0-2)
-;;;        R$X = CLUT (0-3)
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-;;;
-SSPalet             pshs      cc
-                    orcc      #IntMasks           mask interrupts
-                    lda       MAPSLOT
-                    pshs      a
-                    lda       #$C0                get the MMU Block for bitmap addresses
-                    sta       MAPSLOT             store it in the MMU slot to map it in
-*                   **** Calculate starting address at 1000,1008,1010
-                    ldb       R$Y+1,x             ldb with bitmap#
-                    lda       #$08                multiply by 8 (to start at 0, 8 or 16)
-                    mul                           d should be 0,8,or 16
-                    addd      #MAPADDR
-                    addd      #$1000
-                    tfr       d,y                 y is address of BM(0-2) registers
-                    ldd       R$X,x               d now has CLUT#
-                    orcc      #Carry              set carry bit
-                    rolb                          shift B, and rotate in enable it
-*                   **** Load Bitmap start block physical address into Vicky BM0, BM1 or BM2
-                    stb       ,y                  enable bitmap with CLUT R$X
-                    puls      a
-                    sta       MAPSLOT
-                    puls      cc,pc
-
-
-
-;;; SS.DfPal
-;;; Define Palette and populate a CLUT from Memory Module
-;;;
-;;; Entry: R$X = CLUT # (0-3)
-;;;        R$Y = pointer to location of data in caller process
-;;;        (Caller must load data module)
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-SSDfPal             pshs      a,x,y,u
-*                   **** Map in $C1 for CLUT Registers
-                    pshs      x
-                    ldx       #$C1              
-                    lbsr      mapblock
-                    puls      x
-                    bcs       end@                if error, end and return error code
-*                   **** Calculate CLUT offset              
-                    pshs      u                   push map logical addr
-                    lda       R$X+1,x
-                    lsla                          multiply by 2 so index works
-                    pshs      x                   push pointer to caller Regs
-                    leax      clutlookup,pcr
-                    ldd       a,x
-                    leau      d,u                 ldu with offset for CLUT
-*                   **** Start F$Move (with U from above)
-                    ldx       ,s                  load pointer to caller Regs
-                    ldx       R$Y,x               x=Get pointer to caller data
-                    ldy       <D.Proc             Get caller process
-                    lda       P$Task,y            a=source Task# (Caller)
-                    ldb       <D.SysTsk           b=dest Task# (System)
-                    ldy       #$400               moving 1K
-                    os9       F$Move              copy data
-                    bcs       errormove@          return if error
-*                   **** Exit Move
-                    puls      x
-noerror@            puls      u
-                    bsr       clearblock
-                    clrb                          no error code
-                    bra       end@
-errormove@          puls      x
-                    puls      u                   come here on F$Move error
-                    bsr       clearblock
-                    coma                          set carry bit on error
-end@                puls      u,y,x,a,pc
-
-clutlookup          fdb       $1000,$1400,$1800,$1C00
-
-
-;;; mapblock
-;;; Map a block into the system process map
-;;;
-;;; Entry:  X = block to map (like $C1)
-;;;
-;;; Exit:   U = address of first block
-;;;         B = a non-zero error code (F$MapBlk)
-;;;        CC = carry flag clear=success set=error
-;;;
-;;; F$MapBlk only works to map for the current processin D.Proc
-;;; To use F$MapBlk for the system, assign system to D.Proc
-;;; Call F$MapBlk, then change the processes back
-;;; Make sure to mask interrupts so processes don't switch while
-;;; the change is happening
-;;;
-;;; Does not preserve a,b,x,y,u
-mapblock            pshs      cc                  push cc and mask interrupts
-                    orcc      #IntMasks
-                    ldy       <D.Proc             ldy with current process descriptor
-                    pshs      y                   store current proc descriptor on stack
-                    ldy       <D.SysPrc           copy system proc descriptor to current
-                    sty       <D.Proc
-                    ldb       #$01                map 1 block at address x (x set on entry) 
-                    os9       F$MapBlk
-                    puls      y                   pull current proc descriptor from stack
-                    sty       <D.Proc             and save it back
-                    bcs       errnomap@           if F$MapBlok error, then handle error
-                    puls      cc,pc               if no error, pull cc and return
-errnomap@           puls      cc                  if error, pull cc
-                    coma                          set carry bit
-                    rts                           and return
-;;; clearblock
-;;; clear a mapped block from the system process map
-;;;
-;;; Entry:  U = address of first block to clear
-;;;
-;;; Exit:   Nothing
-;;;
-;;; F$ClrBlk only works with the current process, so assign
-;;; system process to current process, clear the block
-;;; then switch it back
-;;;
-;;; Does not preserve a,b
-
-clearblock          pshs      cc
-                    orcc      #IntMasks           u=logical address of block on entry
-                    ldd       <D.Proc
-                    pshs      d
-                    ldd       <D.SysPrc
-                    std       <D.Proc
-                    ldb       #$01                only clearing 1 block
-                    os9       F$ClrBlk            U=logical addr, B=# of blocks
-                    puls      d
-                    std       <D.Proc
-                    puls      cc,pc
-
-* Block to Address: Convert block# to high 16 bits in D
-* b = block#, a = 0.  d = high 16 bits of address
-* Try to replace with math coprocessor multiply in Vicky?
-Blk2Addr            clra                          clear a, block # is in b
-                    lslb                          multiply block# by $20 to get top 16 bits x2
-                    rola                          of physical address (ex $3F*$20 = $07E0)
-                    lslb                          x4
-                    rola                          roll carry into a
-                    lslb                          x8
-                    rola                          roll carry into a
-                    lslb                          x16
-                    rola                          roll carry into a
-                    lslb                          x32 ($20)
-                    rola
-                    rts
-                    endc
 
 
                     emod

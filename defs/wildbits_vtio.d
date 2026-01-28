@@ -65,7 +65,8 @@ V.DWBorder          set       V.EscParms+7
 
 
 
-                    ifgt      Level-1                                            
+                    ifgt      Level-1
+
 ********************************************************************
 * vtio graphics definitions - 53 bytes + 
 ********************************************************************
@@ -170,7 +171,7 @@ V.LY                RMB      1                    line coordinate for Y
 V.GCADDR            RMB      3                    address of cursor on screen
 V.GCAD8K            RMB      2                    address in 8K window
 V.GMAPBLK           RMB      2                    mapped in logical address of block
-V.FONTPATH          FCC      \/dd/sys/fonts/\
+*V.FONTPATH          FCC      \/dd/sys/fonts/\
 V.FONTNAME          RMB      33
 
 * Start of Line Interrupt Handling
@@ -198,6 +199,56 @@ D.KySns             rmb       1
                     org       D.WDAddr
 D.RowState          RMB       9
 D.WBKKyDn     RMB       1
+
+*******************************************************************
+* F256 Graphics Driver Global Memory
+*
+* This is SHARED between system and grfdrv (lives in Block 0)
+*******************************************************************
+
+GrfMem      equ   $1100              ; GrfDrv data area (256 bytes)
+F256Gfx     equ   $1200              ; F256-specific graphics data (256 bytes)
+
+*******************************************************************
+* GrfMem Offsets - Corrected for 8-byte DAT
+*******************************************************************
+            org   0
+gr.DATImg   RMB   16               ; DAT image (16 BYTES)
+gr.Stack    RMB   2                ; Stack pointer (2 bytes)
+gr.SysStk   RMB	  2		   ; Saved System Stack (during flip)
+gr.Entry    RMB   2                ; GrfDrv entry point (2 bytes)
+gr.Busy     RMB   1                ; Busy flag (1 byte)
+gr.CurScr   RMB   1                ; Current screen (1 byte)
+gr.Error    RMB   1                ; Error code (1 byte)
+gr.Flags    RMB   1                ; Flags (1 byte)
+gr.Temp	    RMB	  1		   ; Temp Variable
+
+* Screen table (5 screens × 16 bytes = 80 bytes)
+gr.ScrTbl   rmb   80                ; Screen table base
+gr.ScrSz    equ   16                 ; Size per entry
+
+* Rest available for F256-specific data
+gr.UserData equ   $60                ; User area (~160 bytes to $FF
+
+E$Param	    equ	  $05
+
+*******************************************************************
+* GrfDrv Function Codes
+*******************************************************************
+GF.Init     equ   $00          ; Initialize
+GF.Term     equ   $02          ; Terminate
+GF.SetScr   equ   $04          ; Set screen
+GF.GetScr   equ   $06          ; Get screen
+GF.Write    equ   $08          ; Write
+GF.Read     equ   $0A          ; Read
+GF.GetStat  equ   $0C          ; GetStat
+GF.SetStat  equ   $0E          ; SetStat
+GF.SetMode  equ   $10          ; Set mode
+GF.SetPal   equ   $12          ; Set palette
+GF.Blit     equ   $14          ; Blit
+GF.Fill     equ   $16          ; Fill
+GF.Line     equ   $18          ; Line
+
 
 * SS.KySns bit locations
 SHIFTBIT            equ  %00000001
