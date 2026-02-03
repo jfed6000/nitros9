@@ -1,4 +1,4 @@
-                    IFNE      WILDBITS_VTIO.D-1
+                  IFNE    WILDBITS_VTIO.D-1
 WILDBITS_VTIO.D     SET       1
 
 ********************************************************************
@@ -8,47 +8,47 @@ WILDBITS_VTIO.D     SET       1
 * static memory definitions.
 
 * Constant definitions.
-KBufSz              EQU       8                   the circular buffer size
+KBufSz              EQU       8         the circular buffer size
 
 * Driver static memory.
                     ORG       V.SCF
-V.CurRow            RMB       1                   current row where the next character goes
-V.CurCol            RMB       1                   current column where the next character goes
-V.CapsLck           RMB       1                   CAPS LOCK key up/down flag ($00 = up)
-V.KySns             RMB       1                   key sense flags
-V.LastCh            RMB       1                   Last character for key repeat
+V.CurRow            RMB       1         current row where the next character goes
+V.CurCol            RMB       1         current column where the next character goes
+V.CapsLck           RMB       1         CAPS LOCK key up/down flag ($00 = up)
+V.KySns             RMB       1         key sense flags
+V.LastCh            RMB       1         Last character for key repeat
 V.CurLastCh         RMB       1
-V.KRTimer           RMB       1                   Key Repeat Timer
-V.LEDStates         RMB       1                   PS/2 LED flags (bit 2 = CAPS Lock, bit 1 = NUM Lock, bit 0 = Scroll Lock)
-V.EscVect           RMB       2                   escape vector handle
-V.Reverse           RMB       1                   reverse video flag ($00 = off, $FF = on)
-V.IBufH             RMB       1                   input buffer head pointer
-V.IBufT             RMB       1                   input buffer tail pointer
-V.SSigID            RMB       1                   data ready process ID
-V.SSigSg            RMB       1                   data ready signal code
-V.ScTyp             RMB       1                   screen type
-V.WWidth            RMB       1                   window width
-V.WHeight           RMB       1                   window height
-V.FBCol             RMB       1                   currently selected foreground and background color
-V.BordCol           RMB       1                   currently selected border color
-V.KeyDrvMPtr        RMB       2                   keydrv module address
-V.KeyDrvEPtr        RMB       2                   keydrv entry point address
-                    ifgt      Level-1
-V.MSDrvMPtr         RMB       2                   mouse module address
-V.MSDrvEPtr         RMB       2                   mouse entry point address
+V.KRTimer           RMB       1         Key Repeat Timer
+V.LEDStates         RMB       1         PS/2 LED flags (bit 2 = CAPS Lock, bit 1 = NUM Lock, bit 0 = Scroll Lock)
+V.EscVect           RMB       2         escape vector handle
+V.Reverse           RMB       1         reverse video flag ($00 = off, $FF = on)
+V.IBufH             RMB       1         input buffer head pointer
+V.IBufT             RMB       1         input buffer tail pointer
+V.SSigID            RMB       1         data ready process ID
+V.SSigSg            RMB       1         data ready signal code
+V.ScTyp             RMB       1         screen type
+V.WWidth            RMB       1         window width
+V.WHeight           RMB       1         window height
+V.FBCol             RMB       1         currently selected foreground and background color
+V.BordCol           RMB       1         currently selected border color
+V.KeyDrvMPtr        RMB       2         keydrv module address
+V.KeyDrvEPtr        RMB       2         keydrv entry point address
+                  IFGT    Level-1
+V.MSDrvMPtr         RMB       2         mouse module address
+V.MSDrvEPtr         RMB       2         mouse entry point address
 V.MouseVect         RMB       2
-V.MSButtons         RMB       1                   keeps the buttons for the SetStat call
-V.MSTimer           RMB       1                   this hides the cursor if inactive for more than 4 seconds
-V.MEMP		    RMB	      1			  Code to check PS2_STAT for empty buffer (channel 1 or 2)
-V.MS_IN		    RMB	      2			  Address of Channel 1 or 2
-V.M_WR		    RMB	      1			  PS2 Control Write Channel
-V.MCLR		    RMB	      1			  PS2 Clear FIFO Channel 1 or 2
-V.INT_PS2_MOUSE	    RMB	      1			  Interrupt Flag for Channel 1 or 2
-V.MSByte0	    RMB	      1			  mouse packet byte 1
-V.MSByte1	    RMB	      1			  mouse packet byte 2
-V.MSByte2   	    RMB	      1			  mouse packet byte 3
-V.MSByteCnt	    RMB	      1			  mouse packet byte counter
-                    endc
+V.MSButtons         RMB       1         keeps the buttons for the SetStat call
+V.MSTimer           RMB       1         this hides the cursor if inactive for more than 4 seconds
+V.MEMP              RMB       1         Code to check PS2_STAT for empty buffer (channel 1 or 2)
+V.MS_IN             RMB       2         Address of Channel 1 or 2
+V.M_WR              RMB       1         PS2 Control Write Channel
+V.MCLR              RMB       1         PS2 Clear FIFO Channel 1 or 2
+V.INT_PS2_MOUSE     RMB       1         Interrupt Flag for Channel 1 or 2
+V.MSByte0           RMB       1         mouse packet byte 1
+V.MSByte1           RMB       1         mouse packet byte 2
+V.MSByte2           RMB       1         mouse packet byte 3
+V.MSByteCnt         RMB       1         mouse packet byte counter
+                  ENDC
 V.KeyDrvStat        equ       .
                     RMB       8
 
@@ -65,13 +65,14 @@ V.DWBorder          set       V.EscParms+7
 
 
 
-                    ifgt      Level-1
+                  IFGT    Level-1
+
 
 ********************************************************************
-* vtio graphics definitions - 53 bytes + 
+* vtio graphics definitions - 53 bytes +
 ********************************************************************
 
-V.ST                RMB       1                    screen type 0=Term 1=Gfx
+V.ST                RMB       1         screen type 0=Term 1=Gfx
 
 * VICKY MASTER CONTROL REGISTER to enable graphics and capabilities
 * | 7 |   6   |    5   |   4  |    3   |   2   |   1   |   0  |
@@ -80,7 +81,7 @@ V.ST                RMB       1                    screen type 0=Term 1=Gfx
 * $FFC0 MASTER_CTRL_REG_L, MASTER_CTRL_REG_H
 * See constants below for settings used with SS.DSCrn in vtio
 
-V.V_MCR             RMB       2                   2 bytes for Vicky Control Register
+V.V_MCR             RMB       2         2 bytes for Vicky Control Register
 
 * VICKY LAYER CONTROL REGISTER to set bitmaps and/or tile maps for display
 * | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
@@ -90,7 +91,7 @@ V.V_MCR             RMB       2                   2 bytes for Vicky Control Regi
 * $FFC2 VKY_RESERVED_00, VKY_RESERVED_01
 * See SS.PScrn in vtio
 
-V.V_LayerCTL       RMB        2
+V.V_LayerCTL        RMB       2
 
 * BITMAPS
 * Store starting page for bitmaps, and CLUT# and bitmap enable bits.  Must be in first 512K RAM.
@@ -102,18 +103,18 @@ V.V_LayerCTL       RMB        2
 * Max address is 07FFFF (must be in 1st 512K), which is 19 bits
 * Store block# and then convert to 19 bit address in driver
 
-V.BM0Blk            RMB       1                   bitmap0 block
-V.BM0Cl_En          RMB       1                   bitmap0 |clut|enable|
-V.BM1Blk            RMB       1                   bitmap1 block
-V.BM1Cl_En          RMB       1                   bitmap1 |clut|enable|
-V.BM2Blk            RMB       1                   bitmap2 block
-V.BM2Cl_En          RMB       1                   bitmap2 |clut|enable|
+V.BM0Blk            RMB       1         bitmap0 block
+V.BM0Cl_En          RMB       1         bitmap0 |clut|enable|
+V.BM1Blk            RMB       1         bitmap1 block
+V.BM1Cl_En          RMB       1         bitmap1 |clut|enable|
+V.BM2Blk            RMB       1         bitmap2 block
+V.BM2Cl_En          RMB       1         bitmap2 |clut|enable|
 
 * CLUT - need to store mirror of CLUT data so switching windows will work
 * Store block# where high 4k is CLUT mirror.  Could store in last 4k of BM blocks.
 
-V.CLUTBlk           RMB       1                   block where high 4k mirrored CLUT data,0=Default CLUT
-V.CLUT              RMB       1                   which CLUTs are active 00001111
+V.CLUTBlk           RMB       1         block where high 4k mirrored CLUT data,0=Default CLUT
+V.CLUT              RMB       1         which CLUTs are active 00001111
 
 * TILE MAPS - 3 tile maps.  Registers are 12 bytes, 2 are reserved and
 * 3 are the plysical address for the Tile Set.  Use Blk# for address here.
@@ -122,66 +123,66 @@ V.CLUT              RMB       1                   which CLUTs are active 0000111
 * and Tile Set is set in the actual tile map data, not here.
 * A tile map could be 2.4K (40x30) to 132K (256x256)
 
-V.TM0               RMB      1                    bit4 is yile size (1=8x8,0=16x16) bit0 is enable
-V.TM0Blk            RMB      1                    starting block# of Tile Map
-V.TM0MapX           RMB      1                    map size X (max 255)
-V.TM0MapY           RMB      1                    map size Y (max 255)
-V.TM0ScrlX          RMB      2                    2 bytes for scroll X info
-V.TM0ScrlY          RMB      2                    2 bytes for scroll Y info                 
-V.TM1               RMB      1                    bit4 is tile size (1=8x8,0=16x16) bit0 is enable
-V.TM1Blk            RMB      1                    starting block# of tile set
-V.TM1MapX           RMB      1                    map size X (max 255)
-V.TM1MapY           RMB      1                    map size Y (max 255)
-V.TM1ScrlX          RMB      2                    2 bytes for scroll X info
-V.TM1ScrlY          RMB      2                    2 bytes for scroll Y info
-V.TM2               RMB      1                    bit4 is tile size (1=8x8,0=16x16) bit0 is enable
-V.TM2Blk            RMB      1                    starting block# of tile set
-V.TM2MapX           RMB      1                    map size X (max 255)
-V.TM2MapY           RMB      1                    map size Y (max 255)
-V.TM2ScrlX          RMB      2                    2 bytes for scroll X info
-V.TM2ScrlY          RMB      2                    2 bytes for scroll Y info
+V.TM0               RMB       1         bit4 is yile size (1=8x8,0=16x16) bit0 is enable
+V.TM0Blk            RMB       1         starting block# of Tile Map
+V.TM0MapX           RMB       1         map size X (max 255)
+V.TM0MapY           RMB       1         map size Y (max 255)
+V.TM0ScrlX          RMB       2         2 bytes for scroll X info
+V.TM0ScrlY          RMB       2         2 bytes for scroll Y info
+V.TM1               RMB       1         bit4 is tile size (1=8x8,0=16x16) bit0 is enable
+V.TM1Blk            RMB       1         starting block# of tile set
+V.TM1MapX           RMB       1         map size X (max 255)
+V.TM1MapY           RMB       1         map size Y (max 255)
+V.TM1ScrlX          RMB       2         2 bytes for scroll X info
+V.TM1ScrlY          RMB       2         2 bytes for scroll Y info
+V.TM2               RMB       1         bit4 is tile size (1=8x8,0=16x16) bit0 is enable
+V.TM2Blk            RMB       1         starting block# of tile set
+V.TM2MapX           RMB       1         map size X (max 255)
+V.TM2MapY           RMB       1         map size Y (max 255)
+V.TM2ScrlX          RMB       2         2 bytes for scroll X info
+V.TM2ScrlY          RMB       2         2 bytes for scroll Y info
 
 * TILE SETS - there are 8 tile sets.  Tile Set registers contain a physical address, and
 * a Square bit to determine if Tile Set is LINEAR or SQUARE
 * Tile Sets are either 16K (8x8) or 64K (16x16)
 
-V.TS0Blk            RMB      1                    starting block# of tile set
-V.TS0SQR            RMB      1                    square or linear (bit 3)
-V.TS1Blk            RMB      1                    starting block# of tile set
-V.TS1SQR            RMB      1                    square or linear (bit 3)
-V.TS2Blk            RMB      1                    starting block# of tile set
-V.TS2SQR            RMB      1                    square or linear (bit 3)
-V.TS3Blk            RMB      1                    starting block# of tile set
-V.TS3SQR            RMB      1                    square or linear (bit 3)
-V.TS4Blk            RMB      1                    starting block# of tile set
-V.TS4SQR            RMB      1                    square or linear (bit 3)
-V.TS5Blk            RMB      1                    starting block# of tile set
-V.TS5SQR            RMB      1                    square or linear (bit 3)
-V.TS6Blk            RMB      1                    starting block# of tile set
-V.TS6SQR            RMB      1                    square or linear (bit 3)
-V.TS7Blk            RMB      1                    starting block# of tile set
-V.TS7SQR            RMB      1                    square or linear (bit 3)
+V.TS0Blk            RMB       1         starting block# of tile set
+V.TS0SQR            RMB       1         square or linear (bit 3)
+V.TS1Blk            RMB       1         starting block# of tile set
+V.TS1SQR            RMB       1         square or linear (bit 3)
+V.TS2Blk            RMB       1         starting block# of tile set
+V.TS2SQR            RMB       1         square or linear (bit 3)
+V.TS3Blk            RMB       1         starting block# of tile set
+V.TS3SQR            RMB       1         square or linear (bit 3)
+V.TS4Blk            RMB       1         starting block# of tile set
+V.TS4SQR            RMB       1         square or linear (bit 3)
+V.TS5Blk            RMB       1         starting block# of tile set
+V.TS5SQR            RMB       1         square or linear (bit 3)
+V.TS6Blk            RMB       1         starting block# of tile set
+V.TS6SQR            RMB       1         square or linear (bit 3)
+V.TS7Blk            RMB       1         starting block# of tile set
+V.TS7SQR            RMB       1         square or linear (bit 3)
 
 * GRAPHICS CURSORS,LINES, COLORS
-V.GCX               RMB      2                    graphics cursor X
-V.GCY               RMB      1                    graphics cursor Y
-V.GCOLOR            RMB      1                    graphics color
-V.LX                RMB      2                    line coordiate for X
-V.LY                RMB      1                    line coordinate for Y
-V.GCADDR            RMB      3                    address of cursor on screen
-V.GCAD8K            RMB      2                    address in 8K window
-V.GMAPBLK           RMB      2                    mapped in logical address of block
+V.GCX               RMB       2         graphics cursor X
+V.GCY               RMB       1         graphics cursor Y
+V.GCOLOR            RMB       1         graphics color
+V.LX                RMB       2         line coordiate for X
+V.LY                RMB       1         line coordinate for Y
+V.GCADDR            RMB       3         address of cursor on screen
+V.GCAD8K            RMB       2         address in 8K window
+V.GMAPBLK           RMB       2         mapped in logical address of block
 *V.FONTPATH          FCC      \/dd/sys/fonts/\
-V.FONTNAME          RMB      33
+V.FONTNAME          RMB       33
 
 * Start of Line Interrupt Handling
 *V.SOLOnOff          RMB             1
 *V.SOLCurr          RMB      1
 *V.SOLMax           RMB      1
 *V.SOLTable         RMB      32
-                    endc
+                  ENDC
 
-V.InBuf             RMB       KBufSz              the input buffer
+V.InBuf             RMB       KBufSz    the input buffer
 V.KSBuf             RMB       KBufSz
                     RMB       250-.
 V.Last              EQU       .
@@ -198,7 +199,7 @@ D.KySns             rmb       1
 * Borrow 9 bytes from "CoCo" specific area of system globals for platform use.
                     org       D.WDAddr
 D.RowState          RMB       9
-D.WBKKyDn     RMB       1
+D.WBKKyDn           RMB       1
 
 *******************************************************************
 * F256 Graphics Driver Global Memory
@@ -206,60 +207,62 @@ D.WBKKyDn     RMB       1
 * This is SHARED between system and grfdrv (lives in Block 0)
 *******************************************************************
 
-GrfMem      equ   $1100              ; GrfDrv data area (256 bytes)
-F256Gfx     equ   $1200              ; F256-specific graphics data (256 bytes)
+GrfMem              equ       $1100     ; GrfDrv data area (256 bytes)
+F256Gfx             equ       $1200     ; F256-specific graphics data (256 bytes)
+GrfMod		    equ	      $C000	; Logical location of module in task 1
 
 *******************************************************************
 * GrfMem Offsets - Corrected for 8-byte DAT
 *******************************************************************
-            org   0
-gr.DATImg   RMB   16               ; DAT image (16 BYTES)
-gr.Stack    RMB   2                ; Stack pointer (2 bytes)
-gr.SysStk   RMB	  2		   ; Saved System Stack (during flip)
-gr.Entry    RMB   2                ; GrfDrv entry point (2 bytes)
-gr.Busy     RMB   1                ; Busy flag (1 byte)
-gr.CurScr   RMB   1                ; Current screen (1 byte)
-gr.Error    RMB   1                ; Error code (1 byte)
-gr.Flags    RMB   1                ; Flags (1 byte)
-gr.Temp	    RMB	  1		   ; Temp Variable
+                    org       0
+gr.DATImg           RMB       16        ; DAT image (16 BYTES)
+gr.Stack            RMB       2         ; Stack pointer (2 bytes)
+gr.SysStk           RMB       2         ; Saved System Stack (during flip)
+gr.Entry            RMB       2         ; GrfDrv entry point (2 bytes)
+gr.Busy             RMB       1         ; Busy flag (1 byte)
+gr.CurScr           RMB       1         ; Current screen (1 byte)
+gr.Error            RMB       1         ; Error code (1 byte)
+gr.Flags            RMB       1         ; Flags (1 byte)
+gr.Temp             RMB       1         ; Temp Variable
+gr.PDRGS	    RMB       2
 
 * Screen table (5 screens × 16 bytes = 80 bytes)
-gr.ScrTbl   rmb   80                ; Screen table base
-gr.ScrSz    equ   16                 ; Size per entry
+gr.ScrTbl           rmb       80        ; Screen table base
+gr.ScrSz            equ       16        ; Size per entry
 
 * Rest available for F256-specific data
-gr.UserData equ   $60                ; User area (~160 bytes to $FF
+gr.UserData         equ       $60       ; User area (~160 bytes to $FF
 
-E$Param	    equ	  $05
+E$Param             equ       $05
 
 *******************************************************************
 * GrfDrv Function Codes
 *******************************************************************
-GF.Init     equ   $00          ; Initialize
-GF.Term     equ   $02          ; Terminate
-GF.SetScr   equ   $04          ; Set screen
-GF.GetScr   equ   $06          ; Get screen
-GF.Write    equ   $08          ; Write
-GF.Read     equ   $0A          ; Read
-GF.GetStat  equ   $0C          ; GetStat
-GF.SetStat  equ   $0E          ; SetStat
-GF.SetMode  equ   $10          ; Set mode
-GF.SetPal   equ   $12          ; Set palette
-GF.Blit     equ   $14          ; Blit
-GF.Fill     equ   $16          ; Fill
-GF.Line     equ   $18          ; Line
+GF.Init             equ       $00       ; Initialize
+GF.Term             equ       $02       ; Terminate
+GF.SetScr           equ       $04       ; Set screen
+GF.GetScr           equ       $06       ; Get screen
+GF.Write            equ       $08       ; Write
+GF.Read             equ       $0A       ; Read
+GF.GetStat          equ       $0C       ; GetStat
+GF.SetStat          equ       $0E       ; SetStat
+GF.SetMode          equ       $10       ; Set mode
+GF.SetPal           equ       $12       ; Set palette
+GF.Blit             equ       $14       ; Blit
+GF.Fill             equ       $16       ; Fill
+GF.Line             equ       $18       ; Line
 
 
 * SS.KySns bit locations
-SHIFTBIT            equ  %00000001
-CTRLBIT             equ  %00000010
-ALTBIT              equ  %00000100
-UPBIT               equ  %00001000
-DOWNBIT             equ  %00010000
-LEFTBIT             equ  %00100000
-RIGHTBIT            equ  %01000000
-SPACEBIT            equ  %10000000
-KEYDELAY            equ  5
-KEYDELAY1           equ  30
+SHIFTBIT            equ       %00000001
+CTRLBIT             equ       %00000010
+ALTBIT              equ       %00000100
+UPBIT               equ       %00001000
+DOWNBIT             equ       %00010000
+LEFTBIT             equ       %00100000
+RIGHTBIT            equ       %01000000
+SPACEBIT            equ       %10000000
+KEYDELAY            equ       5
+KEYDELAY1           equ       30
 
-                    ENDC
+                  ENDC

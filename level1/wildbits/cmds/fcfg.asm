@@ -116,15 +116,21 @@ start
 	       clr	 <numfonts	    init number of fonts = 0
 	       clr 	 <listitem		init list item = 0
 	       clr	 <liststart		init list start = 0
-           lbsr	 cursoroff	turn cursor off
+               lbsr	 cursoroff	turn cursor off
 	       lbsr	 installchars	install drawing chars for screen boxes
+	        pshs	 a,x,y
+	       lda	 #1
+	       leax	 dunchrtxt,pcr
+	       ldy	 #30
+	       os9	 I$WritLn
+	       puls	 a,x,y
 	       lbsr	 getopts		get current terminal options
 	       lbsr	 keyechooff		turn off key echo
 	       lbsr	 ldfontarr	    load font array with filenames from fontdir
 	       lbsr	 initscrnsz		init screen size vars and set to 80x30
 	       lbsr	 clearscreen	clear wscreen
 	       lbsr	 drawbox		draw box around font list
-	       lbsr  writefgc     	write fg colors from current palette to screen
+	       lbsr      writefgc     	write fg colors from current palette to screen
 	       lbsr	 drawfg			draw selection indicator at current color
 	       lbsr	 writebgc		write bg colors from current palette to screen
 	       lbsr	 drawbg			draw selection indicator at current color
@@ -146,25 +152,36 @@ keyloop@   lbsr	 handlekeyboard		inkey routine with handlers for intergace
 	       bita	 #SHIFTBIT
 	       bne	 nochange@	    If shiftbit=1,then cancel and quit
 	       bra	 setfont		else, make changes with setfont
-nextkey@   cmpa	 #'u			
+nextkey@       cmpa	 #'u			
 	       beq	 update@
 	       bra	 keyloop@	    loop to keyloop
-update@	   lbsr	 printfont      update = redraw font 1
+update@	       lbsr	 printfont      update = redraw font 1
 	       bra	 keyloop@		loop to keyloop
-setfont
-           lbsr	 RemoveSignals	clean up and remove signals and SOL
+setfont	         pshs	 a,x,y
+	       lda	 #1
+	       leax	 rstxt,pcr
+	       ldy	 #30
+	       os9	 I$WritLn
+	       puls	 a,x,y
+	       lbsr	 RemoveSignals	clean up and remove signals and SOL
+	       pshs	 a,x,y
+	       lda	 #1
+	       leax	 sftxt,pcr
+	       ldy	 #30
+	       os9	 I$WritLn
+	       puls	 a,x,y
 	       lbsr	 changesettings	apply new settings      
 	       bcs	 error@			
 	       bra	 exit2@
 nochange@
 	       lbsr	 RemoveSignals	exit no changes, remove singals and SOL
 	       lbsr	 setoldscreen	       
-exit2@	   lbsr	 movecursor	    clear screen  and reset termainl
+exit2@	       lbsr	 movecursor	    clear screen  and reset termainl
 	       lbsr	 keyechoon
 	       lbsr	 clearscreen
 	       lbsr	 cursoron
 	       clrb
-error@	   ldy	 #2
+error@	       ldy	 #2
 	       lda	 #1
 	       leax	 font0on,pcr	        make sure font0 is on
 	       os9	 I$Write
@@ -1149,8 +1166,20 @@ loop@	       lda	 #$02		   use display code $02 X Y
 * this ensures the screen looks the same no matter
 * which font is in font0
 *
-installchars   ldb	 #12
+installchars   pshs	 a,x,y
+	       lda	 #1
+	       leax	 inschrtxt,pcr
+	       ldy	 #30
+	       os9	 I$WritLn
+	       puls	 a,x,y
+	       ldb	 #12
 	       pshs      b
+	       pshs	 a,x,y
+	       lda	 #1
+	       leax	 getchrtxt,pcr
+	       ldy	 #30
+	       os9	 I$WritLn
+	       puls	 a,x,y
 	       leax      oldchars,u
 	       ldy	 #243
 loop@	       lda	 #0
@@ -1163,6 +1192,12 @@ loop@	       lda	 #0
 	       bne	 loop@
 	       ldb	 #12
 	       stb	 ,s
+	       pshs	 a,x,y
+	       lda	 #1
+	       leax	 putchrtxt,pcr
+	       ldy	 #30
+	       os9	 I$WritLn
+	       puls	 a,x,y
 	       leax      ccorner1,pcr
 	       ldy	 #243
 loop2@	       lda	 #0
@@ -2170,6 +2205,18 @@ fspath2             fcc       "defaultsettings"
                     fcb       C$CR
 sysfont             fcc       "/DD/SYS/FONTS"
                     fcb       C$CR
+inschrtxt           fcc       "Install Chars"
+                    fcb       C$CR
+getchrtxt           fcc       "Get Chars"
+                    fcb       C$CR
+putchrtxt           fcc       "Put Chars"
+                    fcb       C$CR
+dunchrtxt           fcc       "Done Chars"
+                    fcb       C$CR		    
+rstxt               fcc       "remove signals"
+                    fcb       C$CR
+sftxt               fcc       "setfont"
+                    fcb       C$CR		    
 fontfgcolor         fcb $02,$20,$2a,$1b,$32,$01,$0C
 
 lvl1msg             fcc !Level-1 only supports fcfg -d and fcfg -dl!
