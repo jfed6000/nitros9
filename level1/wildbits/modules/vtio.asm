@@ -454,7 +454,7 @@ InitGrfDrv          pshs      u,y
                     lbne      InitDevice yes, already initialized
 * Clear GrfMem area
                     ldx       #GrfMem   point to GrfMem
-                    ldy       #256      Size
+                    ldy       #512      Size
 clrgrf@             clr       ,x+
                     leay      -1,y
                     bne       clrgrf@
@@ -582,7 +582,6 @@ store7:
 *******************************************************************
                     ldx       #GrfMem+gr.ScrTbl
                     ldb       #5
-
 clrScr              pshs      b,x
                     ldb       #gr.ScrSz
 clrLoop             clr       ,x+
@@ -596,6 +595,8 @@ clrLoop             clr       ,x+
 *******************************************************************
 * Call GrfDrv Init
 *******************************************************************
+	            ldx	      #GrfMem+gr.PDRGS
+		    stx	      GrfMem+gr.RGSADR
                     ldb       #GF.Init  ; Init function
                     pshs      a         **DEBUG**
                     lda       #3        **DEBUG**
@@ -669,7 +670,23 @@ toproc
 CallGrfDrv
 
 * Get grfdrv entry point
-
+                    pshs      x,u,y,b
+		    ldb	      #R$Size/2
+		    ldy	      #GrfMem+gr.PDRGS
+cpyloop@	    ldu	      ,x++
+		    stu	      ,y++
+		    decb
+		    bne	      cpyloop@
+		    ldx	      >D.Proc
+		    leax      P$DATImg,x
+		    ldb	      #8
+		    ldy	      #GrfMem+gr.PDAT
+datcopy		    ldu	      ,x++
+		    stu	      ,y++
+		    decb
+		    bne       datcopy
+		    puls      x,u,y,b
+*		    
                     ldx       >GrfMem+gr.Entry
                     orcc      #Entire
                     beq       nogrf     ; Not initialized
@@ -719,9 +736,22 @@ CallGrfDrv
 *******************************************************************
                     jmp       [>D.Flip1]
 
-* <-- Execution continues here after grfdrv calls D.Flip0
+* <-- Execution continues here after grfdrv calls D.Flip0 
 * Only SP, PC, and CC are guaranteed preserved
 * All other registers may contain return values
+                    rts
+
+writevalues         lda	      #$88
+		    sta	      $12A8
+      	    	    pshs      x,u,y,b
+		    ldx	      >GrfMem+gr.RGSADR
+		    ldb	      #R$Size/2
+		    ldy	      #GrfMem+gr.PDRGS
+cpyloop2@	    ldu	      ,y++
+		    stu	      ,X++
+		    decb
+		    bne	      cpyloop2@
+        	    puls      x,u,y,b
 
 * Restore caller's CC
                     rts
@@ -1605,26 +1635,29 @@ actv@               stb       R$A,x     save to caller reg
 ****************************
 * Get status entry point
 * Entry: A=Function call #
-GetStat             cmpa      #SS.EOF   is this the EOF call?
-                    beq       SSEOF     yes, exit without error
-                    ldx       PD.RGS,y  else get the pointer to caller's registers (all other calls require this)
-		    stx	      >GrfMem+gr.PDRGS
-                    cmpa      #SS.Ready is this the data ready call? (keyboard buffer)
-                    beq       SSReady   branch if so
+GetStat             ldx	      >D.Proc
+		    ldx	      P$Task,x
+		    stx	      >GrfMem+gr.PTask
+		    ldx       PD.RGS,y  else get the pointer to caller's registers (all other calls require this)
+		    stx	      >GrfMem+gr.RGSADR
+		    cmpa      #SS.EOF   is this the EOF call?
+                    lbeq       SSEOF     yes, exit without error
+		    cmpa      #SS.Ready is this the data ready call? (keyboard buffer)
+                    lbeq       SSReady   branch if so
                     cmpa      #SS.ScSiz get screen size?
-                    beq       SSScSiz   branch if so
+                    lbeq       SSScSiz   branch if so
                     cmpa      #SS.ScTyp get screen type?
                     beq       SSScTyp   branch if so
                     cmpa      #SS.KySns get key sense info?
                     lbeq      GSKySns   branch if so
                     cmpa      #SS.Joy   get joystick position?
-                    beq       SSJoy     branch if so
+                    lbeq       SSJoy     branch if so
                     cmpa      #SS.Palet get palettes?
                     lbeq       GSPalet   yes, go process
                     cmpa      #SS.FBRgs get colors?
                     lbeq      SSFBRgs   yes, go process
                     cmpa      #SS.DfPal get default colors?
-                    lbeq       GSDfPal   yes, go process
+                    lbeq      GSDfPal   yes, go process
 		    ifgt      Level-1
 		    stx	      $12D0
 		    sty	      $12D2
@@ -1640,18 +1673,32 @@ GetStat             cmpa      #SS.EOF   is this the EOF call?
                     ldb       #E$UnkSvc load the "unknown service" error
                     rts                 return
 
-GSMouse		    ldb	      #2
-		    lbra      CallGrfDrv
+GSMouse
+*                    lda       MS_XH
+*                    ldb       MS_XL
+*                    std       R$X,x
+*                    lda       MS_YH
+*                    ldb       MS_YL
+*                    std       R$Y,x
+*                    lda       V.MSButtons,u
+**		    clra
+*		    sta       R$A,x
+*                    clrb
+*		    rts
+*
+		    ldb	      #2
+		    lbsr      CallGrfDrv
+		    lbra      writevalues
 
 GSDScrn		    ldb	      #3
-		    lbra      CallGrfDrv
+		    lbsr      CallGrfDrv
+		    lbra      writevalues
 
 GSFntChar	    ldb	      #4
 		    ldy	      R$Y,x
 		    sty	      $12E0
-		    ldy	      >D.Proc
-		    sty	      $1298
-		    lbra      CallGrfDrv
+		    lbsr      CallGrfDrv
+		    lbra      writevalues
 	   
 
 ;;; SS.ScTyp
@@ -1812,7 +1859,11 @@ GSDfPal
 *    B  = error code
 *
 SS.DMAFill          equ       $B0
-SetStat             ldx       PD.RGS,y  get caller's registers in X
+SetStat             ldx	      >D.Proc
+		    ldx	      P$Task,x
+		    stx	      >GrfMem+gr.PTask
+		    ldx       PD.RGS,y  else get the pointer to caller's registers (all other calls require this)
+		    stx	      >GrfMem+gr.RGSADR
                     cmpa      #SS.SSig  send signal on data ready?
                     lbeq      SSSig     yes, go process
                     cmpa      #SS.Relea release signal on data ready?
@@ -1837,10 +1888,12 @@ SSFntLoadF	    ldb	      #5
 		    lbra      CallGrfDrv
 
 SSFntChar	    ldb	      #6
-		    lbra      CallGrfDrv
+		    lbsr      CallGrfDrv
+		    lbra      writevalues
 
 SSDScrn		    ldb	      #7
-		    lbra      CallGrfDrv
+		    lbsr      CallGrfDrv
+		    lbra      writevalues
 
 SSTone              ldy       R$Y,x     check for 0-1023 range
                     cmpy      #1023

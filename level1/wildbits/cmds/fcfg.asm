@@ -129,13 +129,15 @@ start
 	       lbsr	 ldfontarr	    load font array with filenames from fontdir
 	       lbsr	 initscrnsz		init screen size vars and set to 80x30
 	       lbsr	 clearscreen	clear wscreen
-	       lbsr	 drawbox		draw box around font list
+               lbsr	 drawbox		draw box around font list
 	       lbsr      writefgc     	write fg colors from current palette to screen
-	       lbsr	 drawfg			draw selection indicator at current color
+       	       lbsr	 drawfg			draw selection indicator at current color
+*******	       
+*	       lbra	 debugend		    DEBUG
+*******
 	       lbsr	 writebgc		write bg colors from current palette to screen
 	       lbsr	 drawbg			draw selection indicator at current color
 ** Get curr font and set the index
-
 **
 	       lbsr	 writelist		write the list of fonts (max 8)
            lbsr  getcurrfont    check for currfont
@@ -185,7 +187,7 @@ error@	       ldy	 #2
 	       lda	 #1
 	       leax	 font0on,pcr	        make sure font0 is on
 	       os9	 I$Write
-	       os9   F$Exit
+debugend       os9   F$Exit
 
 ********************************************************************
 * handlekeyboard
@@ -1333,13 +1335,13 @@ MuteSignals    pshs      a,b,x,y
 	       os9	 I$SetStt
 changefont0@   lda	 #$0
 	       ldb	 #SS.DScrn
-	       os9	 I$GetStt
+*	       os9	 I$GetStt
 	       tfr	 y,d
 	       andb      #~(FT_FSET)
 	       tfr	 d,y
 writeit@       lda	 #1
 	       ldb	 #SS.DScrn
-	       os9	 I$SetStt
+*	       os9	 I$SetStt
 	       puls      a,b,x,y
 	       rts
 

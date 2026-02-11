@@ -29,12 +29,13 @@ name                fcs       /grfdrv256/
 *******************************************************************
 entry               equ       *
 * Set DP to GrfMem area
-                    pshs      a
-                    lda       #GrfMem/256 ; DP = $11
-                    tfr       a,dp
-                    puls      a
+*                    pshs      a
+*                    lda       #GrfMem/256 ; DP = $11
+*                    tfr       a,dp
+*                    puls      a
+		     tfr      0,dp
 
-                    lds       >GrfMem+gr.Stack
+ *                   lds       >GrfMem+gr.Stack
  * Dispatch to function
                     leay      FuncTbl,pcr
                     aslb                ; B*2 for word table
@@ -71,6 +72,8 @@ Init
 *                    andcc	#^Carry
                     lda       #$99
                     sta       $1230
+		    ldx	      >D.Tasks
+		    stx	      $1232
                     clrb                ; No error
                     lbra       SysRet    ; Return to caller
 
@@ -99,16 +102,7 @@ Term
 ;;;
 ;;; Error:  B = A non-zero error code.
 ;;;        CC = Carry flag set to indicate error.
-GSMouse	            pshs      cc
-		    orcc      #IntMasks
-		    lda	      #%10010001
-		    sta	      MMU_MEM_CTRL
-		    ldy	      #$0104
-		    sty	      MMU_SLOT_3
-		    lda	      #1
-		    sta	      MMU_MEM_CTRL
-		    ldx       >GrfMem+gr.PDRGS    load x with PDREGS to get shadow stack regs
-		    puls      cc
+GSMouse             ldx       #GrfMem+gr.PDRGS    load x with PDREGS to get shadow stack regs
 		    lda       MS_XH
                     ldb       MS_XL
                     std       R$X,x
@@ -116,7 +110,8 @@ GSMouse	            pshs      cc
                     ldb       MS_YL
                     std       R$Y,x
 *                    lda       V.MSButtons,u
-*                   sta       R$A,x
+		    clra
+		    sta       R$A,x
                     clrb                          clear carry
                     jmp       >GrfMod+SysRet   
 
@@ -155,10 +150,22 @@ DoFontGetSet	    pshs      a                   store get/set state on stack
 		    orcc      #IntMasks
 		    lda	      #%10010001
 		    sta	      MMU_MEM_CTRL
-		    ldy	      #$0104
-		    sty	      MMU_SLOT_3
-		    ldx       >GrfMem+gr.PDRGS    load x with PDREGS to get shadow stack regs
+		    lda	      #FONT_BLK		  map in font block
+		    sta	      MMU_SLOT_2
+		    clr	      GrfMem+gr.DATImg+4
+		    sta	      GrfMem+gr.DATImg+5
+		    ldx       #GrfMem+gr.PDRGS    load x with PDREGS to get shadow stack regs		    
+                    ldx       R$X,x               setfont: source is x
+		    ldy	      #GrfMem+gr.PDAT
+		    stx	      $1190
+		    sty	      $1192
+		    lbsr      GMapAddr2Blk
+		    lda	      #1
+		    sta	      MMU_MEM_CTRL
+*		    ldy	      #$0104
+*		    sty	      MMU_SLOT_3
 		    stx	      $12C0
+		    ldx       #GrfMem+gr.PDRGS
                     ldd       R$Y,x               get the char# and mulitply by 8
 		    std	      $12B0
 		    lslb      			  because 8 bytes per character
@@ -176,40 +183,31 @@ font1@              leay      FONT_1_OFFSET,y     add offset for font 1
 font0@              leay      FONT_0_OFFSET,y     add offset for font 0
 cont@               leay      $4000,y
 		    pshs      y			  push character offset on stack
-		    lda	      #FONT_BLK		  map in font block
-		    sta	      MMU_SLOT_2
-mapgood@            ldy       >D.Proc
-		    sty	      $1294
-		    leay      P$DATImg,y
-                    ldx       R$X,x               setfont: source is x
-		    stx	      $1290
-		    sty	      $1292
-		    lbsr      GMapAddr2Blk
-		    tfr	      x,d
+mapgood@            ldd	      R$X,x
 		    anda      #%00011111
 		    tfr       d,x
-		    tst	      2,s
+		    stx	      $11A0
+		    tst	      3,s
 		    beq	      getfont@
 		    puls      y
 		    leax      $2000,x        x=process memory
                     bra       contfont@
 getfont@            leay      $2000,x
 		    puls      x
+		    stx	      $11AC
+		    sty	      $11AE
 contfont@           ldb       #4                  copy 8 bytes
 		    pshs      u
-		    stx	      $1280
-		    sty	      $1282
+		    stx	      $11B0
+		    sty	      $11B2
 copy@		    ldu	      ,x++
 		    stu	      ,y++
 		    decb
 		    bne	      copy@
 end@                puls      u                   pull blk addr and getset flag
-*		    lbsr      MMURestore
-		    lda	      #1
-		    sta	      MMU_MEM_CTRL
 		    puls      cc
                     puls      a
-                    jmp       >GrfMod+SysRet
+debugend@           jmp       >GrfMod+SysRet
 
 ;;; SS.FntLoadF
 ;;;
@@ -317,14 +315,7 @@ quit@               jmp       >GrfMod+SysRet
 ;;; Exit:  R$X = Vicky_MCR Low Byte
 ;;;        R$Y = Vicky_MCR High Byte
 ;;;
-GSDScrn             pshs      cc
-		    orcc      #IntMasks
-		    stu	      $12F2
-		    lda	      #%10010001
-		    sta	      MMU_MEM_CTRL
-		    ldy	      #$0104
-		    sty	      MMU_SLOT_3
-		    ldx       >GrfMem+gr.PDRGS 
+GSDScrn             ldx       #GrfMem+gr.PDRGS 
 	            clr       R$X,x               load MCR low byte
                     clr       R$Y,x               load MCR high byte
                     ldy       #TXT.Base
@@ -332,9 +323,7 @@ mcrlbit@            lda       MASTER_CTRL_REG_L,y   store new MCR low byte
                     sta       R$X+1,x                 store copy in driver variables
 mcrhbit@            ldb       MASTER_CTRL_REG_H,y   store new MCR High byte     
                     stb       R$Y+1,x           store copy in driver variables
-		    lbsr      MMURestore
-end@		    puls      cc
-                    clrb
+end@		    clrb
                     jmp       >GrfMod+SysRet
 
 ;;;  SS.DScrn
@@ -347,27 +336,19 @@ end@		    puls      cc
 ;;;
 ;;; Exit:  Nothing. This just sets the register and updates driver variables
 ;;;
-SSDScrn		    pshs      cc
-		    orcc      #IntMasks
-		    lda	      #%10010001
-		    sta	      MMU_MEM_CTRL
-		    ldy	      #$0104
-		    sty	      MMU_SLOT_3
-		    ldx       >GrfMem+gr.PDRGS 
+SSDScrn		    ldx       #GrfMem+gr.PDRGS 
 	            lda       R$X+1,x               load MCR low byte
                     ldb       R$Y+1,x               load MCR high byte
                     ldy       #TXT.Base
 mcrlbit@            cmpa      #FX_OMIT              If omit, don't change
                     beq       mcrhbit@
                     sta       MASTER_CTRL_REG_L,y   store new MCR low byte
-                    sta       V.V_MCR,u             store copy in driver variables
+*                    sta       V.V_MCR,u             store copy in driver variables
 mcrhbit@            cmpb      #FT_OMIT              if omit, don't change
                     beq       end@
                     stb       MASTER_CTRL_REG_H,y   store new MCR High byte     
-                    stb       V.V_MCR+1,u           store copy in driver variables
-		    lbsr      MMURestore
-end@		    puls      cc
-		    clrb
+*                    stb       V.V_MCR+1,u           store copy in driver variables
+end@		    clrb
                     jmp       >GrfMod+SysRet
 
 
@@ -439,13 +420,26 @@ GMapAddr2Blk	    pshs      d,x		  x=address in process;y=Process DAT
 		    lsra
 		    anda      #%0001110
 		    inca
-		    sta	      $1273
-		    sty	      $1274
+		    sta	      $1194
+		    sty	      $1196
 		    lda	      a,y
 		    sta	      MMU_SLOT_1
-		    sta	      $1270
+		    clr	      GrfMem+gr.DATImg+2
+		    sta	      GrfMem+gr.DATImg+3
+		    sta	      $1198
 		    puls      x,d,pc
-		    
+
+;;; GetXYU - get R$XYU from calling process
+;;; Put values into global variable for use in GrfDrv
+;;; Caller's variable exist in Path Desciptor table in Task 0
+;;; Map in correct block and copy data
+GetABXYU		    
+
+
+;;; PutABXYU - put R$ABXYU back into calling process
+;;; 
+PutABXYU
+
 MMUKrnVars          lda	      #%10010001
 		    sta	      MMU_MEM_CTRL
 		    ldy	      #$0104

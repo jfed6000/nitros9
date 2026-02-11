@@ -215,8 +215,8 @@ GrfMod		    equ	      $C000	; Logical location of module in task 1
 * GrfMem Offsets - Corrected for 8-byte DAT
 *******************************************************************
                     org       0
-gr.DATImg           RMB       16        ; DAT image (16 BYTES)
-gr.Stack            RMB       2         ; Stack pointer (2 bytes)
+gr.DATImg           RMB       16        ; GrfDrv DAT image (16 BYTES)
+gr.Stack            RMB       2         ; GrfDrv Stack pointer (2 bytes)
 gr.SysStk           RMB       2         ; Saved System Stack (during flip)
 gr.Entry            RMB       2         ; GrfDrv entry point (2 bytes)
 gr.Busy             RMB       1         ; Busy flag (1 byte)
@@ -224,7 +224,10 @@ gr.CurScr           RMB       1         ; Current screen (1 byte)
 gr.Error            RMB       1         ; Error code (1 byte)
 gr.Flags            RMB       1         ; Flags (1 byte)
 gr.Temp             RMB       1         ; Temp Variable
-gr.PDRGS	    RMB       2
+gr.RGSADR	    RMB	      2		; Address of PD.RGS
+gr.PDRGS	    RMB       R$Size	; GrfDrv copy of PD.RGS
+gr.PDAT		    RMB	      16
+gr.PTask	    RMB	      1		; Virtual Task Number
 
 * Screen table (5 screens × 16 bytes = 80 bytes)
 gr.ScrTbl           rmb       80        ; Screen table base
@@ -241,7 +244,7 @@ E$Param             equ       $05
 GF.Init             equ       $00       ; Initialize
 GF.Term             equ       $02       ; Terminate
 GF.SetScr           equ       $04       ; Set screen
-GF.GetScr           equ       $06       ; Get screen
+GF.GetScr           equ       $06       ; Get screenc
 GF.Write            equ       $08       ; Write
 GF.Read             equ       $0A       ; Read
 GF.GetStat          equ       $0C       ; GetStat
