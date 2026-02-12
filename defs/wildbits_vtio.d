@@ -209,7 +209,7 @@ D.WBKKyDn           RMB       1
 
 GrfMem              equ       $1100     ; GrfDrv data area (256 bytes)
 F256Gfx             equ       $1200     ; F256-specific graphics data (256 bytes)
-GrfMod		    equ	      $C000	; Logical location of module in task 1
+GrfMod              equ       $C000     ; Logical location of module in task 1
 
 *******************************************************************
 * GrfMem Offsets - Corrected for 8-byte DAT
@@ -224,10 +224,10 @@ gr.CurScr           RMB       1         ; Current screen (1 byte)
 gr.Error            RMB       1         ; Error code (1 byte)
 gr.Flags            RMB       1         ; Flags (1 byte)
 gr.Temp             RMB       1         ; Temp Variable
-gr.RGSADR	    RMB	      2		; Address of PD.RGS
-gr.PDRGS	    RMB       R$Size	; GrfDrv copy of PD.RGS
-gr.PDAT		    RMB	      16
-gr.PTask	    RMB	      1		; Virtual Task Number
+gr.RGSADR           RMB       2         ; Address of PD.RGS
+gr.PDRGS            RMB       R$Size    ; GrfDrv copy of PD.RGS
+gr.PDAT             RMB       16
+gr.PTask            RMB       1         ; Virtual Task Number
 
 * Screen table (5 screens × 16 bytes = 80 bytes)
 gr.ScrTbl           rmb       80        ; Screen table base

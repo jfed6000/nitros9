@@ -29,14 +29,19 @@ name                fcs       /grfdrv256/
 *******************************************************************
 entry               equ       *
 * Set DP to GrfMem area
+* CoCo3 version sets this to $11 so that can directly address gr. vars
+* However, then you can't access global vars.
 *                    pshs      a
 *                    lda       #GrfMem/256 ; DP = $11
 *                    tfr       a,dp
 *                    puls      a
 		     tfr      0,dp
 
- *                   lds       >GrfMem+gr.Stack
- * Dispatch to function
+*Where did this come from, and then where is the stack for GrfDrv?
+* Coco GrfDrv does not move stack from D.Flip1, which is set to
+* D.CCStk in vtio CallGrfDrv which is supposed to be $2000 and set in krn.asm
+*                   lds       >GrfMem+gr.Stack
+* Dispatch to function
                     leay      FuncTbl,pcr
                     aslb                ; B*2 for word table
                     jmp       [b,y]

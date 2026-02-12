@@ -689,8 +689,6 @@ datcopy		    ldu	      ,x++
 *		    
                     ldx       >GrfMem+gr.Entry
                     orcc      #Entire
-                    beq       nogrf     ; Not initialized
-
 * Check if already in grfdrv (prevent recursion)
 *                   tst       >GrfMem+gr.Busy
 *                   bne       gbusy               ; Already busy
