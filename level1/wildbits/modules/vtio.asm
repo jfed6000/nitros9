@@ -1685,23 +1685,23 @@ GSMouse
 *		    rts
 *
                     ldb       #2
-		    pshs      x,y
+                    pshs      x,y
                     lbsr      CallGrfDrv
-		    puls      x,y
+                    puls      x,y
                     lbra      writevalues
 
 GSDScrn             ldb       #3
-		    pshs      x,y
+                    pshs      x,y
                     lbsr      CallGrfDrv
-		    puls      x,y
+                    puls      x,y
                     lbra      writevalues
 
 GSFntChar           ldb       #4
-		    pshs      x,y
+                    pshs      x,y
                     ldy       R$Y,x
                     sty       $12E0
                     lbsr      CallGrfDrv
-		    puls      x,y
+                    puls      x,y
                     lbra      writevalues
 
 
@@ -1892,15 +1892,15 @@ SSFntLoadF          ldb       #5
                     lbra      CallGrfDrv
 
 SSFntChar           ldb       #6
-		    pshs      x,y
+                    pshs      x,y
                     lbsr      CallGrfDrv
-		    puls      x,y
+                    puls      x,y
                     lbra      writevalues
 
 SSDScrn             ldb       #7
-		    pshs      x,y
+                    pshs      x,y
                     lbsr      CallGrfDrv
-		    puls      x,y
+                    puls      x,y
                     lbra      writevalues
 
 SSTone              ldy       R$Y,x     check for 0-1023 range

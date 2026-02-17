@@ -229,9 +229,14 @@ gr.PDRGS            RMB       R$Size    ; GrfDrv copy of PD.RGS
 gr.PDAT             RMB       16
 gr.PTask            RMB       1         ; Virtual Task Number
 
-* Screen table (5 screens × 16 bytes = 80 bytes)
-gr.ScrTbl           rmb       80        ; Screen table base
-gr.ScrSz            equ       16        ; Size per entry
+* Screen table (8 screens × 3 bytes = 24 bytes)
+gr.TermSz           equ       3         ; Size per entry
+gr.TermTbl          equ       24        ; Screen table base
+		    org	      0
+T.Active	    rmb	      1	        ; Acrive Flag - only one screen should be active
+T.Ptr		    rmb	      2		; Pointer to Static Vars (V. vars ) for screen
+
+
 
 * Rest available for F256-specific data
 gr.UserData         equ       $60       ; User area (~160 bytes to $FF

@@ -225,7 +225,8 @@ debugend@           jmp       >GrfMod+SysRet
 ;;; Exit:  B = non-zero error code
 ;;;       CC = carry flag clear to indicate success
 
-SSFntLoadF          lbra      quit@
+SSFntLoadF
+*                    lbra      quit@
                     ldx       >GrfMem+gr.PDRGS
                     ldy       R$Y,x
                     beq       font0@
@@ -236,21 +237,24 @@ storeaddr@          pshs      y         store font offset on stack [O]
                     leas      -2,s      reserve 2 bytes on stack for mapped addr [MO]
 * s= ADDR|OFFSET|
 *                   ****      map block into user dat and store address on stack
-                    pshs      x,u       preserve x,u
+                    pshs      x,cc       preserve x,u
+		    orcc      #IntMasks
                     ldx       #FONT_BLK map in $C1
-                    ldb       #$01      map 1 block at address x (x set on entry)
-                    os9       F$MapBlk
-                    bcc       mapgood@  if success, then continue
-                    puls      x,u       else: error
-                    lbra      error@
-mapgood@            stu       4,s       store mapped address on stack [XUMO]
-                    puls      x,u       restore x,u [MO]
+		    stx	      MMU_SLOT_1
+                    puls      x,cc       restore x,u [MO]
+		    bra	      errorclose@
+                    ldb	      <D.Proc
+		    pshs      b
+		    clr	      <D.Proc
+		    inc	      <D.Proc
 *                   ****      open file to read
 endcopy@            ldx       R$X,x     pointer to file name in caller memory
                     lda       #READ.    READ access mode
                     os9       I$Open
+		    puls      b
+		    stb	      <D.Proc
                     bcc       modulecheck@
-                    bra       errormap@
+                    bra       error@
 * Verify that file is module.
 * Load file's first two bytes onto the stack to verify and check for $87DC
 modulecheck@        leas      -2,s      add space to stack to store 2 bytes [DMO]
@@ -276,32 +280,33 @@ readaddr@           leas      -2,s      add 2 bytes stack storage [DUMO]
                     leax      ,s        use the 2 bytes in stack to store addr
                     lbsr      Rd2B2Mem  read 2 bytes from file
                     bcc       seekaddr@ if success, seek to data address
-                    leas      4,s       else: clean stack and error [MO]
+                    leas      2,s       else: clean stack and error [MO]
                     bra       errorclose@
 * s= addr|u|addr|offset
 seekaddr@           puls      u         load u with low byte addr [UMO]
 * s= u|addr|offset
                     ldx       #0        load x high byte
                     os9       I$Seek
-                    puls      u         restore u [MO]
+*                    puls      u         restore u [MO]
 * s=addr|offset
 *                   ldx       ,s                   ldx with mapblock address
                     pshs      a         store path# on stack [AMO]
                     ldd       1,s       put offset in d
-                    addd      3,s
+                    addd      #$2000
                     tfr       d,x
 *                   leax      d,x                  add offset to x
                     puls      a         restore path# [MO]
+		    ldb	      <D.Proc
+		    pshs      b
+		    ldb	      #1
+		    stb	      <D.Proc
                     ldy       #$800     read 2K of font data into it
                     os9       I$Read    a=path x=addr y=#bytes
+		    puls      b
+		    stb	      <D.Proc
 errorclose@         pshs      b         [BMO]
                     os9       I$Close   close the file
                     puls      b         [MO]
-errormap@           ldu       ,s
-                    pshs      b
-                    ldb       #$01
-                    os9       F$ClrBlk  Clear block from user space
-                    puls      b
 error@              leas      4,s       clear stack
                     tstb
                     beq       quit@
@@ -400,13 +405,13 @@ SysRet
 ;;;
 Rd2B2Mem            pshs      cc        push cc and mask interrupts
                     orcc      #IntMasks
-                    ldy       <D.Proc   ldy with current process descriptor
-                    pshs      y         store current proc descriptor on stack
-                    ldy       <D.SysPrc copy system proc descriptor to current
-                    sty       <D.Proc
+                    ldb       <D.Proc   ldy with current process descriptor
+                    pshs      b         store current proc descriptor on stack
+                    ldb       #1  copy system proc descriptor to current
+                    stb       <D.Proc
                     ldy       #$02      read 2 bytes from file
                     os9       I$Read
-                    puls      y         pull current proc descriptor from stack
+                    puls      b         pull current proc descriptor from stack
                     sty       <D.Proc   and save it back
                     bcs       errnomap@ if I$Read error, then handle error
                     puls      cc,pc     if no error, pull cc and return
