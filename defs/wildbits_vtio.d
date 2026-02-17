@@ -232,9 +232,9 @@ gr.PTask            RMB       1         ; Virtual Task Number
 * Screen table (8 screens × 3 bytes = 24 bytes)
 gr.TermSz           equ       3         ; Size per entry
 gr.TermTbl          equ       24        ; Screen table base
-		    org	      0
-T.Active	    rmb	      1	        ; Acrive Flag - only one screen should be active
-T.Ptr		    rmb	      2		; Pointer to Static Vars (V. vars ) for screen
+                    org       0
+T.Active            rmb       1         ; Acrive Flag - only one screen should be active
+T.Ptr               rmb       2         ; Pointer to Static Vars (V. vars ) for screen
 
 
 

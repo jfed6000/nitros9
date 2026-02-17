@@ -237,22 +237,22 @@ storeaddr@          pshs      y         store font offset on stack [O]
                     leas      -2,s      reserve 2 bytes on stack for mapped addr [MO]
 * s= ADDR|OFFSET|
 *                   ****      map block into user dat and store address on stack
-                    pshs      x,cc       preserve x,u
-		    orcc      #IntMasks
+                    pshs      x,cc      preserve x,u
+                    orcc      #IntMasks
                     ldx       #FONT_BLK map in $C1
-		    stx	      MMU_SLOT_1
-                    puls      x,cc       restore x,u [MO]
-		    bra	      errorclose@
-                    ldb	      <D.Proc
-		    pshs      b
-		    clr	      <D.Proc
-		    inc	      <D.Proc
+                    stx       MMU_SLOT_1
+                    puls      x,cc      restore x,u [MO]
+                    bra       errorclose@
+                    ldb       <D.Proc
+                    pshs      b
+                    clr       <D.Proc
+                    inc       <D.Proc
 *                   ****      open file to read
 endcopy@            ldx       R$X,x     pointer to file name in caller memory
                     lda       #READ.    READ access mode
                     os9       I$Open
-		    puls      b
-		    stb	      <D.Proc
+                    puls      b
+                    stb       <D.Proc
                     bcc       modulecheck@
                     bra       error@
 * Verify that file is module.
@@ -296,14 +296,14 @@ seekaddr@           puls      u         load u with low byte addr [UMO]
                     tfr       d,x
 *                   leax      d,x                  add offset to x
                     puls      a         restore path# [MO]
-		    ldb	      <D.Proc
-		    pshs      b
-		    ldb	      #1
-		    stb	      <D.Proc
+                    ldb       <D.Proc
+                    pshs      b
+                    ldb       #1
+                    stb       <D.Proc
                     ldy       #$800     read 2K of font data into it
                     os9       I$Read    a=path x=addr y=#bytes
-		    puls      b
-		    stb	      <D.Proc
+                    puls      b
+                    stb       <D.Proc
 errorclose@         pshs      b         [BMO]
                     os9       I$Close   close the file
                     puls      b         [MO]
@@ -407,7 +407,7 @@ Rd2B2Mem            pshs      cc        push cc and mask interrupts
                     orcc      #IntMasks
                     ldb       <D.Proc   ldy with current process descriptor
                     pshs      b         store current proc descriptor on stack
-                    ldb       #1  copy system proc descriptor to current
+                    ldb       #1        copy system proc descriptor to current
                     stb       <D.Proc
                     ldy       #$02      read 2 bytes from file
                     os9       I$Read
