@@ -260,6 +260,20 @@ GF.Blit             equ       $14       ; Blit
 GF.Fill             equ       $16       ; Fill
 GF.Line             equ       $18       ; Line
 
+*******************************************************************
+* 16K termainal storage for switching screens = excactly 16384
+*******************************************************************
+		    org	      0
+T.TXT		    rmb	      4800	; 80x60 text screen
+T.TXTCOLOR	    rmb	      4800	; 80x60 color matrix
+T.FLUT	            rmb       64	; foreground LUT
+T.BLUT	            rmb       64	; background LUT
+T.CLUT0		    rmb	      1024	; CLUT 0 Copy
+T.CLUT1		    rmb	      1024	; CLUT 1 Copy
+T.CLUT2		    rmb	      1024	; CLUT 2 Copy
+T.CLUT3		    rmb	      1024 	; CLUT 3 Copy
+T.SPRITE0	    rmb       512	; Sprite Register Copy
+T.FONT0		    rmb	      2048
 
 * SS.KySns bit locations
 SHIFTBIT            equ       %00000001
