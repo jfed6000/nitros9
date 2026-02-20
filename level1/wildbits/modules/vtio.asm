@@ -1981,93 +1981,93 @@ ex@                 rts
 * Text MCR and registers, Bitmap, TileMap and TileSets
 *
 CopyRtoV
-		    pshs      u,y
-		    ldy	      V.MCR,u
-		    ldu	      #TXT.Base
-		    ldd	      #15
-		    lbsr      CpyBlk
-		    puls      u,y
-		    
+                    pshs      u,y
+                    ldy       V.MCR,u
+                    ldu       #TXT.Base
+                    ldd       #15
+                    lbsr      CpyBlk
+                    puls      u,y
+
                     pshs      cc,x,y
-                    orcc      #IntMasks           mask interrupts
+                    orcc      #IntMasks mask interrupts
                     lda       MAPSLOT
                     pshs      a
-                    lda       #$C0                get the MMU Block for bitmap addresses
-                    sta       MAPSLOT             store it in the MMU slot to map it in
-* Bitmap copy - variables should already be there when bitmap set up		    
-* Tile Map Copy		    
+                    lda       #$C0      get the MMU Block for bitmap addresses
+                    sta       MAPSLOT   store it in the MMU slot to map it in
+* Bitmap copy - variables should already be there when bitmap set up
+* Tile Map Copy
                     pshs      u
-		    leay      V.TS0AddrH,u		  y=address of vtio vars
-		    ldu       $1180		  x=logical address for tile maps
-		    leau      MAPSLOT,u		  
+                    leay      V.TS0AddrH,u y=address of vtio vars
+                    ldu       $1180     x=logical address for tile maps
+                    leau      MAPSLOT,u
 
-		    ldd	      #28
-		    lbsr      CpyBlk
-		    puls      u
+                    ldd       #28
+                    lbsr      CpyBlk
+                    puls      u
 * Tile Set Copy
                     pshs      u
-		    leay      V.TM0,u		  y=address of vtio vars
-		    ldu       $1100		  x=logical address for tile maps
-		    leau      MAPSLOT,u		  
+                    leay      V.TM0,u   y=address of vtio vars
+                    ldu       $1100     x=logical address for tile maps
+                    leau      MAPSLOT,u
 
-		    ldd	      #36
-		    lbsr      CpyBlk
-		    puls      u
-		    puls      cc,x,y,pc
+                    ldd       #36
+                    lbsr      CpyBlk
+                    puls      u
+                    puls      cc,x,y,pc
 
 *******************************************************************
 * CopyRtoV - copy V.XXX variables to screen registers
 * Text MCR and registers, Bitmap, TileMap and TileSets
 *
-CopyVtoR	    pshs      u,y		  text setting for MCR include
-		    ldy	      #TXT.Base		  MCR, Layer Ctrl, Borders and Background
-		    ldu	      V.MCR,u
-		    ldd       #15
-		    lbsr      CpyBlk
+CopyVtoR            pshs      u,y       text setting for MCR include
+                    ldy       #TXT.Base MCR, Layer Ctrl, Borders and Background
+                    ldu       V.MCR,u
+                    ldd       #15
+                    lbsr      CpyBlk
 *                   **** Store physical address of bitmap in TinyVicky BM0, BM1 or BM2
-		    puls      u,y
+                    puls      u,y
                     pshs      cc,x,y
-                    orcc      #IntMasks           mask interrupts
+                    orcc      #IntMasks mask interrupts
                     lda       MAPSLOT
                     pshs      a
-                    lda       #$C0                get the MMU Block for bitmap addresses
-                    sta       MAPSLOT             store it in the MMU slot to map it in
+                    lda       #$C0      get the MMU Block for bitmap addresses
+                    sta       MAPSLOT   store it in the MMU slot to map it in
 * BitMap Copy
-		    lda	      #3		  copy 3 bitmaps
-		    pshs      a			  store counter on stack
-		    ldx	      #$1000		  x=logical address for $C0
-		    leax      MAPSLOT,x		  
-		    leay      V.BM0Cl_EN,u	  y=address of vtio vars
-		    
-BMLoop@		    ldd	      ,y++       	  load a=CLUT,Enable b=Block# for bitmap 0
-		    sta	      ,x+		  store CLUT, emable in C0_1000
-		    lbsr      Blk2Addr	          convert block# in b to high bits of address
-		    std	      ,x++		  store high bitss in C0_1001-1002
-		    clr	      ,x		  clr C0_1003
-		    leax      5,x		  bmitmap registers are at 1000,1008,1010, so add 5
-		    dec	      ,s		  decrement counter on stack
-		    bne	      BMLoop@		  not zero, loop
-		    puls      a			  clean stack
-* Tile Map Copy		    
+                    lda       #3        copy 3 bitmaps
+                    pshs      a         store counter on stack
+                    ldx       #$1000    x=logical address for $C0
+                    leax      MAPSLOT,x
+                    leay      V.BM0Cl_EN,u y=address of vtio vars
+
+BMLoop@             ldd       ,y++      load a=CLUT,Enable b=Block# for bitmap 0
+                    sta       ,x+       store CLUT, emable in C0_1000
+                    lbsr      Blk2Addr  convert block# in b to high bits of address
+                    std       ,x++      store high bitss in C0_1001-1002
+                    clr       ,x        clr C0_1003
+                    leax      5,x       bmitmap registers are at 1000,1008,1010, so add 5
+                    dec       ,s        decrement counter on stack
+                    bne       BMLoop@   not zero, loop
+                    puls      a         clean stack
+* Tile Map Copy
                     pshs      u
-		    ldy	      $1180		  x=logical address for tile maps
-		    leay      MAPSLOT,y		  
-		    leau      V.TS0AddrH,u		  y=address of vtio vars
-		    ldd	      #28
-		    lbsr      CpyBlk
-		    puls      u
+                    ldy       $1180     x=logical address for tile maps
+                    leay      MAPSLOT,y
+                    leau      V.TS0AddrH,u y=address of vtio vars
+                    ldd       #28
+                    lbsr      CpyBlk
+                    puls      u
 * Tile Set Copy
                     pshs      u
-		    ldy	      $1100		  x=logical address for tile maps
-		    leay      MAPSLOT,y		  
-		    leau      V.TM0,u		  y=address of vtio vars
-		    ldd	      #36
-		    lbsr      CpyBlk
-		    puls      u
-		    
-		    puls      a
-		    sta	      MAPSLOT
-		    puls      cc,x,y,pc
+                    ldy       $1100     x=logical address for tile maps
+                    leay      MAPSLOT,y
+                    leau      V.TM0,u   y=address of vtio vars
+                    ldd       #36
+                    lbsr      CpyBlk
+                    puls      u
+
+                    puls      a
+                    sta       MAPSLOT
+                    puls      cc,x,y,pc
 
 
 * This is from L1 Coco vtio
@@ -2079,38 +2079,38 @@ BMLoop@		    ldd	      ,y++       	  load a=CLUT,Enable b=Block# for bitmap 0
 *  Exit: U=Ptr to end of source copy+1
 *        Y=Ptr to end of dest copy+1
 *        D=NOTE: NEW CODE WILL HAVE D AS END ADDRESS OF SOURCE OF COPY
-CpyBlk              leax      d,u                 Calculate source end address
-                    pshs      x                   Save on stack to compare with so we know when to stop
-                    andb      #$03                Check if we have odd bytes leftover (1-3)
-                    beq       CpyLpSt             No, skip to check if copy is done, and stack blast 4 byte chunks if yes
-CpyLp2              lda       ,u+                 (6) Copy extra 1-3 bytes
-                    sta       ,y+                 (6)
-                    decb                          (2)
-                    bne       CpyLp2              (3)
-                    bra       CpyLpSt             Start with cmpu to end of copy (if copy was only 1-3 bytes, we are done already)
+CpyBlk              leax      d,u       Calculate source end address
+                    pshs      x         Save on stack to compare with so we know when to stop
+                    andb      #$03      Check if we have odd bytes leftover (1-3)
+                    beq       CpyLpSt   No, skip to check if copy is done, and stack blast 4 byte chunks if yes
+CpyLp2              lda       ,u+       (6) Copy extra 1-3 bytes
+                    sta       ,y+       (6)
+                    decb                (2)
+                    bne       CpyLp2    (3)
+                    bra       CpyLpSt   Start with cmpu to end of copy (if copy was only 1-3 bytes, we are done already)
 
 * Now, copy all 4 byte chunks. End address remains the same, so we can eliminate some stuff we had before
-CpyLp               pulu      d,x                 Get 4 bytes from source (ascending order)
-                    std       ,y++                Copy to destination
+CpyLp               pulu      d,x       Get 4 bytes from source (ascending order)
+                    std       ,y++      Copy to destination
                     stx       ,y++
-CpyLpSt             cmpu      ,s                  Done 4 byte blast copy?
-                    blo       CpyLp               No, keep doing until done
-                    puls      pc,d                Get end address of source copy and return
+CpyLpSt             cmpu      ,s        Done 4 byte blast copy?
+                    blo       CpyLp     No, keep doing until done
+                    puls      pc,d      Get end address of source copy and return
 
 
 * Block to Address: Convert block# to high 16 bits in D
 * b = block#, a = 0.  d = high 16 bits of address
 * Try to replace with math coprocessor multiply in Vicky?
-Blk2Addr            clra                          clear a, block # is in b
-                    lslb                          multiply block# by $20 to get top 16 bits x2
-                    rola                          of physical address (ex $3F*$20 = $07E0)
-                    lslb                          x4
-                    rola                          roll carry into a
-                    lslb                          x8
-                    rola                          roll carry into a
-                    lslb                          x16
-                    rola                          roll carry into a
-                    lslb                          x32 ($20)
+Blk2Addr            clra                clear a, block # is in b
+                    lslb                multiply block# by $20 to get top 16 bits x2
+                    rola                of physical address (ex $3F*$20 = $07E0)
+                    lslb                x4
+                    rola                roll carry into a
+                    lslb                x8
+                    rola                roll carry into a
+                    lslb                x16
+                    rola                roll carry into a
+                    lslb                x32 ($20)
                     rola
                     rts
 

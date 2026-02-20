@@ -92,7 +92,7 @@ V.V_MCR             RMB       2         2 bytes for Vicky Control Register
 * See SS.PScrn in vtio
 
 V.V_LayerCTL        RMB       2
-V.BordBack	    RMB	      11
+V.BordBack          RMB       11
 * BITMAPS
 * Store starting page for bitmaps, and CLUT# and bitmap enable bits.  Must be in first 512K RAM.
 * $01_0000-$07_FFFF (OS9 Memory Blocks $01-$3F)
@@ -125,35 +125,35 @@ V.CLUT              RMB       1         which CLUTs are active 00001111
 * A tile map could be 2.4K (40x30) to 132K (256x256)
 
 V.TM0               RMB       1         bit4 is yile size (1=8x8,0=16x16) bit0 is enable
-V.TM0AddrH	    RMB	      1
-V.TM0AddrM	    RMB	      1
-V.TM0AddrL	    RMB	      1
+V.TM0AddrH          RMB       1
+V.TM0AddrM          RMB       1
+V.TM0AddrL          RMB       1
 V.TM0MapX           RMB       1         map size X (max 255)
-V.TM0RSRV1          RMB	      1
+V.TM0RSRV1          RMB       1
 V.TM0MapY           RMB       1         map size Y (max 255)
-V.TM0RESRV2	    RMB	      1
+V.TM0RESRV2         RMB       1
 V.TM0ScrlX          RMB       2         2 bytes for scroll X info
 V.TM0ScrlY          RMB       2         2 bytes for scroll Y info
 
 V.TM1               RMB       1         bit4 is yile size (1=8x8,0=16x16) bit0 is enable
-V.TM1AddrH	    RMB	      1
-V.TM1AddrM	    RMB	      1
-V.TM1AddrL	    RMB	      1
+V.TM1AddrH          RMB       1
+V.TM1AddrM          RMB       1
+V.TM1AddrL          RMB       1
 V.TM1MapX           RMB       1         map size X (max 255)
-V.TM1RSRV1          RMB	      1
+V.TM1RSRV1          RMB       1
 V.TM1MapY           RMB       1         map size Y (max 255)
-V.TM1RESRV2	    RMB	      1
+V.TM1RESRV2         RMB       1
 V.TM1ScrlX          RMB       2         2 bytes for scroll X info
 V.TM1ScrlY          RMB       2         2 bytes for scroll Y info
 
 V.TM2               RMB       1         bit4 is yile size (1=8x8,0=16x16) bit0 is enable
-V.TM2AddrH	    RMB	      1
-V.TM2AddrM	    RMB	      1
-V.TM2AddrL	    RMB	      1
+V.TM2AddrH          RMB       1
+V.TM2AddrM          RMB       1
+V.TM2AddrL          RMB       1
 V.TM2MapX           RMB       1         map size X (max 255)
-V.TM2RSRV1          RMB	      1
+V.TM2RSRV1          RMB       1
 V.TM2MapY           RMB       1         map size Y (max 255)
-V.TM2RESRV2	    RMB	      1
+V.TM2RESRV2         RMB       1
 V.TM2ScrlX          RMB       2         2 bytes for scroll X info
 V.TM2ScrlY          RMB       2         2 bytes for scroll Y info
 
@@ -165,44 +165,44 @@ V.TM2Blk            RMB       1         starting block# of tile set
 * Tile Sets are either 16K (8x8) or 64K (16x16)
 
 
-V.TS0AddrH	    RMB	      1
-V.TS0AddrM	    RMB	      1
-V.TS0AddrL	    RMB	      1
+V.TS0AddrH          RMB       1
+V.TS0AddrM          RMB       1
+V.TS0AddrL          RMB       1
 V.TS0SQR            RMB       1         square or linear (bit 3)
 
-V.TS1AddrH	    RMB	      1
-V.TS1AddrM	    RMB	      1
-V.TS1AddrL	    RMB	      1
+V.TS1AddrH          RMB       1
+V.TS1AddrM          RMB       1
+V.TS1AddrL          RMB       1
 V.TS1SQR            RMB       1         square or linear (bit 3)
 
-V.TS2AddrH	    RMB	      1
-V.TS2AddrM	    RMB	      1
-V.TS2AddrL	    RMB	      1
+V.TS2AddrH          RMB       1
+V.TS2AddrM          RMB       1
+V.TS2AddrL          RMB       1
 V.TS2SQR            RMB       1         square or linear (bit 3)
 
-V.TS3AddrH	    RMB	      1
-V.TS3AddrM	    RMB	      1
-V.TS3AddrL	    RMB	      1
+V.TS3AddrH          RMB       1
+V.TS3AddrM          RMB       1
+V.TS3AddrL          RMB       1
 V.TS3SQR            RMB       1         square or linear (bit 3)
 
-V.TS4AddrH	    RMB	      1
-V.TS4AddrM	    RMB	      1
-V.TS4AddrL	    RMB	      1
+V.TS4AddrH          RMB       1
+V.TS4AddrM          RMB       1
+V.TS4AddrL          RMB       1
 V.TS4SQR            RMB       1         square or linear (bit 3)
 
-V.TS5AddrH	    RMB	      1
-V.TS5AddrM	    RMB	      1
-V.TS5AddrL	    RMB	      1
+V.TS5AddrH          RMB       1
+V.TS5AddrM          RMB       1
+V.TS5AddrL          RMB       1
 V.TS5SQR            RMB       1         square or linear (bit 3)
 
-V.TS6AddrH	    RMB	      1
-V.TS6AddrM	    RMB	      1
-V.TS6AddrL	    RMB	      1
+V.TS6AddrH          RMB       1
+V.TS6AddrM          RMB       1
+V.TS6AddrL          RMB       1
 V.TS6SQR            RMB       1         square or linear (bit 3)
 
-V.TS7AddrH	    RMB	      1
-V.TS7AddrM	    RMB	      1
-V.TS7AddrL	    RMB	      1
+V.TS7AddrH          RMB       1
+V.TS7AddrM          RMB       1
+V.TS7AddrL          RMB       1
 V.TS7SQR            RMB       1         square or linear (bit 3)
 
 
