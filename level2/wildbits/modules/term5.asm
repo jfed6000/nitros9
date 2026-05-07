@@ -47,13 +47,14 @@ rev                 set       $00
                     fcb       C$QUIT    quit character
                     fcb       C$BSP     backspace echo character
                     fcb       C$BELL    line overflow character (bell)
-                    fcb       $00       init value for dev ctl reg
+                    fcb       $80       init value for dev ctl reg
                     fcb       $00       baud rate
                     fdb       name      copy of descriptor name address
                     fcb       $00       acia xon char
                     fcb       $00       acia xoff char
                     fcb       40        (szx) number of columns for display
                     fcb       24        (szy) number of rows for display
+		    fcb	      5		window number
 initsize            equ       *
 
 name                fcs       /TERM5/

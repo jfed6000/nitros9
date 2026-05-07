@@ -45,9 +45,15 @@ SC16550	 = $(MD)/sc16550.dr $(MD)/t0_sc16550.dd
 WIZFI = $(MD)/wizfi.dr $(MD)/wz.dd $(MD)/wz0.dd $(MD)/wz1.dd $(MD)/wz2.dd $(MD)/wz3.dd
 
 # SCF video terminal
-SCVT_K2  = $(MD)/vtio.dr $(MD)/keydrv_k2.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt
-SCVT_K   = $(MD)/vtio.dr $(MD)/keydrv_k.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt
-SCVT_JR  = $(MD)/vtio.dr $(MD)/keydrv_ps2.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt
+SCVT_K2  = $(MD)/vtio.dr $(MD)/keydrv_k2.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt \
+		$(MD)/term0.dt $(MD)/term1.dt $(MD)/term2.dt $(MD)/term3.dt \
+		$(MD)/term4.dt $(MD)/term5.dt $(MD)/term6.dt $(MD)/term7.dt 
+SCVT_K   = $(MD)/vtio.dr $(MD)/keydrv_k.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt \
+		$(MD)/term0.dt $(MD)/term1.dt $(MD)/term2.dt $(MD)/term3.dt \
+		$(MD)/term4.dt $(MD)/term5.dt $(MD)/term6.dt $(MD)/term7.dt 
+SCVT_JR  = $(MD)/vtio.dr $(MD)/keydrv_ps2.sb $(MD)/mousedrv_ps2.sb $(MD)/term.dt \
+		$(MD)/term0.dt $(MD)/term1.dt $(MD)/term2.dt $(MD)/term3.dt \
+		$(MD)/term4.dt $(MD)/term5.dt $(MD)/term6.dt $(MD)/term7.dt 
 
 # Font & palette
 #FONT		 = $(FNT)/bannerfont.sb
