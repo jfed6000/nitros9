@@ -36,8 +36,8 @@ entry               equ       *
 *                    tfr       a,dp
 *                    puls      a
                     tfr       0,dp
-		    lda	      #EDIT_LUT_1+ACT_LUT_1	Make sure we can edit grfdrv LUT
-		    sta	      MMU_MEM_CTRL
+                    lda       #EDIT_LUT_1+ACT_LUT_1 Make sure we can edit grfdrv LUT
+                    sta       MMU_MEM_CTRL
 
 *Where did this come from, and then where is the stack for GrfDrv?
 * Coco GrfDrv does not move stack from D.Flip1, which is set to
@@ -60,8 +60,8 @@ FuncTbl
                     fdb       GrfMod+SSFntLoadF $0A
                     fdb       GrfMod+SSFntChar $0C
                     fdb       GrfMod+SSDScrn $0E
-		    fdb	      GrfMod+PushBuf $10
-		    fdb	      GrfMod+PullBuf $12
+                    fdb       GrfMod+PushBuf $10
+                    fdb       GrfMod+PullBuf $12
 
 
 * Add more functions as needed
@@ -370,177 +370,177 @@ end@                clrb
 ;;;
 ;;; Exit:  Nothing. This just copies values
 ;;;
-PushBuf	            bsr      SetBlkC2C3
-		    pshs     y,u
-		    ldy	     #$6000	  Copy Text Mem, TxtLUTF, TxtLUTB
-		    ldu	     #$2000
-		    ldd	     #$1340
-		    lbsr     CpyBlk
-		    ldu	     #$4000
-		    ldd	     #$12C0       Copy Text Colors
-		    lbsr     CpyBlk
-		    bsr	     SetBlkC0C1
-		    ldu	     #$3300	  Copy Sprite Registers
-		    ldd	     #$200
-		    lbsr     CpyBlk
-		    ldu	     #$4000	  Copy Font0
-		    ldd	     #$800
-		    lbsr     CpyBlk
-		    ldu	     #$5000	  Copy CLUTs 0-3
-		    ldd	     #$1000
-		    lbsr     CpyBlk
-* copy main display registers		    
-		    ldd	     >gr.VStaStorU	
-		    anda     #%00011111
-		    ora	     #$A0
-		    std	     >gr.VStaStorU
-		    ldu	     >gr.VStaStorU
-		    leay     V.VMCR,u        copy VICKY_MCR Regs, Layer, Backgroun
-		    ldu	     #$FFC0
-		    ldd	     #16
-		    lbsr     CopyBlk
-		    ldu	     >gr.VStaStorU   Copy BitMap Regs
-		    lda	     $3000
-		    sta	     V.BM0Cl_En,u
-		    ldd	     $3001
-		    bsr	     Addr2Blk
-		    sta	     V.BM0Blk,u
-		    lda	     $3008
-		    sta	     V.BM1Cl_En,u
-		    ldd	     $3009 
-		    bsr	     Addr2Blk
-		    sta	     V.BM1Blk,u
-		    lda	     $3010
-		    sta	     V.BM2Cl_En,u
-		    ldd	     $3011
-		    bsr	     Addr2Blk
-		    sta	     V.BM2Blk,u
-		    leay     V.TM0,u	      Copy Tile Map Regs
-		    ldu	     #$3100
-		    ldd	     #36
-		    bsr	     CopyBlk
-		    ldu	     >gr.VStaStorU    Copy Tile Set Regs 
-		    leay     V.TS0AddrH,u
-		    ldu	     #$3180
-		    ldd	     #32
-		    bsr	     CpyBlk
-		    puls     y,u
+PushBuf             bsr       SetBlkC2C3
+                    pshs      y,u
+                    ldy       #$6000    Copy Text Mem, TxtLUTF, TxtLUTB
+                    ldu       #$2000
+                    ldd       #$1340
+                    lbsr      CpyBlk
+                    ldu       #$4000
+                    ldd       #$12C0    Copy Text Colors
+                    lbsr      CpyBlk
+                    bsr       SetBlkC0C1
+                    ldu       #$3300    Copy Sprite Registers
+                    ldd       #$200
+                    lbsr      CpyBlk
+                    ldu       #$4000    Copy Font0
+                    ldd       #$800
+                    lbsr      CpyBlk
+                    ldu       #$5000    Copy CLUTs 0-3
+                    ldd       #$1000
+                    lbsr      CpyBlk
+* copy main display registers
+                    ldd       >gr.VStaStorU
+                    anda      #%00011111
+                    ora       #$A0
+                    std       >gr.VStaStorU
+                    ldu       >gr.VStaStorU
+                    leay      V.VMCR,u  copy VICKY_MCR Regs, Layer, Backgroun
+                    ldu       #$FFC0
+                    ldd       #16
+                    lbsr      CopyBlk
+                    ldu       >gr.VStaStorU Copy BitMap Regs
+                    lda       $3000
+                    sta       V.BM0Cl_En,u
+                    ldd       $3001
+                    bsr       Addr2Blk
+                    sta       V.BM0Blk,u
+                    lda       $3008
+                    sta       V.BM1Cl_En,u
+                    ldd       $3009
+                    bsr       Addr2Blk
+                    sta       V.BM1Blk,u
+                    lda       $3010
+                    sta       V.BM2Cl_En,u
+                    ldd       $3011
+                    bsr       Addr2Blk
+                    sta       V.BM2Blk,u
+                    leay      V.TM0,u   Copy Tile Map Regs
+                    ldu       #$3100
+                    ldd       #36
+                    bsr       CopyBlk
+                    ldu       >gr.VStaStorU Copy Tile Set Regs
+                    leay      V.TS0AddrH,u
+                    ldu       #$3180
+                    ldd       #32
+                    bsr       CpyBlk
+                    puls      y,u
 end@                clrb
                     jmp       >GrfMod+SysRet
 
 ; Take high and middle address byte in d and resutrn block number in a
-Addr2Blk	    lslb
-		    rola
-		    lslb
-		    rola
-		    lslb
-		    rola
-		    rts
+Addr2Blk            lslb
+                    rola
+                    lslb
+                    rola
+                    lslb
+                    rola
+                    rts
 
-Blk2Addr	    lsra
-		    rorb
-		    lsra
-		    rorb
-		    lsra
-		    rolb
-		    rts
+Blk2Addr            lsra
+                    rorb
+                    lsra
+                    rorb
+                    lsra
+                    rolb
+                    rts
 ;;; Pulluf
 ;;; Push Registers to Screen Backup Buffer
 ;;;
 ;;; Exit:  Nothing. This just copies values
 ;;;
-PullBuf	            bsr      SetBlkC2C3
-		    pshs     y,u
-		    ldu	     #$6000	  Copy Text Mem, TxtLUTF, TxtLUTB
-		    ldy	     #$2000
-		    ldd	     #$1340
-		    lbsr     CpyBlk
-		    ldy	     #$4000
-		    ldd	     #$12C0       Copy Text Colors
-		    lbsr     CpyBlk
-		    bsr	     SetBlkC0C1
-		    ldy	     #$3300	  Copy Sprite Registers
-		    ldd	     #$200
-		    lbsr     CpyBlk
-		    ldy	     #$4000	  Copy Font0
-		    ldd	     #$800
-		    lbsr     CpyBlk
-		    ldy	     #$5000	  Copy CLUTs 0-3
-		    ldd	     #$1000
-		    lbsr     CpyBlk
+PullBuf             bsr       SetBlkC2C3
+                    pshs      y,u
+                    ldu       #$6000    Copy Text Mem, TxtLUTF, TxtLUTB
+                    ldy       #$2000
+                    ldd       #$1340
+                    lbsr      CpyBlk
+                    ldy       #$4000
+                    ldd       #$12C0    Copy Text Colors
+                    lbsr      CpyBlk
+                    bsr       SetBlkC0C1
+                    ldy       #$3300    Copy Sprite Registers
+                    ldd       #$200
+                    lbsr      CpyBlk
+                    ldy       #$4000    Copy Font0
+                    ldd       #$800
+                    lbsr      CpyBlk
+                    ldy       #$5000    Copy CLUTs 0-3
+                    ldd       #$1000
+                    lbsr      CpyBlk
 * restore display registers
-		    ldd	     >gr.VStaStorU	
-		    anda     #%00011111
-		    ora	     #$A0
-		    std	     >gr.VStaStorU
-		    ldu	     >gr.VStaStorU
-		    leau     V.VMCR,u        copy VICKY_MCR Regs, Layer, Backgroun
-		    ldy	     #$FFC0
-		    ldd	     #16
-		    lbsr     CopyBlk
-		    ldu	     >gr.VStaStorU   Copy BitMap Regs
-		    lda	     V.BM0Cl_En,u
-		    sta	     $3000
-		    lda	     V.BM0Blk,u
-		    clrb
-		    bsr	     Blk2Addr
-		    std	     $3001
-		    lda	     V.BM1Cl_En,u
-		    sta	     $3008
-		    lda	     V.BM1Blk,u
-		    clrb
-		    bsr	     Blk2Addr
-		    std	     $3009 
-		    lda	     V.BM2Cl_En,u
-		    sta	     $3010
-		    lda	     V.BM2Blk,u
-		    clrb
-		    bsr	     Blk2Addr
-		    std	     $3011
-		    ldy      #$3100
-		    leau     V.TM0,u	      Copy Tile Map Regs
-		    ldd	     #36
-		    bsr	     CopyBlk
-		    ldu	     >gr.VStaStorU    Copy Tile Set Regs 
-		    leau     V.TS0AddrH,u
-		    ldy	     #$3180
-		    ldd	     #32
-		    bsr	     CpyBlk
-		    puls     y,u
+                    ldd       >gr.VStaStorU
+                    anda      #%00011111
+                    ora       #$A0
+                    std       >gr.VStaStorU
+                    ldu       >gr.VStaStorU
+                    leau      V.VMCR,u  copy VICKY_MCR Regs, Layer, Backgroun
+                    ldy       #$FFC0
+                    ldd       #16
+                    lbsr      CopyBlk
+                    ldu       >gr.VStaStorU Copy BitMap Regs
+                    lda       V.BM0Cl_En,u
+                    sta       $3000
+                    lda       V.BM0Blk,u
+                    clrb
+                    bsr       Blk2Addr
+                    std       $3001
+                    lda       V.BM1Cl_En,u
+                    sta       $3008
+                    lda       V.BM1Blk,u
+                    clrb
+                    bsr       Blk2Addr
+                    std       $3009
+                    lda       V.BM2Cl_En,u
+                    sta       $3010
+                    lda       V.BM2Blk,u
+                    clrb
+                    bsr       Blk2Addr
+                    std       $3011
+                    ldy       #$3100
+                    leau      V.TM0,u   Copy Tile Map Regs
+                    ldd       #36
+                    bsr       CopyBlk
+                    ldu       >gr.VStaStorU Copy Tile Set Regs
+                    leau      V.TS0AddrH,u
+                    ldy       #$3180
+                    ldd       #32
+                    bsr       CpyBlk
+                    puls      y,u
 end@                clrb
                     jmp       >GrfMod+SysRet
-		    
-SetBlkC2C3	    pshs     cc
-		    orcc     #IntMasks
-		    clr	     A	     
-		    ldx	     #gr.DATImg+2
-		    ldb	     #$C2
-		    stb	     MMU_SLOT_1     $2000
-		    std	     ,x++
-		    ldb	     #$C3
-		    stb	     MMU_SLOT_2     $4000
-		    std	     ,x++
-		    ldb	     >gr.TermBlk
-		    stb	     MMU_SLOT_3     $6000
-		    std	     ,x++
-		    incb
-		    stb	     MMU_SLOT_4     $8000
-		    std	     ,x++
-		    ldb	     >gr.VBlk
-		    stb	     MMU_SLOT_5     $A000
-		    std	     ,x
-		    puls     cc,pc
 
-SetBlkC0C1	    pshs     cc
-		    orcc     #IntMasks
-		    clr	     A	     
-		    ldx	     #gr.DATImg+2
-		    ldb	     #$C0
-		    stb	     MMU_SLOT_1     $2000
-		    std	     ,x++
-		    ldb	     #$C1
-		    stb	     MMU_SLOT_2     $4000
-		    puls     cc,pc
+SetBlkC2C3          pshs      cc
+                    orcc      #IntMasks
+                    clr       A
+                    ldx       #gr.DATImg+2
+                    ldb       #$C2
+                    stb       MMU_SLOT_1 $2000
+                    std       ,x++
+                    ldb       #$C3
+                    stb       MMU_SLOT_2 $4000
+                    std       ,x++
+                    ldb       >gr.TermBlk
+                    stb       MMU_SLOT_3 $6000
+                    std       ,x++
+                    incb
+                    stb       MMU_SLOT_4 $8000
+                    std       ,x++
+                    ldb       >gr.VBlk
+                    stb       MMU_SLOT_5 $A000
+                    std       ,x
+                    puls      cc,pc
+
+SetBlkC0C1          pshs      cc
+                    orcc      #IntMasks
+                    clr       A
+                    ldx       #gr.DATImg+2
+                    ldb       #$C0
+                    stb       MMU_SLOT_1 $2000
+                    std       ,x++
+                    ldb       #$C1
+                    stb       MMU_SLOT_2 $4000
+                    puls      cc,pc
 
 
 *******************************************************************
@@ -551,7 +551,7 @@ SysRet
                     tfr       cc,a      ; Save CC status
                     orcc      #IntMasks ; Disable interrupts
                     ldx       >gr.Stack ; Get saved system stack
-                    clr       >gr.Busy ; Clear busy flag
+                    clr       >gr.Busy  ; Clear busy flag
 
 * Reset DP to 0 for system
                     pshs      a

@@ -492,8 +492,8 @@ setupgrfdrv         leas      2,s       clean process buffer
                     tfr       a,dp
                     puls      a
                     ldu       #GrfMem   Point to GRFDRV global mem
-		    lda	      #'Q
-		    lbsr      dbgwrite
+                    lda       #'Q
+                    lbsr      dbgwrite
 *******************************************************************
 * Build 16-byte DAT image at gr.DATImg
 *******************************************************************
@@ -573,7 +573,7 @@ store7:
                     std       $1220
                     ora       #$C0
 * end of new code
-                    std       gr.Entry Save it
+                    std       gr.Entry  Save it
 *                    std       $1114
                     std       $1210
                     ldx       gr.Entry
@@ -592,8 +592,8 @@ clrLoop             clr       ,x+
                     leax      gr.TermSz,x
                     decb
                     bne       clrScr
-		    lda	      #'R
-		    lbsr      dbgwrite
+                    lda       #'R
+                    lbsr      dbgwrite
 *******************************************************************
 * Call GrfDrv Init
 *******************************************************************
@@ -603,18 +603,18 @@ clrLoop             clr       ,x+
                     pshs      a         **DEBUG**
                     lda       #3        **DEBUG**
                     sta       $1203     **DEBUG**
-		    lda	      #'S
-		    lbsr      dbgwrite
+                    lda       #'S
+                    lbsr      dbgwrite
                     puls      a         **DEBUG**
                     lbsr      CallGrfDrv
                     lbcs      initerr3
                     pshs      a         **DEBUG**
                     lda       #4        **DEBUG**
                     sta       $1204     **DEBUG**
-		    lda	      #'T
-		    lbsr      dbgwrite
+                    lda       #'T
+                    lbsr      dbgwrite
                     puls      a         **DEBUG**
-                    
+
                     clrb                ; Success
                     puls      y,u,pc
 
@@ -677,8 +677,8 @@ CallGrfDrv
 
 * Get grfdrv entry point
                     pshs      x,u,y,b
-		    ldx       PD.RGS,y
-		    stx	      >gr.RGSADR
+                    ldx       PD.RGS,y
+                    stx       >gr.RGSADR
                     ldb       #R$Size/2
                     ldy       #gr.PDRGS
 cpyloop@            ldu       ,x++
@@ -703,8 +703,8 @@ datcopy             ldu       ,x++
                     pshs      d
                     tfr       cc,a
                     sta       gr.Temp
-		    lda	      #'X
-		    lbsr      dbgwrite
+                    lda       #'X
+                    lbsr      dbgwrite
                     puls      d
 
 *******************************************************************
@@ -779,15 +779,15 @@ gbusy               comb
 *******************************************************************
 * InitTermial
 *
-* Initialitze Term1-8 or initialize wilcard term 
+* Initialitze Term1-8 or initialize wilcard term
 *
 InitTerm
-	            pshs      x,y,u
+                    pshs      x,y,u
 * Get the terminal ID from the device descriptor
 *                    ldx       PD.DEV,y            get device table entry pointer
 *                    ldx       V$DESC,x            get device descriptor pointer
 *                    ldb       IT.WND,x            get terminal # from descriptor
-*                    bpl       NotWCTerm        branch if specific terminal (1-8)		    
+*                    bpl       NotWCTerm        branch if specific terminal (1-8)
 * Wildcard terminal - this shouldn't happen in Init!
 * SS.Open should have already replaced the descriptor
 * If we get here, something is wrong - return error
@@ -797,68 +797,68 @@ InitTerm
 
 * Specific terminal - initialize it
 NotWCTerm
-                    stb       V.TermID,u          save terminal ID in static storage
+                    stb       V.TermID,u save terminal ID in static storage
 
 * Check if this terminal is already in use in the global table
-                    lda       #gr.TermSz          terminal entry size (3 bytes)
-                    mul                           D = terminal ID × 3
-                    ldx       #gr.TermTbl         point to terminal table base
-                    leax      d,x                 X points to this terminal's entry
+                    lda       #gr.TermSz terminal entry size (3 bytes)
+                    mul                 D = terminal ID × 3
+                    ldx       #gr.TermTbl point to terminal table base
+                    leax      d,x       X points to this terminal's entry
 
-                    tst       T.Flags,x          check if already initialized
+                    tst       T.Flags,x check if already initialized
 *                    bne       AlreadyOpen         branch if in use
 
 * Terminal is free - claim it
-                    pshs      x                   save terminal table entry pointer
+                    pshs      x         save terminal table entry pointer
 
 * Allocate 16K backup buffer (2 blocks of 8K each)
-                    ldd       #2                  request 2 blocks
-                    os9       F$AlHRAM            allocate high RAM blocks
-                    bcs       InitError           branch if error
-                    puls      x                   restore terminal table entry pointer		    
-		    stb	      T.Block,x		  Store Block#
+                    ldd       #2        request 2 blocks
+                    os9       F$AlHRAM  allocate high RAM blocks
+                    bcs       InitError branch if error
+                    puls      x         restore terminal table entry pointer
+                    stb       T.Block,x Store Block#
 * Register this terminal in the global table
-                    lda       #T.Init            mark as initialized
-                    sta       T.Flags,x          set flags
-                    stu       T.StatPtr,x        save static storage pointer
+                    lda       #T.Init   mark as initialized
+                    sta       T.Flags,x set flags
+                    stu       T.StatPtr,x save static storage pointer
 
 * Increment terminal count
-                    inc	      gr.TermCnt
+                    inc       gr.TermCnt
 
 * Check if this is the first terminal - make it active
-                    lda       gr.CurTerm           get current active terminal
-                    cmpa      #$FF                is it $FF (none active)?
-                    bne       NotFirst            branch if another terminal is active
+                    lda       gr.CurTerm get current active terminal
+                    cmpa      #$FF      is it $FF (none active)?
+                    bne       NotFirst  branch if another terminal is active
 
 * This is the first terminal - make it active
-                    lda       V.TermID,u          get our terminal ID
-                    sta       gr.CurTerm           set as current terminal
-                    lda       #T.Init+T.Active  mark as initialized and active
-                    sta       T.Flags,x          update flags
+                    lda       V.TermID,u get our terminal ID
+                    sta       gr.CurTerm set as current terminal
+                    lda       #T.Init+T.Active mark as initialized and active
+                    sta       T.Flags,x update flags
                     lda       #1
-                    sta       V.TermActive,u      mark as active in static storage
-		    lda	      #'Q
-		    lbsr      dbgwrite
+                    sta       V.TermActive,u mark as active in static storage
+                    lda       #'Q
+                    lbsr      dbgwrite
 
 NotFirst
 * Initialize other device static storage fields as needed
 * (cursor position, colors, etc.)
-                    clr       V.CurRow,u          cursor at row 0
-                    clr       V.CurCol,u          cursor at column 0
+                    clr       V.CurRow,u cursor at row 0
+                    clr       V.CurCol,u cursor at column 0
 
 * Success
-                    clrb                          no error
+                    clrb                no error
                     puls      x,y,u,pc
 
 * Error handling
 AlreadyOpen
                     comb
-                    ldb       #E$DevBsy           device busy
+                    ldb       #E$DevBsy device busy
                     puls      x,y,u,pc
 
 InitError
-                    puls      x                   clean up stack
-                    puls      x,y,u,pc            return with error in B
+                    puls      x         clean up stack
+                    puls      x,y,u,pc  return with error in B
 
 *******************************************************************
 * Init
@@ -873,15 +873,15 @@ InitError
 *
 Init
 * Check if this is the first terminal
-  	   	    lda	      #'A
-		    lbsr      dbgwrite
-                    lda       gr.KbdInit	      keyboard initialized?
-		    bmi	      TerminalInit	      yes, just init terminal
+                    lda       #'A
+                    lbsr      dbgwrite
+                    lda       gr.KbdInit keyboard initialized?
+                    bmi       TerminalInit yes, just init terminal
 * First Terminal - do system initialization
-  		    pshs      y
-                    lda	      #'B
-		    lbsr      dbgwrite
-		    stu       <D.KbdSta
+                    pshs      y
+                    lda       #'B
+                    lbsr      dbgwrite
+                    stu       <D.KbdSta
                     leax      DefaultHandler,pcr get the default character processing routine
                     stx       V.EscVect,u store it in the vector
                     ldb       #$10      assume this foreground/background
@@ -889,45 +889,45 @@ Init
                     clra                set D..
                     clrb                to $0000
                     std       V.CurRow,u set the current row and column
-		    lda	      #'C
-		    lbsr      dbgwrite
+                    lda       #'C
+                    lbsr      dbgwrite
                     lbsr      InitDisplay initialize the display
                     lbsr      InitSound initialize the sound
                     lbsr      InitKeyboard initialize the keyboad
                   IFGT    Level-1
-		    lda	      #'D
-		    lbsr      dbgwrite		  
+                    lda       #'D
+                    lbsr      dbgwrite
                     lbsr      InitMouse
-		    lda	      #'E
-		    lbsr      dbgwrite		    
+                    lda       #'E
+                    lbsr      dbgwrite
                     lbsr      InitGrfDrv
                   ENDC
                     ldx       >D.AltIRQ get the current alternate IRQ vector
                     stx       >D.OrgAlt save it off in the original vector
                     leax      AltISR,pcr get our alternate interrupt service routine
                     stx       >D.AltIRQ and place it in the global vector
-		    lda	      #$FF
-		    sta	      gr.KbdInit
-		    puls      y
+                    lda       #$FF
+                    sta       gr.KbdInit
+                    puls      y
 
 TerminalInit
-		    lda	      #'F
-		    lbsr      dbgwrite
-                    ; Check if wildcard terminal
-                    ldx       PD.DEV,y            ; Get device table entry
-                    ldx       V$DESC,x            ; Get device descriptor
-                    ldb       IT.WND,x            ; Get terminal #
-                    bpl       SpecificTerm        ; >= 0, specific terminal
-		    lda	      #'G
-		    lbsr      dbgwrite                    
-                    ; Wildcard - call SS.Open to find free and replace descriptor
-                    lbsr      SSOpen              ; This does all the work!
-                    bcs       InitTermFail        ; Failed to find free terminal
-                    
+                    lda       #'F
+                    lbsr      dbgwrite
+                    ;         Check     if wildcard terminal
+                    ldx       PD.DEV,y  ; Get device table entry
+                    ldx       V$DESC,x  ; Get device descriptor
+                    ldb       IT.WND,x  ; Get terminal #
+                    bpl       SpecificTerm ; >= 0, specific terminal
+                    lda       #'G
+                    lbsr      dbgwrite
+                    ;         Wildcard  - call SS.Open to find free and replace descriptor
+                    lbsr      SSOpen    ; This does all the work!
+                    bcs       InitTermFail ; Failed to find free terminal
+
 SpecificTerm
-                    ; Now V.TermID,u is set (either by SSOpen or directly)
-		    lda	      #'H
-		    lbsr      dbgwrite		    
+                    ;         Now       V.TermID,u is set (either by SSOpen or directly)
+                    lda       #'H
+                    lbsr      dbgwrite
                     lbsr      InitTerm
                     bcs       InitTermFail
 
@@ -939,7 +939,7 @@ InitTermFail
 *lda	      #'I
 *lbsr      dbgwrite
 
-		    rts                 ; return with error (carry already set, B has error code)
+                    rts                 ; return with error (carry already set, B has error code)
 
 
 
@@ -957,126 +957,126 @@ TermTerm
                     pshs      x,y,u
 
 * Check if this is the last terminal
-                    lda       >gr.TermCnt         ; get terminal count
-                    cmpa      #1                  ; only 1 left?
-                    bne       OkToClose           ; no, safe to close
-                    
+                    lda       >gr.TermCnt ; get terminal count
+                    cmpa      #1        ; only 1 left?
+                    bne       OkToClose ; no, safe to close
+
 * Last terminal - cannot close
                     comb
-                    ldb       #E$Share            ; device in use
+                    ldb       #E$Share  ; device in use
                     puls      x,y,u,pc
 
 OkToClose
 * Get terminal ID from device static storage
-                    ldb       V.TermID,u          get our terminal ID
-                    
+                    ldb       V.TermID,u get our terminal ID
+
 * Calculate offset into terminal table
-                    lda       #gr.TermSz          entry size (4 bytes)
-                    mul                           D = terminal ID × 4
-                    ldx       #gr.TermTbl         point to terminal table base
-                    leax      d,x                 X points to this terminal's entry
+                    lda       #gr.TermSz entry size (4 bytes)
+                    mul                 D = terminal ID × 4
+                    ldx       #gr.TermTbl point to terminal table base
+                    leax      d,x       X points to this terminal's entry
 
 * Check if terminal is actually initialized
-                    lda       T.Flags,x           get flags
-                    bita      #T.Init             is it initialized?
-                    beq       TermNotInit         not initialized, just return
+                    lda       T.Flags,x get flags
+                    bita      #T.Init   is it initialized?
+                    beq       TermNotInit not initialized, just return
 
 * Free the 16K backup buffer
-                    ldb       T.Block,x           get starting block number
-                    beq       SkipFree            if 0, no buffer allocated
-                    
-                    pshs      x                   save terminal table entry pointer
-                    tfr       b,a                 A = starting block number
-                    clrb                          B = 0
-                    tfr       d,x                 X = starting block number
-                    ldb       #2                  B = number of blocks (16K = 2 blocks)
-                    os9       F$DelRAM            free the blocks
-                    puls      x                   restore terminal table entry pointer
-                    ; Note: F$DelRAM doesn't return errors we care about
+                    ldb       T.Block,x get starting block number
+                    beq       SkipFree  if 0, no buffer allocated
+
+                    pshs      x         save terminal table entry pointer
+                    tfr       b,a       A = starting block number
+                    clrb                B = 0
+                    tfr       d,x       X = starting block number
+                    ldb       #2        B = number of blocks (16K = 2 blocks)
+                    os9       F$DelRAM  free the blocks
+                    puls      x         restore terminal table entry pointer
+                    ;         Note:     F$DelRAM doesn't return errors we care about
 
 SkipFree
 * Check if this was the active terminal
-                    lda       T.Flags,x           get flags again
-                    bita      #T.Active           was this the active terminal?
-                    beq       NotActive           no, skip activation logic
+                    lda       T.Flags,x get flags again
+                    bita      #T.Active was this the active terminal?
+                    beq       NotActive no, skip activation logic
 
 * This was active - find another terminal to activate
-                    ldb       V.TermID,u          get our terminal ID
-                    pshs      b,x                 save our ID and table entry pointer
+                    ldb       V.TermID,u get our terminal ID
+                    pshs      b,x       save our ID and table entry pointer
 
 * Search for another initialized terminal
-                    clrb                          start at terminal 0
+                    clrb                start at terminal 0
 FindNext
-                    cmpb      ,s                  is this our own terminal?
-                    beq       SkipSelf            yes, skip it
-                    
-                    pshs      b                   save search index
-                    lda       #gr.TermSz          entry size
-                    mul                           D = terminal ID × 4
-                    ldx       #gr.TermTbl         point to table
-                    leax      d,x                 X = entry for this terminal
-                    
-                    lda       T.Flags,x           get flags
-                    bita      #T.Init             is it initialized?
-                    puls      b                   restore search index
-                    bne       FoundNext           yes, activate this one
-                    
+                    cmpb      ,s        is this our own terminal?
+                    beq       SkipSelf  yes, skip it
+
+                    pshs      b         save search index
+                    lda       #gr.TermSz entry size
+                    mul                 D = terminal ID × 4
+                    ldx       #gr.TermTbl point to table
+                    leax      d,x       X = entry for this terminal
+
+                    lda       T.Flags,x get flags
+                    bita      #T.Init   is it initialized?
+                    puls      b         restore search index
+                    bne       FoundNext yes, activate this one
+
 SkipSelf
-                    incb                          try next terminal
-                    cmpb      #G.TermMax          checked all terminals?
-                    blo       FindNext            no, keep searching
+                    incb                try next terminal
+                    cmpb      #G.TermMax checked all terminals?
+                    blo       FindNext  no, keep searching
 
 * No other terminal found - mark none active
                     lda       #$FF
-                    sta       gr.CurTerm          no active terminal
-                    puls      b,x                 restore our ID and entry
+                    sta       gr.CurTerm no active terminal
+                    puls      b,x       restore our ID and entry
                     bra       ClearEntry
 
 * Found another terminal to activate
 FoundNext
-                    stb       gr.CurTerm          set as new active terminal
-                    
-                    ; Calculate entry for new active terminal
+                    stb       gr.CurTerm set as new active terminal
+
+                    ;         Calculate entry for new active terminal
                     lda       #gr.TermSz
                     mul
-                    pshs      d                   save offset
+                    pshs      d         save offset
                     ldx       #gr.TermTbl
-                    leax      d,x                 X = new active terminal entry
-                    
-                    ; Mark it as active
+                    leax      d,x       X = new active terminal entry
+
+                    ;         Mark      it as active
                     lda       T.Flags,x
                     ora       #T.Active
                     sta       T.Flags,x
-                    
-                    ; Update its static storage
-                    ldu       T.StatPtr,x         get its static storage pointer
-                    lda       #1
-                    sta       V.TermActive,u      mark as active
 
-		    ; Update keyboard target to new active terminal
-		    stu	     <D.KbdSta
-                    
-                    ; TODO: Copy its backup buffer to screen ($C2/$C3)
-                    ; For now, we'll skip this - implement when we do switching
-                    
-                    puls      d                   clean stack
-                    puls      b,x                 restore our ID and entry
-                    ldu       3,s                 restore our static storage pointer
+                    ;         Update    its static storage
+                    ldu       T.StatPtr,x get its static storage pointer
+                    lda       #1
+                    sta       V.TermActive,u mark as active
+
+                    ;         Update    keyboard target to new active terminal
+                    stu       <D.KbdSta
+
+                    ;         TODO:     Copy its backup buffer to screen ($C2/$C3)
+                    ;         For       now, we'll skip this - implement when we do switching
+
+                    puls      d         clean stack
+                    puls      b,x       restore our ID and entry
+                    ldu       3,s       restore our static storage pointer
 
 NotActive:
 * Clear this terminal's entry in global table
 ClearEntry:
-                    clr       T.Flags,x           clear flags (marks as free)
-                    clr       T.Block,x           clear block number
+                    clr       T.Flags,x clear flags (marks as free)
+                    clr       T.Block,x clear block number
                     clra
                     clrb
-                    std       T.StatPtr,x         clear static storage pointer
+                    std       T.StatPtr,x clear static storage pointer
 * Decrement Terminal Count
-                    dec	      gr.TermCnt
+                    dec       gr.TermCnt
 
 TermNotInit:
 * Success
-                    clrb                          no error
+                    clrb                no error
                     puls      x,y,u,pc
 
 
@@ -1090,8 +1090,8 @@ TermNotInit:
 *    CC = carry set on error
 *    B  = error code
 *
-Term		    lbsr      TermTerm	       terminate specific terminal	
-		    ldx       >D.OrgAlt get the original alternate IRQ vector
+Term                lbsr      TermTerm  terminate specific terminal
+                    ldx       >D.OrgAlt get the original alternate IRQ vector
                     stx       <D.AltIRQ save it back to the D.AltIRQ address
                     ldx       V.KeyDrvEPtr,u
                     cmpx      #0000
@@ -2266,29 +2266,29 @@ SSOpen
                     pshs      x,y,u,d
 
 * Check if this is a wildcard terminal
-                    ldx       PD.DEV,y            get device table entry pointer
-                    ldx       V$DESC,x            get device descriptor pointer
-                    ldb       IT.WND,x            get terminal # from descriptor
-                    bpl       NotWildcard         branch if specific terminal (not wildcard)
+                    ldx       PD.DEV,y  get device table entry pointer
+                    ldx       V$DESC,x  get device descriptor pointer
+                    ldb       IT.WND,x  get terminal # from descriptor
+                    bpl       NotWildcard branch if specific terminal (not wildcard)
 
 * This is a wildcard - find a free terminal
-                    pshs      x                   save descriptor pointer (will need to unlink)
-                    clrb                          start at terminal 0
+                    pshs      x         save descriptor pointer (will need to unlink)
+                    clrb                start at terminal 0
 
 FindFree
-                    cmpb      #G.TermMax          check if we've tried all terminals
-                    bhs       NoFreeTerminal      branch if no terminals available
+                    cmpb      #G.TermMax check if we've tried all terminals
+                    bhs       NoFreeTerminal branch if no terminals available
 
 * Check if this terminal is free
-                    pshs      b                   save terminal number
-                    lda       #gr.TermSz          entry size (3 bytes)
-                    mul                           D = terminal ID × 3
-                    ldx       #gr.TermTbl          point to terminal table
-                    leax      d,x                 X points to this terminal's entry
-                    
-                    tst       T.Flags,x          is this terminal initialized?
-                    puls      b                   restore terminal number
-                    beq       FoundFree           branch if free
+                    pshs      b         save terminal number
+                    lda       #gr.TermSz entry size (3 bytes)
+                    mul                 D = terminal ID × 3
+                    ldx       #gr.TermTbl point to terminal table
+                    leax      d,x       X points to this terminal's entry
+
+                    tst       T.Flags,x is this terminal initialized?
+                    puls      b         restore terminal number
+                    beq       FoundFree branch if free
 
 * This terminal is in use, try next
                     incb
@@ -2296,73 +2296,73 @@ FindFree
 
 * Found a free terminal - build the device name "termN"
 FoundFree
-                    pshs      b                   save terminal number
+                    pshs      b         save terminal number
 
 * Build device name in buffer at $1200 (safe temporary area)
-                    ldy       #$1200              point to buffer area
-                    leax      TermName,pcr        point to "term" string
-                    ldd       ,x++                copy "te"
+                    ldy       #$1200    point to buffer area
+                    leax      TermName,pcr point to "term" string
+                    ldd       ,x++      copy "te"
                     std       ,y++
-                    ldd       ,x++                copy "rm"
+                    ldd       ,x++      copy "rm"
                     std       ,y++
 
 * Convert terminal number to ASCII
-                    ldb       ,s                  get terminal number
-                    addb      #'0'                convert to ASCII digit
-                    orb       #$80                set high bit (OS-9 convention)
-                    stb       ,y+                 store it
+                    ldb       ,s        get terminal number
+                    addb      #'0'      convert to ASCII digit
+                    orb       #$80      set high bit (OS-9 convention)
+                    stb       ,y+       store it
 
 * Switch to system process to do F$Link
-                    lbsr      SwitchToSystem      switch to system process descriptor
+                    lbsr      SwitchToSystem switch to system process descriptor
 
 * Link to the specific terminal descriptor
-                    ldx       #$1200              point to device name we built
-                    lda       #Devic+Objct        device descriptor type
-                    os9       F$Link              link to it
-                    pshs      cc,b                save error status
-                    
-                    lbsr      SwitchFromSystem    switch back to current process
-                    
-                    puls      cc,b                restore error status
-                    bcs       LinkFailed          branch if link failed
+                    ldx       #$1200    point to device name we built
+                    lda       #Devic+Objct device descriptor type
+                    os9       F$Link    link to it
+                    pshs      cc,b      save error status
+
+                    lbsr      SwitchFromSystem switch back to current process
+
+                    puls      cc,b      restore error status
+                    bcs       LinkFailed branch if link failed
 
 * Successfully linked - replace descriptor in device table
-                    stu       1,s                 save new descriptor pointer on stack
-                    
-                    ldy       5,s                 get path descriptor pointer
-                    ldx       PD.DEV,y            get device table entry
-                    ldu       1,s                 get new descriptor pointer
-                    stu       V$DESC,x            replace descriptor in device table
+                    stu       1,s       save new descriptor pointer on stack
+
+                    ldy       5,s       get path descriptor pointer
+                    ldx       PD.DEV,y  get device table entry
+                    ldu       1,s       get new descriptor pointer
+                    stu       V$DESC,x  replace descriptor in device table
 
 * Unlink the old /term descriptor (we don't need it anymore)
-                    ldu       3,s                 get old /term descriptor pointer
-                    os9       F$UnLink            unlink it
+                    ldu       3,s       get old /term descriptor pointer
+                    os9       F$UnLink  unlink it
 
 * Save the terminal number in the path's static storage
-                    ldb       ,s                  get terminal number
-                    ldu       7,s                 get static storage pointer
-                    stb       V.TermID,u          save terminal ID
+                    ldb       ,s        get terminal number
+                    ldu       7,s       get static storage pointer
+                    stb       V.TermID,u save terminal ID
 
 * Clean up and return success
-                    leas      3,s                 purge terminal #, new desc ptr, old desc ptr
-                    clrb                          no error
+                    leas      3,s       purge terminal #, new desc ptr, old desc ptr
+                    clrb                no error
                     puls      x,y,u,d,pc
 
 * Error cases
 LinkFailed
 * Link failed - try next terminal
-                    leas      1,s                 purge terminal number
-                    puls      x                   purge old descriptor pointer
-                    ldb       ,s                  get terminal number we tried
-                    incb                          try next terminal
-                    stb       ,s                  save it back
+                    leas      1,s       purge terminal number
+                    puls      x         purge old descriptor pointer
+                    ldb       ,s        get terminal number we tried
+                    incb                try next terminal
+                    stb       ,s        save it back
                     bra       FindFree
 
 NoFreeTerminal
 * No free terminals available
-                    puls      x                   purge descriptor pointer
+                    puls      x         purge descriptor pointer
                     comb
-                    ldb       #E$MNF              module not found (no free terminals)
+                    ldb       #E$MNF    module not found (no free terminals)
                     puls      x,y,u,d,pc
 
 NotWildcard
@@ -2371,7 +2371,7 @@ NotWildcard
                     puls      x,y,u,d,pc
 
 
-TermName	    fcc       /term/
+TermName            fcc       /term/
 *******************************************************************
 * Utility Functions
 *******************************************************************
@@ -2517,13 +2517,13 @@ Blk2Addr            clra                clear a, block # is in b
 * Helper routines for switching process context
 ********************************************************************
 dbgwrite
-                    pshs      cc,b        save CC
+                    pshs      cc,b      save CC
                     orcc      #IntMasks mask interrupts
                     ldb       MAPSLOT   get the MMU block number for the slot
                     pshs      b         save it
                     ldb       #$C2      get the text MMU block number
                     stb       MAPSLOT   set the block number to text
-                    sta       MAPADDR+1  save the character there
+                    sta       MAPADDR+1 save the character there
                     puls      b
                     sta       MAPSLOT   and restore it
                     puls      cc,b,pc   recover CC (this may unmask interrupts)
@@ -2533,20 +2533,20 @@ dbgwrite
 * This is needed before calling F$Link from a device driver
 SwitchToSystem:
                     pshs      d,x
-                    ldx       >D.Proc             get current process descriptor
-                    pshs      x                   save it
-                    ldx       >D.SysPrc           get system process descriptor
-                    stx       >D.Proc             make it current
+                    ldx       >D.Proc   get current process descriptor
+                    pshs      x         save it
+                    ldx       >D.SysPrc get system process descriptor
+                    stx       >D.Proc   make it current
                     puls      x,d,pc
 
 * Switch back from system process descriptor
 SwitchFromSystem:
                     pshs      d,x
-                    ldx       >D.Proc             get current (system) process
-                    pshs      x                   save for reference
-                    puls      x                   get it back
-                    ldx       2,s                 get saved original process descriptor
-                    stx       >D.Proc             restore it
+                    ldx       >D.Proc   get current (system) process
+                    pshs      x         save for reference
+                    puls      x         get it back
+                    ldx       2,s       get saved original process descriptor
+                    stx       >D.Proc   restore it
                     puls      x,d,pc
 
 

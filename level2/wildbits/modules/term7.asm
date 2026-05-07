@@ -54,7 +54,7 @@ rev                 set       $00
                     fcb       $00       acia xoff char
                     fcb       40        (szx) number of columns for display
                     fcb       24        (szy) number of rows for display
-		    fcb	      7		window number
+                    fcb       7         window number
 initsize            equ       *
 
 name                fcs       /TERM7/

@@ -48,9 +48,9 @@ V.MSByte0           RMB       1         mouse packet byte 1
 V.MSByte1           RMB       1         mouse packet byte 2
 V.MSByte2           RMB       1         mouse packet byte 3
 V.MSByteCnt         RMB       1         mouse packet byte counter
-V.TermID	    RMB	      1
-V.TermActive	    RMB       1
-V.TermBufBlk	    RMB	      1
+V.TermID            RMB       1
+V.TermActive        RMB       1
+V.TermBufBlk        RMB       1
                   ENDC
 V.KeyDrvStat        equ       .
                     RMB       8
@@ -275,22 +275,22 @@ gr.RGSADR           RMB       2         ; Address of PD.RGS
 gr.PDRGS            RMB       R$Size    ; GrfDrv copy of PD.RGS
 gr.PDAT             RMB       16
 gr.PTask            RMB       1         ; Virtual Task Number
-gr.KbdInit	    RMB	      1		; Keyboard Init
-gr.TermCnt	    RMB	      1		; number of open terminals
-gr.TermBlk	    RMB	      1		; Current Terminal Block for Buffer Operations
-gr.VStaStorU	    rmb	      2		; Static Storage
-gr.VBlk		    rmb	      1		; block # containing static storage
+gr.KbdInit          RMB       1         ; Keyboard Init
+gr.TermCnt          RMB       1         ; number of open terminals
+gr.TermBlk          RMB       1         ; Current Terminal Block for Buffer Operations
+gr.VStaStorU        rmb       2         ; Static Storage
+gr.VBlk             rmb       1         ; block # containing static storage
 
 * Screen table (8 screens × 3 bytes = 24 bytes)
-gr.CurTerm     	    rmb	      1
+gr.CurTerm          rmb       1
 gr.TermSz           equ       4         ; Size per entry
 gr.TermTbl          RMB       32        ; Screen table base
                     org       0
 T.Flags             rmb       1         ; Acrive Flag - only one screen should be active
-T.Block		    rmb	      1
+T.Block             rmb       1
 T.StatPtr           rmb       2         ; Pointer to Static Vars (V. vars ) for screen
-T.Init              equ       %00000001    ; Terminal is initialized/open
-T.Active            equ       %00000010    ; Terminal is currently active (optional redundancy
+T.Init              equ       %00000001 ; Terminal is initialized/open
+T.Active            equ       %00000010 ; Terminal is currently active (optional redundancy
 
 
 * Rest available for F256-specific data
@@ -301,7 +301,7 @@ E$Param             equ       $05
 *******************************************************************
 * Terminal Management Constants
 *******************************************************************
-G.TermMax           equ       8              ; Maximum terminals (0-7)
+G.TermMax           equ       8         ; Maximum terminals (0-7)
 
 *******************************************************************
 * GrfDrv Function Codes
@@ -319,8 +319,8 @@ GF.SetPal           equ       $12       ; Set palette
 GF.Blit             equ       $14       ; Blit
 GF.Fill             equ       $16       ; Fill
 GF.Line             equ       $18       ; Line
-GF.PushBuf	    equ	      $10
-GF.PullBuf	    equ	      $12
+GF.PushBuf          equ       $10
+GF.PullBuf          equ       $12
 
 *******************************************************************
 * 16K termainal storage for switching screens = excactly 16384
