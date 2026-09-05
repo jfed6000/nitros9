@@ -1325,13 +1325,13 @@ Write
 ****************************  New Write Code ****************************
 	            tst       V.WriteState,u		      
                     beq	      DefaultState
-		    inc	      V.EscCount,u
 		    ldb	      V.EscCount,u
-		    leax      V.EscParams,u
+		    leax      V.EscParms,u
 		    sta	      b,x
+		    inc	      V.EscCount,u
 		    dec	      V.EscNeed,u
 		    beq	      EscCodeComplete
-		    bra	      UpdateCursor
+		    bra	      UpdateLiveCursor
 
 DefaultState	    cmpa      #C$SPAC             is the character a space or greater?
                     lbcs      ChkESC              branch if not; go check for escape codes
@@ -1381,7 +1381,7 @@ clrline             std       V.CurRow,u          save the current row/column va
                     bra	      UpdateCursor        and return to the caller
 savecursor          std       V.CurRow,u          save the current row/column value
 
-UpdateCursor        tst       V.TermLive,u
+UpdateLiveCursor    tst       V.TermLive,u
                     beq       WrNoCur
                     pshs      d
                     lda       V.CurCol,u
@@ -1393,6 +1393,36 @@ UpdateCursor        tst       V.TermLive,u
 WrNoCur		    rts	      
 
 ****************************  End New Write Code ************************
+
+ChkESC              cmpa      #$1B                is the character ESC?
+                    lbeq      EscHandler          if so, handle it
+                    cmpa      #$1C
+                    lbeq      OneSeeHandler
+                    cmpa      #$1F                is this the 1F handler?
+                    lbeq      OneEffHandler       if so, handle it
+                    cmpa      #C$CR               is it a carriage return?
+                    bhi       ret                 branch if higher than that
+                    leax      <DCodeTbl,pcr       else deal with screen codes
+                    lsla                          adjust A for the table entry size
+                    ldd       a,x                 get the address offset to handle the character in D
+                    jmp       d,x                 and jump to routine
+
+* Display functions dispatch table.
+DCodeTbl            fdb       NoOp-DCodeTbl       $00:no-op (null)
+                    fdb       CurHome-DCodeTbl    $01:HOME cursor
+                    fdb       CurXY-DCodeTbl      $02:CURSOR XY
+                    fdb       EraseLine-DCodeTbl  $03:ERASE LINE
+                    fdb       ErEOLine-DCodeTbl   $04:CLEAR TO EOL
+                    fdb       CurOnOff-DCodeTbl   $05:CURSOR CONTROL
+                    fdb       CurRght-DCodeTbl    $06:CURSOR RIGHT
+                    fdb       Bell-DCodeTbl       $07:Bell
+                    fdb       CurLeft-DCodeTbl    $08:CURSOR LEFT
+                    fdb       CurUp-DCodeTbl      $09:CURSOR UP
+                    fdb       CurDown-DCodeTbl    $0A:CURSOR DOWN
+                    fdb       ErEOScrn-DCodeTbl   $0B:ERASE TO EOS
+                    fdb       ClrScrn-DCodeTbl    $0C:CLEAR SCREEN
+                    fdb       Retrn-DCodeTbl      $0D:RETURN
+
 
 **************************** OLD WRITE CODE BELOW ***********************
                     ldx       V.EscVect,u         get the escape vector address
@@ -1504,34 +1534,7 @@ CurOff              tst       V.TermLive,u
                     stb       VKY_TXT_CURSOR_CTRL_REG,x
 CurOffX             rts
 
-ChkESC              cmpa      #$1B                is the character ESC?
-                    lbeq      EscHandler          if so, handle it
-                    cmpa      #$1C
-                    lbeq      OneSeeHandler
-                    cmpa      #$1F                is this the 1F handler?
-                    lbeq      OneEffHandler       if so, handle it
-                    cmpa      #C$CR               is it a carriage return?
-                    bhi       ret                 branch if higher than that
-                    leax      <DCodeTbl,pcr       else deal with screen codes
-                    lsla                          adjust A for the table entry size
-                    ldd       a,x                 get the address offset to handle the character in D
-                    jmp       d,x                 and jump to routine
 
-* Display functions dispatch table.
-DCodeTbl            fdb       NoOp-DCodeTbl       $00:no-op (null)
-                    fdb       CurHome-DCodeTbl    $01:HOME cursor
-                    fdb       CurXY-DCodeTbl      $02:CURSOR XY
-                    fdb       EraseLine-DCodeTbl  $03:ERASE LINE
-                    fdb       ErEOLine-DCodeTbl   $04:CLEAR TO EOL
-                    fdb       CurOnOff-DCodeTbl   $05:CURSOR CONTROL
-                    fdb       CurRght-DCodeTbl    $06:CURSOR RIGHT
-                    fdb       Bell-DCodeTbl       $07:Bell
-                    fdb       CurLeft-DCodeTbl    $08:CURSOR LEFT
-                    fdb       CurUp-DCodeTbl      $09:CURSOR UP
-                    fdb       CurDown-DCodeTbl    $0A:CURSOR DOWN
-                    fdb       ErEOScrn-DCodeTbl   $0B:ERASE TO EOS
-                    fdb       ClrScrn-DCodeTbl    $0C:CLEAR SCREEN
-                    fdb       Retrn-DCodeTbl      $0D:RETURN
 
 ;;; EraseLin
 ;;;
