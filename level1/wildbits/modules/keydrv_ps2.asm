@@ -192,6 +192,13 @@ e@                  comb
 
 IRQSvc              ldb       #INT_PS2_KBD        get the PS/2 keyboard interrupt flag
                     stb       INT_PENDING_0       clear the interrupt
+* F$IRQ already passed U = registered vtio static. Use D.KbdSta only when
+* Init has stored a real 16-bit pointer (active terminal). If it is still
+* zero, keep U so we drain the FIFO instead of IRQ-storming, and so boot
+* works before vtio Init.
+                    ldx       >D.KbdSta
+                    beq       getcode
+                    tfr       x,u
 getcode             lda       KBD_IN              get the key code
                     beq       IRQExit             if it's a zero, ignore
 
@@ -271,15 +278,15 @@ KCHandler
                     cmpa      #$F0                is it the $F0 preface byte?
                     lbeq      ProcF0              branch if so
                     cmpa      #$58                is this the Caps Lock byte?
-                    beq       DoCapsLockDown      branch if so                    
+                    lbeq       DoCapsLockDown      branch if so                    
                     cmpa      #$11                is this the Left Alt byte?
-                    beq       DoLeftAltDown       branch if so                    
+                    lbeq       DoLeftAltDown       branch if so                    
                     cmpa      #$12                is this the Left Shift byte?
-                    beq       DoLeftShiftDown     branch if so                    
+                    lbeq       DoLeftShiftDown     branch if so                    
                     cmpa      #$59                is this the Right Shift byte?
-                    beq       DoRightShiftDown    branch if so                    
+                    lbeq       DoRightShiftDown    branch if so                    
                     cmpa      #$14                is this the Left Ctrl byte?
-                    beq       DoLeftCtrlDown      branch if so                    
+                    lbeq       DoLeftCtrlDown      branch if so                    
                     lda       a,y                 else pull the key character from the scan code table
                     cmpa      #C$SPAC             is this space key?
                     bne       ctrlck@
@@ -295,7 +302,11 @@ CheckCAPSLock       tst       V.CAPSLck,u         is the CAPS Lock on?
                     blt       BufferChar          branch if the character is less than
                     suba      #$20                else make the character uppercase
 * Advance the circular buffer one character.
-BufferChar          ldb       V.IBufH,u           get buffer head pointer in B
+* Alt+Left/Right are handled in DoLeftArrowDown/DoRightArrowDown, not
+* here: a latched ALTBIT plus any later key (including Up/Down) used
+* to look like a switch.
+BufferChar
+	            ldb       V.IBufH,u           get buffer head pointer in B
 		    leay      V.KSBuf,u
 		    leay      b,y
                     leax      V.InBuf,u           point X to the input buffer
@@ -312,6 +323,21 @@ BufferKSns          pshs      a
 		    puls      a
 bye@                clrb                          clear carry
                     rts                           return
+
+
+changewindowl       lda       #SW.Next
+                    sta       >gr.SwitchReq
+                    andb      #^(LEFTBIT+RIGHTBIT) keep ALTBIT if Alt still down
+                    stb       D.KySns
+                    comb                          do not treat as input
+                    rts
+changewindowr       lda       #SW.Prev
+                    sta       >gr.SwitchReq
+                    andb      #^(LEFTBIT+RIGHTBIT)
+                    stb       D.KySns
+                    comb                          do not treat as input
+                    rts
+
 
 DoCapsLockDown
                     lda       #$ED                get the PS/2 keyboard LED command
@@ -396,10 +422,14 @@ DoUpArrowDown       lda       #$0C                load up arrow character
 DoDownArrowDown     lda       #$0A                load down arrow character
                     orb       #DOWNBIT
                     bra       StoreKySnsAndReport
-DoLeftArrowDown     lda       #$08                load left arrow character
+DoLeftArrowDown     bitb      #ALTBIT             Alt+Left = next term
+                    lbne      changewindowl
+                    lda       #$08                load left arrow character
                     orb       #LEFTBIT
                     bra       StoreKySnsAndReport
-DoRightArrowDown    lda       #$09                load right arrow character
+DoRightArrowDown    bitb      #ALTBIT             Alt+Right = prev term
+                    lbne      changewindowr
+                    lda       #$09                load right arrow character
                     orb       #RIGHTBIT
 StoreKySnsAndReport
                     stb       D.KySns
