@@ -866,8 +866,7 @@ Init
                     lda       #'B
                     lbsr      dbgwrite
                     stu       >D.KbdSta pointer to this device's static
-                    leax      DefaultHandler,pcr get the default character processing routine
-                    stx       V.EscVect,u store it in the vector
+                    clr       V.WriteState,u  escape collector idle
                     ldb       #$10      assume this foreground/background
                     stb       V.FBCol,u store it in our foreground/background color variable
                     clra                set D..
@@ -974,8 +973,7 @@ FindFreeFail        comb
 * InitTermStatic - per-terminal driver static that every INIZ needs
 *******************************************************************
 InitTermStatic      pshs      d,x,y
-                    leax      DefaultHandler,pcr
-                    stx       V.EscVect,u
+                    clr       V.WriteState,u    escape collector idle
                     ldb       #$10
                     stb       V.FBCol,u
                     ldd       #80*256+60
@@ -1287,14 +1285,6 @@ BufCell             pshs      d,x,u
                     bsr       CallWrite
                     puls      d,x,u,pc
 
-* Same pattern as WaitPush. Saves X (cell offset).
-WaitWrite           pshs      x
-WWLp                tst       >gr.Busy
-                    beq       WWGo
-                    ldx       #1
-                    os9       F$Sleep
-                    bra       WWLp
-WWGo                puls      x,pc
 
 * FillCells - A=glyph, X=cell offset, Y=count. WO.Fill.
 FillCells           pshs      d,x,y
@@ -1322,7 +1312,6 @@ FCSkip              puls      d,x,y,pc
 *    B  = error code
 *
 Write
-****************************  New Write Code ****************************
 	            tst       V.WriteState,u		      
                     beq	      DefaultState
 		    ldb	      V.EscCount,u
@@ -1330,12 +1319,14 @@ Write
 		    sta	      b,x
 		    inc	      V.EscCount,u
 		    dec	      V.EscNeed,u
-		    beq	      EscCodeComplete
+		    lbeq      EscCodeComplete
 		    bra	      UpdateLiveCursor
 
 DefaultState	    cmpa      #C$SPAC             is the character a space or greater?
                     lbcs      ChkESC              branch if not; go check for escape codes
-		    ldy	      V.CurPos,u
+* PutGlyph - paint A at the cursor and advance (bypasses the control-code
+* check).  Entry from Do1C for the $1C "write next byte literally" code.
+PutGlyph	    ldy	      V.CurPos,u
 		    ldb	      V.FBCol,u
 		    tst	      V.TermLive,u
 		    bne	      writelive
@@ -1378,7 +1369,7 @@ noscroll            puls      d
 * clear line
 clrline             std       V.CurRow,u          save the current row/column value
                     lbsr      EraseLine           erase the line
-                    bra	      UpdateCursor        and return to the caller
+                    bra	      UpdateLiveCursor   and return to the caller
 savecursor          std       V.CurRow,u          save the current row/column value
 
 UpdateLiveCursor    tst       V.TermLive,u
@@ -1390,30 +1381,38 @@ UpdateLiveCursor    tst       V.TermLive,u
                     lda       V.CurRow,u
                     sta       VKY_TXT_CURSOR_Y_REG_L,x
                     puls      d
-WrNoCur		    rts	      
+* 6809 TST/STD leave C dirty; SCF Write does bcs after D$WRIT.
+WrNoCur		    andcc     #^Carry
+                    rts
 
-****************************  End New Write Code ************************
-
+**************************************************************************
+* ChkESC - dispatch a control byte (A < $20).  Prefix codes ($1B/$1C/$1F)
+* and the two parameterised single-byte codes ($02/$05, via DCodeTbl) arm
+* the escape-parameter collector (V.WriteState / V.EscNeed / V.EscHandler);
+* everything else runs immediately.  Returns to SCF with carry clear, B=0.
 ChkESC              cmpa      #$1B                is the character ESC?
-                    lbeq      EscHandler          if so, handle it
-                    cmpa      #$1C
-                    lbeq      OneSeeHandler
-                    cmpa      #$1F                is this the 1F handler?
-                    lbeq      OneEffHandler       if so, handle it
-                    cmpa      #C$CR               is it a carriage return?
-                    bhi       ret                 branch if higher than that
-                    leax      <DCodeTbl,pcr       else deal with screen codes
+                    lbeq      Arm1B              if so, gather the sub-code
+                    cmpa      #$1C               literal-write next byte?
+                    lbeq      Arm1C
+                    cmpa      #$1F               display-attribute prefix?
+                    lbeq      Arm1F
+                    cmpa      #C$CR              is it a carriage return?
+                    bhi       ChkRet            $0E..$1A / $1D / $1E - ignore
+                    leax      <DCodeTbl,pcr     else deal with screen codes
                     lsla                          adjust A for the table entry size
-                    ldd       a,x                 get the address offset to handle the character in D
+                    ldd       a,x                 get the address offset in D
                     jmp       d,x                 and jump to routine
+ChkRet              clrb
+                    andcc     #^Carry
+                    rts
 
 * Display functions dispatch table.
 DCodeTbl            fdb       NoOp-DCodeTbl       $00:no-op (null)
                     fdb       CurHome-DCodeTbl    $01:HOME cursor
-                    fdb       CurXY-DCodeTbl      $02:CURSOR XY
+                    fdb       Arm02-DCodeTbl      $02:CURSOR XY (2 params)
                     fdb       EraseLine-DCodeTbl  $03:ERASE LINE
                     fdb       ErEOLine-DCodeTbl   $04:CLEAR TO EOL
-                    fdb       CurOnOff-DCodeTbl   $05:CURSOR CONTROL
+                    fdb       Arm05-DCodeTbl      $05:CURSOR CONTROL (sub-code)
                     fdb       CurRght-DCodeTbl    $06:CURSOR RIGHT
                     fdb       Bell-DCodeTbl       $07:Bell
                     fdb       CurLeft-DCodeTbl    $08:CURSOR LEFT
@@ -1423,124 +1422,214 @@ DCodeTbl            fdb       NoOp-DCodeTbl       $00:no-op (null)
                     fdb       ClrScrn-DCodeTbl    $0C:CLEAR SCREEN
                     fdb       Retrn-DCodeTbl      $0D:RETURN
 
+**********************************************************************
+* Sub-code tables.  {fcb matchbyte, fcb nparm, fdb handler-<table>}
+* nparm = parameter bytes that follow the sub-code.  fcb $00 ends.
+**********************************************************************
+Esc1BTbl            fcb       $20,8
+                    fdb       DWSet-Esc1BTbl     DWSet STY CPX CPY SZX SZY FG BG BDR
+                    fcb       $21,0
+                    fdb       DWSelect-Esc1BTbl  select window (no-op)
+                    fcb       $24,0
+                    fdb       DWEnd-Esc1BTbl     end device window (no-op)
+                    fcb       $30,0
+                    fdb       DefColr-Esc1BTbl   default palette (no-op)
+                    fcb       $32,1
+                    fdb       FColor-Esc1BTbl    foreground colour slot
+                    fcb       $33,1
+                    fdb       BColor-Esc1BTbl    background colour slot
+                    fcb       $34,1
+                    fdb       Border-Esc1BTbl    border colour slot
+                    fcb       $3D,1
+                    fdb       BoldSw-Esc1BTbl    bold on/off (consumes 1, no-op)
+                    fcb       $60,5
+                    fdb       ChgForePal-Esc1BTbl fg palette  PRN R G B A
+                    fcb       $61,5
+                    fdb       ChgBackPal-Esc1BTbl bg palette  PRN R G B A
+                    fcb       $62,0
+                    fdb       ChgFont0-Esc1BTbl   select font set 0
+                    fcb       $63,0
+                    fdb       ChgFont1-Esc1BTbl   select font set 1
+                    fcb       $00
 
-**************************** OLD WRITE CODE BELOW ***********************
-                    ldx       V.EscVect,u         get the escape vector address
-                    jsr       ,x                  branch to it
-                    tst       V.TermLive,u
-                    beq       WrNoCur
-                    pshs      d
-                    lda       V.CurCol,u
-                    ldx       #TXT.Base
-                    sta       VKY_TXT_CURSOR_X_REG_L,x
-                    lda       V.CurRow,u
-                    sta       VKY_TXT_CURSOR_Y_REG_L,x
-                    puls      d
-* 6809 TST does not clear C. SCF Write does bcs after D$WRIT.
-WrNoCur             andcc     #^Carry
+Esc05Tbl            fcb       $20,0
+                    fdb       CurOff-Esc05Tbl     cursor hide
+                    fcb       $21,0
+                    fdb       CurOn-Esc05Tbl      cursor show
+                    fcb       $22,1
+                    fdb       CurChar-Esc05Tbl    set cursor character
+                    fcb       $23,1
+                    fdb       CurRate-Esc05Tbl    set cursor flash rate
+                    fcb       $00
+
+Esc1FTbl            fcb       $20,0
+                    fdb       RevOn-Esc1FTbl      reverse video on
+                    fcb       $21,0
+                    fdb       RevOff-Esc1FTbl     reverse video off
+                    fcb       $22,0
+                    fdb       ULOn-Esc1FTbl       underline on (stub)
+                    fcb       $23,0
+                    fdb       ULOff-Esc1FTbl      underline off (stub)
+                    fcb       $24,0
+                    fdb       BlkOn-Esc1FTbl      blink on (stub)
+                    fcb       $25,0
+                    fdb       BlkOff-Esc1FTbl     blink off (stub)
+                    fcb       $30,0
+                    fdb       InsLine-Esc1FTbl    insert line (stub)
+                    fcb       $31,0
+                    fdb       DelLine-Esc1FTbl    delete line (stub)
+                    fcb       $00
+
+
+**********************************************************************
+* Escape-parameter collector plumbing
+**********************************************************************
+
+* Arm stubs.  Reached from ChkESC ($1B/$1C/$1F) or DCodeTbl ($02/$05).
+* Load B = parameter-byte count, X = completion handler, fall into EscArm.
+Arm02               ldb       #2
+                    leax      CurXY,pcr
+                    bra       EscArm
+Arm05               ldb       #1
+                    leax      Disp05,pcr
+                    bra       EscArm
+Arm1B               ldb       #1
+                    leax      Disp1B,pcr
+                    bra       EscArm
+Arm1C               ldb       #1
+                    leax      Do1C,pcr
+                    bra       EscArm
+Arm1F               ldb       #1
+                    leax      Disp1F,pcr
+* fall through
+
+* EscArm - B = param bytes to gather, X = handler (absolute).
+* B=0 runs the handler now; otherwise arm the collector and return to SCF.
+EscArm              tstb
+                    beq       EscRun
+                    stb       V.EscNeed,u
+                    clr       V.EscCount,u
+                    lda       #1
+                    sta       V.WriteState,u
+                    stx       V.EscHandler,u
+                    clrb
+                    andcc     #^Carry
+                    rts
+EscRun              jmp       ,x                  0 params: run handler, rts to SCF
+
+* EscCodeComplete - all parameter bytes gathered (from the Write front end).
+* Params sit at V.EscParms+0..  A sub-dispatcher may re-arm the collector.
+EscCodeComplete     clr       V.WriteState,u     disarm first
+                    ldx       V.EscHandler,u
+                    jsr       ,x                  run the completion handler
+                    lbsr      UpdateLiveCursor   refresh the hardware cursor
+                    clrb
+                    andcc     #^Carry
                     rts
 
-DefaultHandler      cmpa      #C$SPAC             is the character a space or greater?
-                    lbcs      ChkESC              branch if not; go check for escape codes
-RawWrite            pshs      a                   else save the character to write
-                    lda       V.CurRow,u          get the current row
-* DWSet 80x60 then 80x30 (or switch) can leave CurRow past WHeight.
+* EscScan - linear search of a sub-code table.
+* Entry: A = sub-code byte
+*        X = table base; entries {fcb byte, fcb nparm, fdb handler-base},
+*            terminated by fcb $00
+* Exit : carry set  = not found
+*        carry clear = B = nparm, X = absolute handler address
+EscScan             pshs      x                   ,s = table base
+escsl@              ldb       ,x                  entry match byte
+                    beq       escsnf@             $00 sentinel - not found
+                    pshs      b
+                    cmpa      ,s+                 A = sub-code?  (pops the byte)
+                    beq       escsh@
+                    leax      4,x                 next entry
+                    bra       escsl@
+escsh@              ldb       1,x                 B = nparm
+                    pshs      b
+                    ldd       2,x                 D = handler offset
+                    addd      1,s                 + table base
+                    tfr       d,x                 X = absolute handler
+                    puls      b                   B = nparm
+                    leas      2,s                 drop saved base
+                    andcc     #^Carry
+                    rts
+escsnf@             leas      2,s                 drop saved base
+                    orcc      #Carry
+                    rts
+
+* Sub-code dispatchers for $1B / $05 / $1F.  Entered from EscCodeComplete
+* with the sub-code byte at V.EscParms+0.  Look it up; run now if it takes
+* no further params, else re-arm the collector for the leaf handler.
+Disp1B              leax      Esc1BTbl,pcr
+                    bra       DispCom
+Disp05              leax      Esc05Tbl,pcr
+                    bra       DispCom
+Disp1F              leax      Esc1FTbl,pcr
+DispCom             lda       V.EscParms,u       the sub-code byte
+                    lbsr      EscScan
+                    bcs       DispNF             unknown sub-code - ignore
+                    tstb                          leaf needs parameter bytes?
+                    beq       EscRun             no - run it now (X = handler)
+                    stb       V.EscNeed,u        yes - re-arm for the leaf
+                    clr       V.EscCount,u
+                    lda       #1
+                    sta       V.WriteState,u
+                    stx       V.EscHandler,u
+DispNF              clrb
+                    andcc     #^Carry
+                    rts
+
+* Do1C - $1C: write the following byte to the screen literally.
+Do1C                lda       V.EscParms,u
+                    lbra      PutGlyph
+
+
+**********************************************************************
+*                      Code Handling Routines
+**********************************************************************
+
+**********************************************************************
+* 00 - NoOp
+*
+NoOp                rts
+
+
+**********************************************************************
+* 01 - CurHome  Moves the cursor to the home location 0,0
+*
+CurHome             clr       V.CurCol,u
+                    clr       V.CurRow,u
+		    clr	      V.CurPos,u
+                    rts
+
+**********************************************************************
+* 02 - Cursor XY  - 02 LCX LCY
+* Positions the cursor at the specified coordinates.
+* LCX is the desired column position + 32.
+* LCY is the desired row position + 32.
+*
+CurXY               leax      CurXYChar1,pcr
+c@                  stx       V.EscVect,u
+                    rts
+CurXYChar1          suba      #$20
+                    cmpa      V.WWidth,u
+                    blt       s1@
+                    lda       V.WWidth,u
+                    deca
+s1@                 sta       V.CurCol,u
+                    leax      CurXYChar2,pcr
+                    bra       c@
+CurXYChar2          suba      #$20
                     cmpa      V.WHeight,u
-                    blo       rwrowok
+                    blt       s2@
                     lda       V.WHeight,u
-                    beq       rwrow0
                     deca
-rwrow0              sta       V.CurRow,u
-rwrowok             ldb       V.WWidth,u          and the number of columns
-                    mul                           calculate the row we should be on
-                    addb      V.CurCol,u          add in the column
-                    adca      #0                  and add in 0 with carry in case of overflow
-* Here, D has the location in the screen where the next character goes.
-                    tfr       d,x                 X = cell offset
-                    puls      a                   get the character to write
-                    lbsr      BufCell             GF.Write in LUT 1
-                    ldd       V.CurRow,u          get the current row and column
-                    incb                          increment the column
-                    cmpb      V.WWidth,u          compare it against the number of columns
-                    blt       ok                  branch if we're less than
-                    clrb                          else the column goes to 0
-incrow              inca                          and we increment the row
-                    cmpa      V.WHeight,u         compare it against the number of rows
-                    blt       ok                  branch if we're less than (don't clear the new line we're on)
-SCROLL              equ       1
-                    ifne      SCROLL
-* Always land on the last row of THIS term. CurRow can be 50 on a
-* 80x30 after DWSet 80x60. Height 0 would decb to $FF and CpyBlk
-* 80*255 bytes through LUT 1 $A000 (path table / DevTbl).
-                    lda       V.WHeight,u
-                    lbeq      CurHome
-                    deca
-                    clrb
-                    pshs      d                   last row, column 0
-                    ldd       V.WWidth,u
-                    sta       >gr.WWidth
-                    tstb
-                    beq       noscroll
-                    decb
-                    beq       noscroll
-                    mul
-                    cmpd      #4800
-                    bls       scntok
-                    ldd       #4800
-scntok              std       >gr.WCount
-                    lda       #WO.Scroll
-                    sta       >gr.WOp
-                    lbsr      SetWDest
-                    lbsr      CallWrite
-noscroll            puls      d
-                    else
-                    clra                          just clear the row (goes to top)
-                    endc
-* clear line
-clrline             std       V.CurRow,u          save the current row/column value
-                    lbsr      EraseLine           erase the line
-                    rts                           and return to the caller
-ok                  std       V.CurRow,u          save the current row/column value
-ret                 rts                           and return to the caller
+s2@                 sta       V.CurRow,u
+		    ldd	      V.CurRow,u
+		    mul
+		    std	      V.CurPos,u
+                    rts
 
-
-*************************  END OLD WRITE CODE **********************
-
-
-
-;;; CurOn
-;;;
-;;; Turns the cursor on.
-;;;
-;;; Code: 05 21
-CurOn               tst       V.TermLive,u
-                    beq       CurOnX
-                    ldx       #TXT.Base
-                    lda       VKY_TXT_CURSOR_CTRL_REG,x
-                    ora       #Vky_Cursor_Enable
-                    sta       VKY_TXT_CURSOR_CTRL_REG,x
-CurOnX              rts
-
-;;; CurOff
-;;;
-;;; Turns the cursor off.
-;;;
-;;; Code: 05 20
-CurOff              tst       V.TermLive,u
-                    beq       CurOffX
-                    ldx       #TXT.Base
-                    ldb       VKY_TXT_CURSOR_CTRL_REG,x
-                    andb      #~Vky_Cursor_Enable
-                    stb       VKY_TXT_CURSOR_CTRL_REG,x
-CurOffX             rts
-
-
-
-;;; EraseLin
-;;;
-;;; Erase the current line.
-;;;
-;;; Code: 03
+**********************************************************************
+* 03 - Erase Line - Erase the current line
+*
 EraseLine           clrb                          start erasing at column 0
                     lda       V.CurRow,u          of the current row
 * Entry:  A = The row to erase.
@@ -1559,61 +1648,72 @@ EraseLineCore       pshs      b                   save the start column
                     lda       #C$SPAC
                     lbsr      FillCells           GF.Write WOp=WO.Fill
                     rts
+		    
+**********************************************************************
+* 04 - Clear to EOL
+* Erase from the current cursor position to the end of the line.
+*
+ErEOLine            ldd       <V.CurRow,u         get the current row and column
+                    lbra      EraseLineCore       go erase from that point to the end of line
 
-;;; ClrScrn
-;;;
-;;; Clears the entire screen and homes the cursor.
-;;;
-;;; Code: 0C
-* One FillCells. Height 0 used to loop 256 EraseLine (row 255*80
-* writes LUT 1 $A000). 80x60 was 60 Flip1s; that raced factory
-* PushBuf on D.CCStk.
-ClrScrn             lda       V.WHeight,u
-                    beq       CurHome
-                    ldb       V.WWidth,u
-                    beq       CurHome
-                    mul
-                    cmpd      #4800
-                    bls       CSFill
-                    ldd       #4800
-CSFill              tfr       d,y
-                    ldx       #0
-                    lda       #C$SPAC
-                    lbsr      FillCells
-                    bra       CurHome
+***********************************************************************
+* 05 - Cursor Control
+*
+***********************************************************************
+*** 05 20 - Cursor Off/Hide - Turns the Cursor Off
+***
+CurOff              tst       V.TermLive,u
+                    beq       CurOffX
+                    ldx       #TXT.Base
+                    ldb       VKY_TXT_CURSOR_CTRL_REG,x
+                    andb      #~Vky_Cursor_Enable
+                    stb       VKY_TXT_CURSOR_CTRL_REG,x
+CurOffX             rts
 
-;;; CurHome
-;;;
-;;; Moves the cursor to the home location.
-;;;
-;;; Code: 01
-;;;
-;;; The home location is column 0, row 0.
-CurHome             clr       V.CurCol,u
-                    clr       V.CurRow,u
+************************************************************************
+*** 05 21 - Cursor On/Show - Turns Cursor On
+***
+CurOn               tst       V.TermLive,u
+                    beq       CurOnX
+                    ldx       #TXT.Base
+                    lda       VKY_TXT_CURSOR_CTRL_REG,x
+                    ora       #Vky_Cursor_Enable
+                    sta       VKY_TXT_CURSOR_CTRL_REG,x
+CurOnX              rts
+
+************************************************************************
+*** 05 22 - Set Cursor Character - 05 22 CHR
+***
+CurChar             ldx       #TXT.Base
+		    lda       V.EscParms,u
+                    sta       VKY_TXT_CURSOR_CHAR_REG,x
+                    rts
+		    
+************************************************************************
+*** 05 23 - Set Cursor Flash Rate
+***
+*** Parameter: BYT
+***
+***   XXXXX1XX = cursor flashing disabled
+***   XXXXX000 = 1 second flash interval
+***   XXXXX001 = .5 second flash interval
+***   XXXXX010 = .25 second flash interval
+***   XXXXX011 = .2 second flash interval
+CurRate             ldx       #TXT.Base
+                    ldb       VKY_TXT_CURSOR_CTRL_REG,x
+                    andb      #$01                preserve the cursor enable bit
+		    lbra      ResetHandler
+                    lsla                          shift bits to the left
+                    pshs      a                   save the value to OR in on the stack
+                    orb       ,s+                 OR it in with the contents of the register
+                    stb       VKY_TXT_CURSOR_CTRL_REG,x save it to the hardware
                     rts
 
-;;; CurUp
-;;;
-;;; Moves the cusor up one line.
-;;;
-;;; Code: 09
-;;;
-;;; If the cursor is at the top-most line, it stays at its current position.
-CurUp               lda       V.CurRow,u
-                    deca
-                    bmi       ex@
-                    sta       V.CurRow,u
-ex@                 rts
-
-;;; CurRght
-;;;
-;;; Moves the cursor to the right.
-;;;
-;;; Code: 06
-;;;
-;;; If the cursor is at the last column, it moves to the first column of the next line.
-;;; If the cursor is at the last column of the last line, it stays there.
+**********************************************************************
+* 06 - Cursor Right
+* If the cursor is at the last column, it moves to the first column of the next line.
+* If the cursor is at the last column of the last line, it stays there
+*
 CurRght             ldd       V.CurRow,u
                     incb                          increment the column
                     cmpb      V.WWidth,u          is it >= the number of columns?
@@ -1629,127 +1729,15 @@ nextrow@            ldb       V.WHeight,u
                     inca                          increment the row
                     bra       ex@                 save and return
 
-;;; ErEOLine
-;;;
-;;; Erase from the current cursor position to the end of the line.
-;;;
-;;; Code: 04
-ErEOLine            ldd       <V.CurRow,u         get the current row and column
-                    lbra      EraseLineCore       go erase from that point to the end of line
+**********************************************************************
+* 07 - Bell
+*
+Bell                rts
 
-;;; ErEOScrn
-;;;
-;;; Erase from the current cursor position to the end of the screen.
-;;;
-;;; Code: 0B
-ErEOScrn            bsr       ErEOLine            erase from the curent position to the end of line
-                    lda       V.CurRow,u          get the current row
-l@                  clrb                          clear the column
-                    inca                          increment row
-                    cmpa      V.WHeight,u         are we at the end?
-                    bge       ex@                 branch if so
-                    pshs      a                   save our row counter
-                    lbsr      EraseLineCore       go erase the line
-                    puls      a                   recover our row counter
-                    bra       l@                  go erase more
-ex@                 rts                           return
-
-;;; CurXY
-;;;
-;;; Positions the cursor at the specified coordinates.
-;;;
-;;; Code: 02
-;;;
-;;; Parameter: LCX LCY
-;;;
-;;; LCX is the desired column position + 32.
-;;; LCY is the desired row position + 32.
-CurXY               leax      CurXYChar1,pcr
-c@                  stx       V.EscVect,u
-                    rts
-CurXYChar1          suba      #$20
-                    cmpa      V.WWidth,u
-                    blt       s1@
-                    lda       V.WWidth,u
-                    deca
-s1@                 sta       V.CurCol,u
-                    leax      CurXYChar2,pcr
-                    bra       c@
-CurXYChar2          suba      #$20
-                    cmpa      V.WHeight,u
-                    blt       s2@
-                    lda       V.WHeight,u
-                    deca
-s2@                 sta       V.CurRow,u
-                    lbra      ResetHandler
-
-CurOnOff            leax      Do05XX,pcr
-c@                  stx       V.EscVect,u
-                    rts
-Do05XX              cmpa      #$20
-                    beq       hide@
-                    cmpa      #$21
-                    beq       show@
-                    cmpa      #$22
-                    beq       cchar@
-                    cmpa      #$23
-                    beq       crate@
-                    bra       ResetHandler
-crate@              leax      CurRate,pcr
-                    bra       c@
-cchar@              leax      CurChar,pcr
-                    bra       c@
-                    bne       ResetHandler
-hide@               lbsr      CurOff
-                    bra       ResetHandler
-show@               lbsr      CurOn
-                    bra       ResetHandler
-
-;;; CurRate
-;;;
-;;; Change the cursor flashing rate.
-;;;
-;;; Code: 05 23
-;;;
-;;; Parameter: BYT
-;;;
-;;;   XXXXX1XX = cursor flashing disabled
-;;;   XXXXX000 = 1 second flash interval
-;;;   XXXXX001 = .5 second flash interval
-;;;   XXXXX010 = .25 second flash interval
-;;;   XXXXX011 = .2 second flash interval
-CurRate             ldx       #TXT.Base
-                    ldb       VKY_TXT_CURSOR_CTRL_REG,x
-                    andb      #$01                preserve the cursor enable bit
-                    lsla                          shift bits to the left
-                    pshs      a                   save the value to OR in on the stack
-                    orb       ,s+                 OR it in with the contents of the register
-                    stb       VKY_TXT_CURSOR_CTRL_REG,x save it to the hardware
-                    bra       ResetHandler        reset the handler
-
-;;; CurChar
-;;;
-;;; Change the cursor character.
-;;;
-;;; Code: 05 22
-;;;
-;;; Parameter: CHR
-;;;
-;;; CHR can be any character from 0 - 255.
-CurChar             ldx       #TXT.Base
-                    sta       VKY_TXT_CURSOR_CHAR_REG,x
-                    bra       ResetHandler
-
-NoOp
-                    rts
-
-;;; CurLeft
-;;;
-;;; Moves the cursor to the left.
-;;;
-;;; Code: 09
-;;;
-;;; If the cursor is at the first column, it moves to the last column of the previous line.
+**********************************************************************
+* 08 - Cursor Left
+* If the cursor is at the first column, it moves to the last column of the previous line.
+*
 CurLeft             ldd       V.CurRow,u          get the current row and column values
                     beq       leave               branch if they're zero
                     decb                          decrement the column value
@@ -1773,108 +1761,80 @@ EraseChar           std       V.CurRow,u          save D to the current row and 
                     lbsr      FillCells           GF.Write WOp=WO.Fill
 leave               rts                           return
 
+**********************************************************************
+* 09 - Cursor Up
+* If the cursor is at the top-most line, it stays at its current position.
+*
+CurUp               lda       V.CurRow,u
+                    deca
+                    bmi       ex@
+                    sta       V.CurRow,u
+ex@                 rts
+
+
+**********************************************************************
+* 0A - Cursor Down
+*
 CurDown             ldd       V.CurRow,u          get the current row and column
                     lbra      incrow              increment the row
 
+
+
+**********************************************************************
+* 0B - Erase to EOS
+* Erase from the current cursor position to the end of the screen.
+*
+ErEOScrn            bsr       ErEOLine            erase from the curent position to the end of line
+                    lda       V.CurRow,u          get the current row
+l@                  clrb                          clear the column
+                    inca                          increment row
+                    cmpa      V.WHeight,u         are we at the end?
+                    bge       ex@                 branch if so
+                    pshs      a                   save our row counter
+                    lbsr      EraseLineCore       go erase the line
+                    puls      a                   recover our row counter
+                    bra       l@                  go erase more
+ex@                 rts                           return
+
+**********************************************************************
+* 0C - Clear Screen
+*
+ClrScrn             lda       V.WHeight,u
+                    beq       CurHome
+                    ldb       V.WWidth,u
+                    beq       CurHome
+                    mul
+                    cmpd      #4800
+                    bls       CSFill
+                    ldd       #4800
+CSFill              tfr       d,y
+                    ldx       #0
+                    lda       #C$SPAC
+                    lbsr      FillCells
+                    bra       CurHome
+
+**********************************************************************
+* 0D - Return
+*
 Retrn               clr       V.CurCol,u          clear the current column
                     rts                           return
 
-* We don't do anything with $1F codes currently.
-OneEffHandler       leax      OneEffHandler2,pcr  point to the 1F handler to the 2nd character
-                    stx       V.EscVect,u         store it in the vector
-                    rts                           return
+**********************************************************************
+* 1B - Window Settings, FG, BG, Palette, Font, Border
+*
 
-* 1F 20 Turns on reverse video
-* 1F 21 Turns off reverse video
-* 1F 22 Turns on underlining.
-* 1F 23 Turns off underlining.
-* 1F 24 Turns on blinking.
-* 1F 25 Turns off blinking.
-* 1F 30 Inserts a line at the current cursor position.
-* 1F 31 Deletes the current line.
-OneEffHandler2
-                    cmpa      #$20
-                    beq       revon
-                    cmpa      #$21
-                    beq       revoff
-ResetHandler        leax      DefaultHandler,pcr
-                    bra       SetHandler
-revoff              tst       V.Reverse,u         is reverse already off?
-                    beq       SetHandler          branch if so
-                    com       V.Reverse,u
-                    bra       DoReverse
-revon               tst       V.Reverse,u         is reverse already on?
-                    bne       SetHandler          branch if so
-                    com       V.Reverse,u
-DoReverse
-* swap foreground and background color bits
-                    lda       V.FBCol,u           else get the fore/background color
-                    lsra                          shift all...
-                    lsra                          of the foreground..
-                    lsra                          color bits into the...
-                    lsra                          lower nibble
-                    pshs      a
-                    lda       V.FBCol,u
-                    lsla                          shift all...
-                    lsla                          of the background...
-                    lsla                          color bits into the...
-                    lsla                          upper nibble
-                    ora       ,s+
-                    sta       V.FBCol,u
-                    bra       ResetHandler
-
-EscHandler          leax      Do1B,pcr            point to the handler to the 2nd character
-SetHandler          stx       V.EscVect,u         store it in the vector
-                    rts                           return
-
-* Window mode handler
-Do1B20              sta       V.DWType,u
-                    leax      Do1B20TT,pcr
-                    bra       SetHandler
-
-Do1B20TT            sta       V.DWStartX,u
-                    leax      Do1B20TTXX,pcr
-                    bra       SetHandler
-
-Do1B20TTXX          sta       V.DWStartY,u
-                    leax      Do1B20TTXXYY,pcr
-                    bra       SetHandler
-
-Do1B20TTXXYY        sta       V.DWWidth,u
-                    leax      Do1B20TTXXYYWW,pcr
-                    bra       SetHandler
-
-Do1B20TTXXYYWW      sta       V.DWHeight,u
-                    leax      Do1B20TTXXYYWWHH,pcr
-                    bra       SetHandler
-
-Do1B20TTXXYYWWHH    sta       V.DWFore,u
-                    leax      Do1B20TTXXYYWWHHFF,pcr
-                    bra       SetHandler
-
-Do1B20TTXXYYWWHHFF  sta       V.DWBack,u
-                    leax      Do1B20TTXXYYWWHHFFBB,pcr
-                    bra       SetHandler
-
-Do1B20TTXXYYWWHHFFBB
-                    sta       V.DWBorder,u
-
-;;; DWSet
-;;;
-;;; Set a device window.
-;;;
-;;; Code: 1B 20
-;;;
-;;; Parameters: STY CPX CPY SZX SZY PRN1 PRN2 PRN3
-;;;
-;;; STY = screen type: $01 = 40x30, $02 = 80x30, $03 = 40x60, $04 = 80x60.
-;;; CPX = starting position X.
-;;; CPY = starting position Y.
-;;; SZX = width starting at X.
-;;; SZY = height starting at Y.
-;;; PRN1 = foreground color.
-;;; PRN2 = background color.
-;;; PRN3 = border color.
+************************************************************************
+*** 1B 20 - DWSet
+***
+*** STY = screen type: $01 = 40x30, $02 = 80x30, $03 = 40x60, $04 = 80x60.
+*** CPX = starting position X.
+*** CPY = starting position Y.
+*** SZX = width starting at X.
+*** SZY = height starting at Y.
+*** PRN1 = foreground color.
+*** PRN2 = background color.
+*** PRN3 = border color.
+***
 DWSet               lda       V.DWType,u
                     sta       V.ScTyp,u
                     cmpa      #$01                40x30?
@@ -1891,13 +1851,13 @@ IsIt40x60           cmpa      #$03
                     bra       setcols@
 IsIt80x60           bsr       SetWin80x60                    
 setcols@            lda       V.DWFore,u
-                    lbsr      SetForeColor
+                    lbsr      FColor
                     lda       V.DWBack,u
-                    lbsr      SetBackColor
+                    lbsr      BColor
                     lda       V.DWBorder,u
-                    lbsr      SetBorderColor
+                    lbsr      Border
                     lbsr      ClrScrn
-                    lbra      ResetHandler
+                    rts
 
 SetWin40x30         ldb       #DBL_Y|DBL_X
                     ldx       #40*256+30
@@ -1907,7 +1867,7 @@ SetWin40x30         ldb       #DBL_Y|DBL_X
 SetWin              stx       V.WWidth,u
                     pshs      b
                     ldx       #TXT.Base
-                    lda       V.TermLive,u
+                    lda       V.TermActive,u
                     beq       SetWinSt
                     ldb       MASTER_CTRL_REG_H,x
                     andb      #~(DBL_Y|DBL_X|CLK_70)
@@ -1933,47 +1893,60 @@ SetWin80x60         clrb
                     ldx       #80*256+60
                     bra       SetWin
 
-;;; ChgForePal
-;;;
-;;; Change a foreground palette register.
-;;;
-;;; Code: 1B 60
-;;;
-;;; Parameters: PRN RVA GVA BVA AVA
-;;;
-;;; PRN = foreground palette register number (0-15).
-;;; RVA = red component.
-;;; GVA = green component.
-;;; BVA = blue component.
-;;; AVA = alpha component.
-ChgForePal          clrb
-                    stb       V.EscParms+4,u
-                    leax      Do1B60_Param0,pcr
-                    lbra      SetHandler
+************************************************************************
+*** 1B 21 - DWSelect
+***
+DWSelet             rts
+************************************************************************
+*** 1B 24 - DWEnd
+***
+DWEnd               rts
+************************************************************************
+*** 1B 30 - DefColor
+***
+DefColr             rts
+************************************************************************
+*** 1B 32 - Foreground Color Slot
+***
+FColor		    lsla                          A = A / 2
+                    lsla                          A = A / 2
+                    lsla                          A = A / 2
+                    lsla                          A = A / 2
+                    pshs      a                   save the register
+                    ldb       V.FBCol,u           load the foreground/background color
+                    andb      #$0F                mask out the upper 4 bits
+FGCUpdate           orb       ,s+                 OR in the foreground color bits
+                    stb       V.FBCol,u           save the updated color
+                    rts                           return
+************************************************************************
+*** 1B 33 - Background Color Slot
+***
+BCoior              anda      #$0F                mask out the upper 4 bits
+                    pshs      a                   save the register
+                    ldb       V.FBCol,u           load the foreground/background color
+                    andb      #$F0                mask out the lower 4 bits
+                    bra       FCGUpdate           and do the OR (in FColor)
 
-Do1B60_Param0
-                    sta       V.EscParms+0,u
-                    leax      Do1B60_Param1,pcr
-                    lbra      SetHandler
+************************************************************************
+*** 1B 34 - Border color Slot
+***
+Border              rts
 
-Do1B60_Param1
-                    sta       V.EscParms+1,u
-                    leax      Do1B60_Param2,pcr
-                    lbra      SetHandler
+************************************************************************
+*** 1B 3D - Bold On/Off (No Bold available in TextMap)
+***
+BoldSw	            rts
 
-Do1B60_Param2
-                    sta       V.EscParms+2,u
-                    leax      Do1B60_Param3,pcr
-                    lbra      SetHandler
-
-Do1B60_Param3
-                    sta       V.EscParms+3,u
-                    leax      Do1B60_Param4,pcr
-                    lbra      SetHandler
-
-* Snapshot RGBA / PRN / FG-BG into gr.W*, then GF.Write WO.Pal.
-* Keep V.EscVect. Do not map TEXT_LUT_BLK at system MAPSLOT.
-Do1B60_Param4       pshs      d,x
+************************************************************************
+*** 1B 60 - Foregound Palette PRN R G B A
+*** Change a foreground palette register.
+*** PRN = foreground palette register number (0-15).
+*** RVA = red component.
+*** GVA = green component.
+*** BVA = blue component.
+*** AVA = alpha component.
+***
+ChgForePal	    pshs      d,x
                     sta       >gr.WCount+1        alpha
                     lda       V.EscParms+3,u      blue
                     sta       >gr.WOff
@@ -1990,120 +1963,111 @@ Do1B60_Param4       pshs      d,x
                     lbsr      SetWDest
                     lbsr      CallWrite
                     puls      d,x
-                    lbra      ResetHandler
+                    rts
 
-;;; ChgBackPal
-;;;
-;;; Change a background palette register.
-;;;
-;;; Code: 1B 61
-;;;
-;;; Parameters: PRN RVA GVA BVA AVA
-;;;
-;;; PRN = background palette register number (0-15).
-;;; RVA = red component.
-;;; GVA = green component.
-;;; BVA = blue component.
-;;; AVA = alpha component.
+************************************************************************
+*** 1B 60 - Backgound Palette PRN R G B A
+*** Change a background palette register.
+***
+*** PRN = background palette register number (0-15).
+*** RVA = red component.
+*** GVA = green component.
+*** BVA = blue component.
+*** AVA = alpha component.
+***
 ChgBackPal          ldb       #1
                     stb       V.EscParms+4,u
                     leax      Do1B60_Param0,pcr
                     lbra      SetHandler
 
-* These do nothing for now.
-DefColr
-DWSelect
-DWEnd               lbra      ResetHandler
 
-Do1B                cmpa      #$20                is it the window mode?
-                    bne       IsIt21              branch if not
-                    leax      Do1B20,pcr          else point to the vector
-                    lbra      SetHandler          and set the handler
-IsIt21              cmpa      #$21                is it DWSelect?
-                    bne       IsIt24              branch if not
-                    lbra      DWSelect
-IsIt24              cmpa      #$24                is it DWEnd?
-                    bne       IsIt30              branch if not
-                    lbra      DWEnd
-IsIt30              cmpa      #$30                is it DefColr?
-                    bne       IsIt60              branch if not
-                    lbra      DefColr
-IsIt60              cmpa      #$60                is it ChgForePal?
-                    bne       IsIt61              branch if not
-                    lbra      ChgForePal
-IsIt61              cmpa      #$61                is it ChgBackPal?
-                    bne       IsIt62              branch if not
-                    lbra      ChgBackPal
-IsIt62              cmpa      #$62                Change to Font0
-                    bne       IsIt63
-                    lbra      ChgFont0
-IsIt63              cmpa      #$63                Change to Font1
-                    bne       IsIt32
-                    lbra      ChgFont1              
-IsIt32              cmpa      #$32                is it the foreground color code?
-                    bne       IsIt33              branch if not
-                    leax      FColor,pcr          else point to the vector
-                    lbra      SetHandler          and set the handler
-IsIt33              cmpa      #$33                is it the background color code?
-                    bne       IsIt34              branch if not
-                    leax      BColor,pcr          else point to the vector
-                    lbra      SetHandler          and set the handler
-IsIt34              cmpa      #$34                is it the foreground color code?
-                    lbne      IsIt3D
-                    leax      Border,pcr          else point to the vector
-                    lbra      SetHandler          and set the handler
-IsIt3D              cmpa      #$3D                is it the foreground color code?
-                    lbne      ResetHandler        if not, reset the handler
-                    leax      BoldSw,pcr          else point to the vector
-                    lbra      SetHandler          and set the handler
-
-* Foreground/background/border color handlers
-FColor              bsr       SetForeColor
-                    lbra      ResetHandler        reset the handler
-BColor              bsr       SetBackColor
-                    lbra      ResetHandler        reset the handler
-Border              bsr       SetBorderColor
-                    lbra      ResetHandler        reset the handler
-
-* Change to FontSet0
+************************************************************************
+*** 1B 62 - Select Font Set 0
+***
 ChgFont0            ldx       #TXT.Base
                     ldb       MASTER_CTRL_REG_H,x
                     andb      #~(FT_FSET)
                     stb       MASTER_CTRL_REG_H,X
-                    lbra      ResetHandler
-
-* Change to FontSet1
+                    rts
+		    
+************************************************************************
+*** 1B 63 - Select Font Set 1
+***
 ChgFont1            ldx       #TXT.Base
                     ldb       MASTER_CTRL_REG_H,x
                     orb       #FT_FSET
                     stb       MASTER_CTRL_REG_H,X
-                    lbra      ResetHandler
+                    rts
+
+**********************************************************************
+* 1F - Misc Font and Line Controls
+*
+
+************************************************************************
+*** 1F 20 - Reverse Video On
+***
+RevOn               tst       V.Reverse,u         is reverse already on?
+                    bne       revend              branch if so
+                    com       V.Reverse,u
+DoReverse
+* swap foreground and background color bits
+                    lda       V.FBCol,u           else get the fore/background color
+                    lsra                          shift all...
+                    lsra                          of the foreground..
+                    lsra                          color bits into the...
+                    lsra                          lower nibble
+                    pshs      a
+                    lda       V.FBCol,u
+                    lsla                          shift all...
+                    lsla                          of the background...
+                    lsla                          color bits into the...
+                    lsla                          upper nibble
+                    ora       ,s+
+                    sta       V.FBCol,u
+revend              rts
+************************************************************************
+*** 1F 21 - Reverse Video Off
+***
+RevOff              tst       V.Reverse,u         is reverse already off?
+                    beq       revend
+                    com       V.Reverse,u
+                    bra       DoReverse	          Do Reverse is in RevOn
+
+************************************************************************
+*** 1F 22 - Underline On
+***
+ULOn                rts
+
+************************************************************************
+*** 1F 23 - Underline Off
+***
+ULOff               rts
+
+************************************************************************
+*** 1F 24 - Blink On
+***
+BlkOn               rts
+
+************************************************************************
+*** 1F 25 - Blink Off
+***
+BlkOff              rts
+
+************************************************************************
+*** 1F 30 - Insert Line
+***
+InsLine             rts
+
+************************************************************************
+*** 1F 31 - Delete Line
+***
+DelLine             rts
+
+**********************************************************************
+****************** End Code Handling Routines ************************
+**********************************************************************
 
 
-* BoldSw - do nothing.
-BoldSw              lbra      ResetHandler        reset the handler
-
-SetForeColor        lsla                          A = A / 2
-                    lsla                          A = A / 2
-                    lsla                          A = A / 2
-                    lsla                          A = A / 2
-                    pshs      a                   save the register
-                    ldb       V.FBCol,u           load the foreground/background color
-                    andb      #$0F                mask out the upper 4 bits
-doout@              orb       ,s+                 OR in the foreground color bits
-                    stb       V.FBCol,u           save the updated color
-SetBorderColor      rts                           return
-SetBackColor        anda      #$0F                mask out the upper 4 bits
-                    pshs      a                   save the register
-                    ldb       V.FBCol,u           load the foreground/background color
-                    andb      #$F0                mask out the lower 4 bits
-                    bra       doout@              and do the OR
-
-OneSeeHandler       leax      Do1C,pcr
-                    lbra      SetHandler
-
-Do1C                lbsr      RawWrite
-                    lbra      ResetHandler
 
 * Return special key status
 GSKySns 

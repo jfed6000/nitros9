@@ -203,8 +203,7 @@ FuncTbl
                     fdb       GrfMod+SSDScrn      ; B=7
                     fdb       GrfMod+PushBuf      ; B=8
                     fdb       GrfMod+PullBuf      ; B=9
-                    fdb       GrfMod+GrfWrite     ; B=10 GF.Write
-
+ 
 *******************************************************************
 * Init - Initialize graphics driver
 *******************************************************************
