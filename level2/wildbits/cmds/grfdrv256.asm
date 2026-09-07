@@ -209,7 +209,15 @@ FuncTbl
 		    fdb	      GrfMod+PSGInit	  ; b=13
 		    fdb	      GrfMod+PSGBell      ; b=14
 		    fdb	      GrfMod+PSGOff	  ; b=15
- 
+		    fdb	      GrfMod+GFCell	  ; b=16
+		    fdb	      GrfMod+GFClrScrn	  ; b=17
+		    fdb	      GrfMod+GFBlank	  ; b=18
+		    fdb	      GrfMod+GFInitDisp	  ; b=19
+		    fdb	      GrfMod+GFPal	  ; b=20
+		    fdb	      GrfMod+GFBmEnable	  ; b=21
+		    fdb	      GrfMod+GFBmFree	  ; b=22
+		    fdb	      GrfMod+GFBmPalet	  ; b=23
+
 
 *******************************************************************
 * Init - Initialize graphics driver
@@ -779,6 +787,208 @@ PSGOff		    lbsr      SetBlkC4
 		    lda       #%10011111
                     sta       $2000+PSGM.Base
                     jmp       >GrfMod+SysRet
+
+*******************************************************************
+* GF.Cell (b16) - write gr.WGlyph / gr.WColor at cell gr.WOff.
+* gr.WDest: 0 = 16K buffer, 1 = live $C2/$C3.
+*******************************************************************
+GFCell              lbsr      SetBlkC2C3
+                    ldx       >gr.WOff
+                    tst       >gr.WDest
+                    beq       GFCellBuf
+                    lda       >gr.WGlyph
+                    sta       $2000,x
+                    lda       >gr.WColor
+                    sta       $4000,x
+                    bra       GWRet
+GFCellBuf           lda       >gr.WGlyph
+                    sta       $6000,x            T.TXT origin 0
+                    leax      T.TXTCOLOR,x
+                    lda       >gr.WColor
+                    sta       $6000,x
+GWRet               clrb
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* GF.ClrScrn (b17) - fill the whole screen with spaces + V.FBCol.
+* Dimensions / colour / live-flag read from the DSS (slot 5).
+*******************************************************************
+GFClrScrn           lbsr      SetBlkC2C3
+                    lda       V.WHeight,u
+                    beq       GWRet
+                    ldb       V.WWidth,u
+                    beq       GWRet
+                    mul
+                    cmpd      #4800
+                    bls       GFCSok
+                    ldd       #4800
+GFCSok              tfr       d,y               Y = cell count
+                    lda       V.FBCol,u         grab colour before U is reused
+                    sta       >gr.WColor
+                    ldb       V.TermLive,u
+                    beq       GFCSbuf
+                    ldx       #$2000
+                    ldu       #$4000
+                    bra       GFCSgo
+GFCSbuf             ldx       #$6000
+                    ldu       #$6000+T.TXTCOLOR
+GFCSgo              lda       #C$SPAC
+                    ldb       >gr.WColor
+GFCSlp              sta       ,x+
+                    stb       ,u+
+                    leay      -1,y
+                    bne       GFCSlp
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* GF.Blank (b18) - blank the 16K term buffer: T.TXT with gr.WGlyph,
+* T.TXTCOLOR with gr.WColor.
+*******************************************************************
+GFBlank             lbsr      SetBlkC2C3
+                    ldx       #$6000
+                    ldy       #4800
+                    lda       >gr.WGlyph
+GFBlkT              sta       ,x+
+                    leay      -1,y
+                    bne       GFBlkT
+                    ldx       #$6000+T.TXTCOLOR
+                    ldy       #4800
+                    lda       >gr.WColor
+GFBlkC              sta       ,x+
+                    leay      -1,y
+                    bne       GFBlkC
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* GF.InitDisp (b19) - gamma ramp on $C0, font + text LUTs on $C1,
+* blank $C2/$C3 to 80x60.  gr.PalBuf holds the 64-byte palette;
+* gr.WGlyph != 0 = load palette; font source blocks in gr.WDest
+* (lo) / gr.WWidth (hi), offset gr.WOff, byte count gr.WCount.
+*******************************************************************
+GFInitDisp          lbsr      SetBlkC0C1
+                    clrb
+GFIDgam             clra
+                    tfr       d,x
+                    stb       $2000,x
+                    stb       $2400,x
+                    stb       $2800,x
+                    incb
+                    bne       GFIDgam
+                    tst       >gr.WGlyph
+                    beq       GFIDfont
+                    pshs      u
+                    ldx       #gr.PalBuf
+                    ldy       #$4000+TEXT_LUT_FG
+                    ldb       #32
+GFIDpalF            ldu       ,x++
+                    stu       ,y++
+                    decb
+                    bne       GFIDpalF
+                    ldx       #gr.PalBuf
+                    ldy       #$4000+TEXT_LUT_BG
+                    ldb       #32
+GFIDpalB            ldu       ,x++
+                    stu       ,y++
+                    decb
+                    bne       GFIDpalB
+                    puls      u
+GFIDfont            ldd       >gr.WCount
+                    beq       GFIDc2c3
+                    pshs      cc,u
+                    orcc      #IntMasks
+                    clra
+                    ldx       #gr.DATImg+6
+                    ldb       >gr.WDest
+                    stb       MMU_SLOT_3
+                    std       ,x++
+                    ldb       >gr.WWidth
+                    stb       MMU_SLOT_4
+                    std       ,x
+                    puls      cc
+                    ldu       >gr.WOff
+                    leau      $6000,u
+                    ldy       #$4000
+                    ldd       >gr.WCount
+                    lbsr      CpyBlk
+                    puls      u
+GFIDc2c3            lbsr      SetBlkC2C3
+                    ldd       #$2020
+                    ldx       #$2000
+GFIDc2lp            std       ,x++
+                    cmpx      #$2000+4800
+                    bne       GFIDc2lp
+                    ldd       #$1010
+                    ldx       #$4000
+GFIDc3lp            std       ,x++
+                    cmpx      #$4000+4800
+                    bne       GFIDc3lp
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* GF.Pal (b20) - one 4-byte text-LUT entry.
+* gr.WDest 1 = live $C1, 0 = 16K T.FLUT/T.BLUT.  gr.WWidth 0=FG 1=BG.
+* gr.WGlyph = palette reg #.  Bytes: gr.WOff, gr.WOff+1, gr.WCount,
+* gr.WCount+1.
+*******************************************************************
+GFPal               tst       >gr.WDest
+                    beq       GFPalBuf
+                    lbsr      SetBlkC0C1
+                    ldx       #$4000+TEXT_LUT_FG
+                    tst       >gr.WWidth
+                    beq       GFPalIdx
+                    ldx       #$4000+TEXT_LUT_BG
+                    bra       GFPalIdx
+GFPalBuf            lbsr      SetBlkC2C3
+                    ldx       #$6000+T.FLUT
+                    tst       >gr.WWidth
+                    beq       GFPalIdx
+                    ldx       #$6000+T.BLUT
+GFPalIdx            ldb       >gr.WGlyph
+                    lslb
+                    lslb
+                    abx
+                    lda       >gr.WOff
+                    sta       ,x
+                    lda       >gr.WOff+1
+                    sta       1,x
+                    lda       >gr.WCount
+                    sta       2,x
+                    lda       >gr.WCount+1
+                    sta       3,x
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* GF.BmEnable (b21) / GF.BmFree (b22) / GF.BmPalet (b23)
+* Poke the bitmap registers at $3000 + gr.WGlyph*8 on $C0.
+*   Enable: gr.WColor -> ctrl, gr.WOff (2) -> phys, clr 3,x
+*   Free  : zero all four bytes
+*   Palet : gr.WColor -> ctrl
+*******************************************************************
+GFBmEnable          bsr       GFBmX
+                    lda       >gr.WColor
+                    sta       ,x
+                    ldd       >gr.WOff
+                    std       1,x
+                    clr       3,x
+                    jmp       >GrfMod+SysRet
+GFBmFree            bsr       GFBmX
+                    clr       ,x
+                    clr       1,x
+                    clr       2,x
+                    clr       3,x
+                    jmp       >GrfMod+SysRet
+GFBmPalet           bsr       GFBmX
+                    lda       >gr.WColor
+                    sta       ,x
+                    jmp       >GrfMod+SysRet
+* GFBmX - map $C0/$C1, return X = $3000 + gr.WGlyph*8.
+GFBmX               lbsr      SetBlkC0C1
+                    ldb       >gr.WGlyph
+                    lda       #8
+                    mul
+                    addd      #$3000
+                    tfr       d,x
+                    rts
 
 SetBlkC0C1          pshs      cc
                     orcc      #IntMasks

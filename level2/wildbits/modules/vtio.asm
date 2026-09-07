@@ -276,9 +276,8 @@ IDSame              lda       >gr.WDest
                     sta       >gr.WWidth
 IDCnt               ldd       #2048
                     std       >gr.WCount
-IDCall              lda       #WO.InitDisp
-                    sta       >gr.WOp
-                    lbsr      CallWrite
+IDCall              ldb       #GF.InitDisp
+                    lbsr      CallGrfDrvNoPD
                     puls      x,y,u,pc
 
 * X = logical address in D.Proc. Exit: A = block, X = offset in 8K.
@@ -1007,10 +1006,8 @@ BlankTermText       pshs      cc,d,x,y
                     lda       V.FBCol,u
                     sta       >gr.WColor
                     sta       $12EE
-                    lda       #WO.Blank
-                    sta       >gr.WOp
-                    clr       >gr.WDest           WD.Buf
-                    lbsr      CallWrite
+                    ldb       #GF.Blank
+                    lbsr      CallGrfDrvNoPD
                     lda       #'K
                     sta       $12EF
 BTTSkip             puls      cc,d,x,y,pc
@@ -1035,11 +1032,11 @@ InitTerm
                     leax      d,x
                     lda       T.Flags,x
                     bita      #T.Init
-                    bne       AlreadyOpen
+                    lbne      AlreadyOpen
                     pshs      x
                     ldd       #2
                     os9       F$AlHRAM
-                    bcs       InitError
+                    lbcs      InitError
                     stx       $12F3
                     cmpx      #DAT.BlMx+1
                     bhs       AlHramD
@@ -1244,45 +1241,19 @@ SWVicky             lda       #WD.Vicky
                     sta       >gr.TermBlk         keep SetBlkC2C3 off block 0
 SWDestX             rts
 
-* Snapshot is already in gr.W*. Wait then Flip1 GF.Write.
-* Flip0 leaves U as the LUT-1 VSta alias ($6000 -> $A000). Restore
-* the real static so RawWrite / scroll / EraseLine do not index $A000.
-CallWrite           pshs      u
-*                    lbsr      Waitwrite
-                    ldb       #GF.Write
-                    lbsr      CallGrfDrvNoPD
-                    puls      u,pc
-
 *******************************************************************
-* BufCell - A=glyph, X=cell offset. Snapshot into GrfMem, Flip1
-* GF.Write. Never maps system MAPSLOT. Dest: Vicky if TermActive
-* or TermBufBlk=0, else 16K backup. Wait on gr.Busy like WaitPush;
-* do not put the wait inside CallGrfDrvNoPD (AltISR cannot sleep).
+* PutCell - A = glyph, X = cell offset.  Snapshot + GF.Cell.
+* Colour = V.FBCol; dest via SetWDest.  Used by EraseChar.
 *******************************************************************
-BufCell             pshs      d,x,u
+PutCell             pshs      d,x
                     sta       >gr.WGlyph
                     stx       >gr.WOff
                     lda       V.FBCol,u
                     sta       >gr.WColor
-                    clr       >gr.WOp             WO.Cell
-                    bsr       SetWDest
-                    bsr       CallWrite
-                    puls      d,x,u,pc
-
-
-* FillCells - A=glyph, X=cell offset, Y=count. WO.Fill.
-FillCells           pshs      d,x,y
-                    sty       >gr.WCount
-                    beq       FCSkip
-                    sta       >gr.WGlyph
-                    stx       >gr.WOff
-                    lda       V.FBCol,u
-                    sta       >gr.WColor
-                    lda       #WO.Fill
-                    sta       >gr.WOp
                     lbsr      SetWDest
-                    lbsr      CallWrite
-FCSkip              puls      d,x,y,pc
+                    ldb       #GF.Cell
+                    lbsr      CallGrfDrvNoPD
+                    puls      d,x,pc
 
 * Write — glyph paint is GF.Write (LUT 1). Cursor I/O stays here.
 *
@@ -1761,9 +1732,8 @@ EraseChar           std       V.CurRow,u          save D to the current row and 
                     addb      V.CurCol,u          add in the current column
                     adca      #0                  add in the carry bit
                     tfr       d,x                 X = cell offset
-                    ldy       #1
                     lda       #C$SPAC
-                    lbsr      FillCells           GF.Write WOp=WO.Fill
+                    lbsr      PutCell             erase the one cell
                     lbsr      CalcCurPos
 leave               rts                           return
 
@@ -1807,19 +1777,10 @@ ErEOScrn	    lbsr      SetThisTermGrfPtrs
 **********************************************************************
 * 0C - Clear Screen
 *
-ClrScrn             lda       V.WHeight,u
-                    beq       CurHome
-                    ldb       V.WWidth,u
-                    beq       CurHome
-                    mul
-                    cmpd      #4800
-                    bls       CSFill
-                    ldd       #4800
-CSFill              tfr       d,y
-                    ldx       #0
-                    lda       #C$SPAC
-                    lbsr      FillCells
-                    bra       CurHome
+ClrScrn             lbsr      SetThisTermGrfPtrs
+                    ldb       #GF.ClrScrn
+                    lbsr      CallGrfDrvNoPD
+                    lbra      CurHome
 
 **********************************************************************
 * 0D - Return
@@ -1967,10 +1928,9 @@ ChgPal              pshs      d,x
                     sta       >gr.WCount
                     lda       V.EscParms+4,u      alpha
                     sta       >gr.WCount+1
-                    lda       #WO.Pal
-                    sta       >gr.WOp
                     lbsr      SetWDest
-                    lbsr      CallWrite
+                    ldb       #GF.Pal
+                    lbsr      CallGrfDrvNoPD
                     puls      d,x
                     rts
 
@@ -2744,11 +2704,8 @@ map@                lda       R$Y+1,x             load bitmap@
                     std       >gr.WOff
                     lda       #%00000001
                     sta       >gr.WColor
-                    lda       #WB.AScrn
-                    sta       >gr.WWidth
-                    lda       #WO.BmReg
-                    sta       >gr.WOp
-                    lbsr      CallWrite
+                    ldb       #GF.BmEnable
+                    lbsr      CallGrfDrvNoPD
                     clrb
                     andcc     #^Carry
                     rts
@@ -2875,11 +2832,8 @@ clr_bmvar@          leay      V.BM0Blk,u           clear the bitmap storage
                     sta       ,y
                     lda       R$Y+1,x
                     sta       >gr.WGlyph
-                    lda       #WB.FScrn
-                    sta       >gr.WWidth
-                    lda       #WO.BmReg
-                    sta       >gr.WOp
-                    lbsr      CallWrite
+                    ldb       #GF.BmFree
+                    lbsr      CallGrfDrvNoPD
                     clrb
                     andcc     #^Carry
                     rts
@@ -2901,11 +2855,8 @@ SSPalet             lda       R$Y+1,x
                     orcc      #Carry              set carry bit
                     rolb                          shift B, and rotate in enable it
                     stb       >gr.WColor
-                    lda       #WB.Palet
-                    sta       >gr.WWidth
-                    lda       #WO.BmReg
-                    sta       >gr.WOp
-                    lbsr      CallWrite
+                    ldb       #GF.BmPalet
+                    lbsr      CallGrfDrvNoPD
                     clrb
                     andcc     #^Carry
                     rts
@@ -3033,8 +2984,8 @@ Blk2Addr            clra                          clear a, block # is in b
                     rts
                     endc
 
-* One glyph at $C2 cell 1 via GF.Write. No-op before InitGrfDrv
-* (gr.Entry=0). Never system MAPSLOT. CallWrite clobbers Y; Init
+* One glyph at $C2 cell 1 via GF.Cell. No-op before InitGrfDrv
+* (gr.Entry=0). Never system MAPSLOT. The flip clobbers Y; Init
 * reads IT.WND,y after the first-INIZ 'F' breadcrumb.
 dbgwrite
                     pshs      d,x,y,u
@@ -3047,8 +2998,8 @@ dbgwrite
                     sta       >gr.WColor
                     lda       #WD.Vicky
                     sta       >gr.WDest
-                    clr       >gr.WOp
-                    lbsr      CallWrite
+                    ldb       #GF.Cell
+                    lbsr      CallGrfDrvNoPD
 dbgdn               puls      d,x,y,u,pc
 
                     emod

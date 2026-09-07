@@ -314,16 +314,16 @@ SW.Next		    equ	      $01
 gr.LiveTerm         rmb       1         ; this is the active terminal
 gr.TermSz           equ       8         ; Size per entry (8 bytes to make idx math easier)
 gr.TermTbl          RMB       72        ; Screen table base
-* GF.Write snapshot. Filled in the system task before Flip1; do not
-* index U after LUT 1 has stolen slots.
-gr.WOp              rmb       1         ; 0=cell 1=fill 2=scroll 3=blank 4=initdisp 5=pal 6=psg 7=bmreg
-gr.WGlyph           rmb       1
-gr.WOff             rmb       2         ; cell offset 0..4799 / PSG freq / BM phys hi
-gr.WCount           rmb       2         ; fill count (PR 3)
-gr.WColor           rmb       1         ; V.FBCol / PSG volume / BM control
-gr.WDest            rmb       1         ; 0=16K backup 1=Vicky $C2/$C3; WO.Psg sub-op
-gr.WWidth           rmb       1         ; scroll stride / WO.BmReg sub-op
-gr.PalBuf           rmb       64        ; palette snapshot for WO.InitDisp
+* GF.* op parameter snapshot. Filled in the system task before Flip1;
+* do not index U after LUT 1 has stolen slots.
+gr.WOp              rmb       1         ; unused (was the GF.Write sub-op selector)
+gr.WGlyph           rmb       1         ; glyph / palette reg # / bitmap #
+gr.WOff             rmb       2         ; cell offset 0..4799 / BM phys addr
+gr.WCount           rmb       2         ; LUT entry bytes 2-3
+gr.WColor           rmb       1         ; V.FBCol / BM control byte
+gr.WDest            rmb       1         ; WD.Buf (16K backup) / WD.Vicky ($C2/$C3)
+gr.WWidth           rmb       1         ; GF.InitDisp font hi block / GF.Pal 0=FG 1=BG
+gr.PalBuf           rmb       64        ; palette snapshot for GF.InitDisp
                     org       0
 T.Flags             rmb       1         ; Acrive Flag - only one screen should be active
 T.Block             rmb       1
@@ -371,22 +371,16 @@ GF.ErEOScrn         equ       12        ; Erase End of Screen
 GF.PSGInit	    equ	      13
 GF.PSGBell	    equ	      14
 GF.PSGOff	    equ	      15
-WO.Cell             equ       0
-WO.Fill             equ       1
-WO.Scroll           equ       2
-WO.Blank            equ       3
-WO.InitDisp         equ       4         ; gamma $C0, font/pal $C1, 80x60 $C2/$C3 fill
-WO.Pal              equ       5         ; ChgForePal / ChgBackPal (1B 60 / 1B 61)
-WO.Psg              equ       6         ; $C4 PSG. WDest: WP.Off / WP.Init / WP.Bell
-WO.BmReg            equ       7         ; $C0 BM0-2. WWidth: WB.AScrn / WB.FScrn / WB.Palet
+GF.Cell             equ       16        ; cell write: gr.WGlyph/gr.WColor at gr.WOff
+GF.ClrScrn          equ       17        ; clear whole screen (dims read from DSS)
+GF.Blank            equ       18        ; blank the 16K term buffer
+GF.InitDisp         equ       19        ; gamma $C0, font/pal $C1, 80x60 $C2/$C3 fill
+GF.Pal              equ       20        ; one text-LUT entry (1B 60 / 1B 61)
+GF.BmEnable         equ       21        ; bitmap: enable + phys addr
+GF.BmFree           equ       22        ; bitmap: zero the four registers
+GF.BmPalet          equ       23        ; bitmap: assign CLUT
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
-WP.Off              equ       0         ; AltISR channel-0 off
-WP.Init             equ       1         ; InitPSG silence all four channels
-WP.Bell             equ       2         ; BellTone: WColor=vol 0-15, WOff=freq
-WB.AScrn            equ       0         ; enable + phys addr (WColor, WOff)
-WB.FScrn            equ       1         ; zero four BM registers
-WB.Palet            equ       2         ; WColor = CLUT<<1|1
 
 *******************************************************************
 * 16K termainal storage for switching screens = excactly 16384
