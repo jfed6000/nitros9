@@ -128,11 +128,7 @@ sndoff              pshs      cc                 save the condition code registe
                     orcc      #IntMasks          mask interrupts
                     tst       >gr.Busy
                     bne       AltSndBusy
-                    lda       #WO.Psg
-                    sta       >gr.WOp
-                    lda       #WP.Off
-                    sta       >gr.WDest
-                    ldb       #GF.Write
+                    ldb       #GF.PSGOff
                     lbsr      CallGrfDrvNoPD
                     lda       D.SndPrcID
                     beq       AltSndWake
@@ -145,37 +141,7 @@ AltSndBusy          inc       D.TnCnt            Flip1 held; retry next 1/60s
                     puls      cc
 AltSndEx            jmp       [D.OrgAlt]         branch to the original alternate IRQ routine
 
-*******************************************************
-* Bell ($07) (called via Bell vector D.Bell):
-*
-Bell                ldd       #$0F1F              A = start volume (15), B = duration counter
-                    ldy       #%0000000100000011              bell frequency
 
-* Common SS.Tone and Bell routine
-*
-* Entry: A = Volume byte (0-15).
-*        B = Cycle repeats (1 means use D.TnCnt as countdown).
-*        Y = Frequency.
-BellTone            tst       D.SndPrcID
-                    bne       BellBusy
-                    stb       D.TnCnt             store the duration counter in the global
-                    pshs      cc,a
-                    sta       >gr.WColor          volume 0-15; LUT 1 inverts
-                    sty       >gr.WOff            frequency
-                    lda       #WP.Bell
-                    sta       >gr.WDest
-                    lda       #WO.Psg
-                    sta       >gr.WOp
-                    lbsr      CallWrite
-                    lda       V.BUSY,u            get active process ID
-                    sta       D.SndPrcID
-                    ldx       #$0000
-                    os9       F$Sleep
-                    puls      cc
-                    clrb
-                    andcc     #^Carry
-                    puls      a,pc
-BellBusy            rts
            
 * Send data to CODEC and await its digestion.
 *
@@ -201,11 +167,9 @@ InitSound           clr       D.SndPrcID          clear the process ID of the cu
                     bra       InitCODEC           InitPSG needs grfdrv256 (after InitGrfDrv)
 
 * Silence PSG via GF.Write. Call after InitGrfDrv. Never system MAPSLOT.
-InitPSG             lda       #WP.Init
-                    sta       >gr.WDest
-                    lda       #WO.Psg
-                    sta       >gr.WOp
-                    lbra      CallWrite
+InitPSG             ldb       #GF.PSGInit
+		    lbsr      CallGrfDrvNoPD
+		    rts
 
 * WM8776 CODEC chip registers
 * R00 = [0000000][U][Z][AAAAAAA]             Headphone attenuation: U=Update, Z=Zero Crossing Detection, A=bB 1111001 default for 0dB
@@ -543,9 +507,9 @@ CallWriteCharLive   ldx	     gr.WriteCharLive
 		    bra	     CallGrfDrv2
 CallWriteCharShadow ldx	     gr.WriteCharShadow
 		    bra	     CallGrfDrv2
-CallScrollLive      ldx	     gr.WriteCharLive
+CallScrollLive      ldx	     gr.ScrollLive
 		    bra	     CallGrfDrv2
-CallScrollShadow    ldx	     gr.WriteCharShadow
+CallScrollShadow    ldx	     gr.ScrollShadow
 		    bra	     CallGrfDrv2
 		    
 CallGrfDrv
@@ -595,6 +559,15 @@ gbusy               comb
                     rts
 
 *******************************************************************
+* SetThisTermGrfPtrs — Sets index for this term and falls through
+* to SetTermGrfPts
+*******************************************************************
+SetThisTermGrfPtrs  lda       V.TermID,u
+		    ldb	      #gr.TermSz
+		    mul
+		    ldx       #gr.TermTbl
+		    leax      d,x
+*******************************************************************
 * SetTermGrfPtrs — copied from wildbits vtio. Do not rewrite.
 * Entry: X = gr.TermTbl entry
 * Sets gr.TermBlk, gr.VStaStorU, gr.VBlk from that entry
@@ -604,18 +577,10 @@ SetTermGrfPtrs      pshs      d,x,y,u
                     stb       >gr.TermBlk
                     ldu       T.StatPtr,x
                     stu       >gr.VStaStorU
-                    ldy       >D.SysPrc
-                    leay      P$DATImg,y
-                    tfr       u,d
-                    lsra
-                    lsra
-                    lsra
-                    lsra
-                    lsra                A = MMU slot 0-7
-                    lsla                A = slot * 2
-                    inca                LSB of 2-byte DAT entry
-                    lda       a,y       block number
+		    lda	      T.VBlk,x
                     sta       >gr.VBlk
+		    ldd	      T.grU5,x
+		    std	      >gr.U5
                     puls      d,x,y,u,pc
 
 *******************************************************************
@@ -635,6 +600,7 @@ SwitchTerm
                     tfr       a,b
                     lslb
                     lslb                    B = ID * gr.TermSz
+		    lslb
                     tst       >gr.SwitchReq
                     bmi       SwFindPrev
                     bra       SwFindNext
@@ -678,6 +644,7 @@ SwFound
                     tfr       a,b
                     lslb
                     lslb
+		    lslb
                     ldx       #gr.TermTbl
                     abx
                     lbsr      SetTermGrfPtrs
@@ -686,10 +653,10 @@ SwFound
                     bcs       SwFail
 * Flip0 leaves U = LUT-1 VSta alias ($6000 -> $A000). Recompute
 * table ptrs; never stu D.KbdSta from that alias (keys go nowhere).
-                    lda       >gr.LiveTerm
-                    tfr       a,b
-                    lslb
-                    lslb
+                    ldb       >gr.LiveTerm     use terminal number to get TermTbl idx
+                    lslb      		       each row is 8 bytes	         
+                    lslb		       multiply by 8 to get term row offset
+		    lslb
                     ldx       #gr.TermTbl
                     abx
                     lda       T.Flags,x
@@ -1083,7 +1050,24 @@ AlHramD             puls      x
                     stb       V.TermBufBlk,u
                     lda       #T.Init
                     sta       T.Flags,x
-                    stu       T.StatPtr,x
+                    stu       T.StatPtr,x	   store location of DSS
+                    pshs      d,y 		   compute block # for static storage
+		    tfr	      u,d                  but first compute U for grfdrv
+		    anda      #$1F
+		    ora	      #$A0
+		    std	      T.grU5,x             store U for grfdrv slot 5
+                    ldy   >D.SysDAT                now oompute block # for static storage
+                    tfr   u,d
+                    lsra
+                    lsra
+                    lsra
+                    lsra
+                    lsra              A = page (U >> 13)
+                    lsla
+                    inca              -> block-number byte of that DAT entry
+                    lda   a,y
+                    sta   T.VBlk,x	            store block # for static storage
+                    puls  d,y
                     lbsr      InitTermStatic
                     lda       >gr.TermCnt
                     bne       NotFirst
@@ -1368,6 +1352,7 @@ noscroll            puls      d
 
 * clear line
 clrline             std       V.CurRow,u          save the current row/column value
+                    lbsr      CalcCurPos          resync V.CurPos (scroll moved us)
                     lbsr      EraseLine           erase the line
                     bra	      UpdateLiveCursor   and return to the caller
 savecursor          std       V.CurRow,u          save the current row/column value
@@ -1600,61 +1585,64 @@ CurHome             clr       V.CurCol,u
                     rts
 
 **********************************************************************
+* CalcCurPos - recompute V.CurPos from V.CurRow / V.CurCol.
+* V.CurPos = V.CurRow * V.WWidth + V.CurCol  (linear text-map cell).
+* Call after any handler that moves the cursor without going through
+* PutGlyph.  Clobbers D.  Returns carry clear (SCF Write checks it).
+*
+CalcCurPos          lda       V.CurRow,u
+                    ldb       V.WWidth,u
+                    mul
+                    addb      V.CurCol,u
+                    adca      #0
+                    std       V.CurPos,u
+                    andcc     #^Carry
+                    rts
+
+**********************************************************************
 * 02 - Cursor XY  - 02 LCX LCY
 * Positions the cursor at the specified coordinates.
-* LCX is the desired column position + 32.
-* LCY is the desired row position + 32.
+* V.EscParms+0 (LCX) = desired column + 32.
+* V.EscParms+1 (LCY) = desired row + 32.
+* EscCodeComplete calls UpdateLiveCursor after us.
 *
-CurXY               leax      CurXYChar1,pcr
-c@                  stx       V.EscVect,u
-                    rts
-CurXYChar1          suba      #$20
-                    cmpa      V.WWidth,u
-                    blt       s1@
-                    lda       V.WWidth,u
+CurXY               lda       V.EscParms,u        LCX
+                    suba      #$20
+                    bpl       CXYcol@
+                    clra                          malformed (<32) -> column 0
+CXYcol@             cmpa      V.WWidth,u
+                    blo       CXYcolok@
+                    lda       V.WWidth,u          clamp to last column
                     deca
-s1@                 sta       V.CurCol,u
-                    leax      CurXYChar2,pcr
-                    bra       c@
-CurXYChar2          suba      #$20
-                    cmpa      V.WHeight,u
-                    blt       s2@
-                    lda       V.WHeight,u
+CXYcolok@           sta       V.CurCol,u
+                    lda       V.EscParms+1,u      LCY
+                    suba      #$20
+                    bpl       CXYrow@
+                    clra
+CXYrow@             cmpa      V.WHeight,u
+                    blo       CXYrowok@
+                    lda       V.WHeight,u         clamp to last row
                     deca
-s2@                 sta       V.CurRow,u
-		    ldd	      V.CurRow,u
-		    mul
-		    std	      V.CurPos,u
-                    rts
+CXYrowok@           sta       V.CurRow,u
+                    lbra      CalcCurPos
+
 
 **********************************************************************
 * 03 - Erase Line - Erase the current line
 *
-EraseLine           clrb                          start erasing at column 0
-                    lda       V.CurRow,u          of the current row
-* Entry:  A = The row to erase.
-*         B = The column to start erasing on.
-EraseLineCore       pshs      b                   save the start column
-                    ldb       V.WWidth,u
-                    mul                           get the product
-                    addb      ,s                  add the column to start erasing from
-                    adca      #0                  consider the carry
-                    tfr       d,x                 X = cell offset
-                    lda       V.WWidth,u          get the number of columns
-                    suba      ,s+                 A = cells to erase
-                    tfr       a,b
-                    clra
-                    tfr       d,y                 Y = fill count
-                    lda       #C$SPAC
-                    lbsr      FillCells           GF.Write WOp=WO.Fill
-                    rts
+EraseLine           lbsr      SetThisTermGrfPtrs
+		    ldb	      #GF.EraseLine
+		    lbsr      CallGrfDrvNoPD
+		    rts
 		    
 **********************************************************************
 * 04 - Clear to EOL
 * Erase from the current cursor position to the end of the line.
 *
-ErEOLine            ldd       <V.CurRow,u         get the current row and column
-                    lbra      EraseLineCore       go erase from that point to the end of line
+ErEOLine	    lbsr      SetThisTermGrfPtrs
+		    ldb	      #GF.ErEOLine
+		    lbsr      CallGrfDrvNoPD
+		    rts
 
 ***********************************************************************
 * 05 - Cursor Control
@@ -1702,7 +1690,6 @@ CurChar             ldx       #TXT.Base
 CurRate             ldx       #TXT.Base
                     ldb       VKY_TXT_CURSOR_CTRL_REG,x
                     andb      #$01                preserve the cursor enable bit
-		    lbra      ResetHandler
                     lsla                          shift bits to the left
                     pshs      a                   save the value to OR in on the stack
                     orb       ,s+                 OR it in with the contents of the register
@@ -1719,6 +1706,7 @@ CurRght             ldd       V.CurRow,u
                     cmpb      V.WWidth,u          is it >= the number of columns?
                     bgt       nextrow@
 ex@                 std       V.CurRow,u
+                    lbsr      CalcCurPos
 bye@                rts
 nextrow@            ldb       V.WHeight,u
                     decb
@@ -1731,9 +1719,26 @@ nextrow@            ldb       V.WHeight,u
 
 **********************************************************************
 * 07 - Bell
+* Bell ($07) (called via Bell vector D.Bell):
 *
-Bell                rts
+Bell                ldd       #$0F1F              A = start volume (15), B = duration counter
+                    ldy       #%0000000100000011              bell frequency
 
+* Common SS.Tone and Bell routine
+*
+* Entry: A = Volume byte (0-15).
+*        B = Cycle repeats (1 means use D.TnCnt as countdown).
+*        Y = Frequency.
+BellTone            tst       D.SndPrcID
+                    bne       BellBusy
+                    stb       D.TnCnt             store the duration counter in the global
+                    sta       >gr.WColor          volume 0-15; LUT 1 inverts
+                    sty       >gr.WOff            frequency
+                    ldb	      #GF.PSGBell
+		    lbsr      CallGrfDrvNoPD
+BellBusy            clrb
+                    rts
+	    
 **********************************************************************
 * 08 - Cursor Left
 * If the cursor is at the first column, it moves to the last column of the previous line.
@@ -1759,6 +1764,7 @@ EraseChar           std       V.CurRow,u          save D to the current row and 
                     ldy       #1
                     lda       #C$SPAC
                     lbsr      FillCells           GF.Write WOp=WO.Fill
+                    lbsr      CalcCurPos
 leave               rts                           return
 
 **********************************************************************
@@ -1769,6 +1775,7 @@ CurUp               lda       V.CurRow,u
                     deca
                     bmi       ex@
                     sta       V.CurRow,u
+                    lbsr      CalcCurPos
 ex@                 rts
 
 
@@ -1776,7 +1783,14 @@ ex@                 rts
 * 0A - Cursor Down
 *
 CurDown             ldd       V.CurRow,u          get the current row and column
-                    lbra      incrow              increment the row
+                    inca                          try to move down one row
+                    cmpa      V.WHeight,u
+                    blt       CDmv@               room below - just move
+                    ldd       V.CurRow,u          at bottom - scroll (shared path)
+                    lbra      incrow
+CDmv@               sta       V.CurRow,u
+                    lbsr      CalcCurPos
+                    lbra      UpdateLiveCursor    refresh hw cursor, then rts
 
 
 
@@ -1784,17 +1798,11 @@ CurDown             ldd       V.CurRow,u          get the current row and column
 * 0B - Erase to EOS
 * Erase from the current cursor position to the end of the screen.
 *
-ErEOScrn            bsr       ErEOLine            erase from the curent position to the end of line
-                    lda       V.CurRow,u          get the current row
-l@                  clrb                          clear the column
-                    inca                          increment row
-                    cmpa      V.WHeight,u         are we at the end?
-                    bge       ex@                 branch if so
-                    pshs      a                   save our row counter
-                    lbsr      EraseLineCore       go erase the line
-                    puls      a                   recover our row counter
-                    bra       l@                  go erase more
-ex@                 rts                           return
+ErEOScrn	    lbsr      SetThisTermGrfPtrs
+		    ldb	      #GF.ErEOScrn
+		    lbsr      CallGrfDrvNoPD
+		    rts
+		    
 
 **********************************************************************
 * 0C - Clear Screen
@@ -1817,7 +1825,7 @@ CSFill              tfr       d,y
 * 0D - Return
 *
 Retrn               clr       V.CurCol,u          clear the current column
-                    rts                           return
+                    lbra      CalcCurPos          resync V.CurPos, then rts
 
 **********************************************************************
 * 1B - Window Settings, FG, BG, Palette, Font, Border
@@ -1867,7 +1875,7 @@ SetWin40x30         ldb       #DBL_Y|DBL_X
 SetWin              stx       V.WWidth,u
                     pshs      b
                     ldx       #TXT.Base
-                    lda       V.TermActive,u
+                    lda       V.TermLive,u
                     beq       SetWinSt
                     ldb       MASTER_CTRL_REG_H,x
                     andb      #~(DBL_Y|DBL_X|CLK_70)
@@ -1896,7 +1904,7 @@ SetWin80x60         clrb
 ************************************************************************
 *** 1B 21 - DWSelect
 ***
-DWSelet             rts
+DWSelect            rts
 ************************************************************************
 *** 1B 24 - DWEnd
 ***
@@ -1921,11 +1929,11 @@ FGCUpdate           orb       ,s+                 OR in the foreground color bit
 ************************************************************************
 *** 1B 33 - Background Color Slot
 ***
-BCoior              anda      #$0F                mask out the upper 4 bits
+BColor              anda      #$0F                mask out the upper 4 bits
                     pshs      a                   save the register
                     ldb       V.FBCol,u           load the foreground/background color
                     andb      #$F0                mask out the lower 4 bits
-                    bra       FCGUpdate           and do the OR (in FColor)
+                    bra       FGCUpdate           and do the OR (in FColor)
 
 ************************************************************************
 *** 1B 34 - Border color Slot
@@ -1938,47 +1946,33 @@ Border              rts
 BoldSw	            rts
 
 ************************************************************************
-*** 1B 60 - Foregound Palette PRN R G B A
-*** Change a foreground palette register.
-*** PRN = foreground palette register number (0-15).
-*** RVA = red component.
-*** GVA = green component.
-*** BVA = blue component.
-*** AVA = alpha component.
+*** 1B 60 - Foreground Palette  PRN R G B A
+*** 1B 61 - Background Palette  PRN R G B A
+*** PRN = palette register number (0-15).
+*** R G B A = red / green / blue / alpha components.
+*** FG vs BG is set by the entry point, not a parameter.
 ***
-ChgForePal	    pshs      d,x
-                    sta       >gr.WCount+1        alpha
+ChgForePal	    clrb                          gr.WWidth 0 = foreground LUT
+                    bra       ChgPal
+ChgBackPal          ldb       #1                  gr.WWidth 1 = background LUT
+ChgPal              pshs      d,x
+                    stb       >gr.WWidth
+                    lda       V.EscParms+0,u      PRN
+                    sta       >gr.WGlyph
                     lda       V.EscParms+3,u      blue
                     sta       >gr.WOff
                     lda       V.EscParms+2,u      green
                     sta       >gr.WOff+1
                     lda       V.EscParms+1,u      red
                     sta       >gr.WCount
-                    lda       V.EscParms+0,u      PRN
-                    sta       >gr.WGlyph
-                    lda       V.EscParms+4,u      0=FG 1=BG
-                    sta       >gr.WWidth
+                    lda       V.EscParms+4,u      alpha
+                    sta       >gr.WCount+1
                     lda       #WO.Pal
                     sta       >gr.WOp
                     lbsr      SetWDest
                     lbsr      CallWrite
                     puls      d,x
                     rts
-
-************************************************************************
-*** 1B 60 - Backgound Palette PRN R G B A
-*** Change a background palette register.
-***
-*** PRN = background palette register number (0-15).
-*** RVA = red component.
-*** GVA = green component.
-*** BVA = blue component.
-*** AVA = alpha component.
-***
-ChgBackPal          ldb       #1
-                    stb       V.EscParms+4,u
-                    leax      Do1B60_Param0,pcr
-                    lbra      SetHandler
 
 
 ************************************************************************

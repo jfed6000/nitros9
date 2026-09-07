@@ -85,7 +85,7 @@ goodmmu@	    leax      $2000,y
 WriteCharShadow	    pshs      cc,a,b,y
                     orcc      #IntMasks
                     clra
-                    ldx       #gr.DATImg+2
+                    ldx       #gr.DATImg+6
                     ldb       >gr.TermBlk
                     stb       MMU_SLOT_3 $6000
                     std       ,x++
@@ -157,7 +157,7 @@ loop@		    stb	      ,y+
 ScrollShadow	    pshs      cc,a,b,y
                     orcc      #IntMasks
                     clra
-                    ldx       #gr.DATImg+2
+                    ldx       #gr.DATImg+6
                     ldb       >gr.TermBlk
                     stb       MMU_SLOT_3 $6000
                     std       ,x++
@@ -203,7 +203,14 @@ FuncTbl
                     fdb       GrfMod+SSDScrn      ; B=7
                     fdb       GrfMod+PushBuf      ; B=8
                     fdb       GrfMod+PullBuf      ; B=9
+		    fdb	      GrfMod+EraseLine	  ; b=10
+		    fdb	      GrfMod+ErEOLine	  ; b=11
+		    fdb	      GrfMod+ErEOScrn	  ; b=12
+		    fdb	      GrfMod+PSGInit	  ; b=13
+		    fdb	      GrfMod+PSGBell      ; b=14
+		    fdb	      GrfMod+PSGOff	  ; b=15
  
+
 *******************************************************************
 * Init - Initialize graphics driver
 *******************************************************************
@@ -540,16 +547,12 @@ PushBuf             lbsr      SetBlkC2C3
                     ldd       #$1000
                     lbsr      CpyBlk
 * copy main display registers
-                    ldd       >gr.VStaStorU
-                    anda      #%00011111
-                    ora       #$A0
-                    std       >gr.VStaStorU
-                    ldu       >gr.VStaStorU
+                    ldu       >gr.U5
                     leay      V.V_MCR,u  copy VICKY_MCR Regs, Layer, Backgroun
                     ldu       #$FFC0
                     ldd       #16
                     lbsr      CpyBlk
-                    ldu       >gr.VStaStorU Copy BitMap Regs
+                    ldu       >gr.U5
                     lda       $3000
                     sta       V.BM0Cl_En,u
                     ldd       $3001
@@ -568,17 +571,17 @@ PushBuf             lbsr      SetBlkC2C3
                     leay      V.TM0,u   Copy Tile Map Regs
                     ldu       #$3100
                     ldd       #36
-                    lbsr       CpyBlk
-                    ldu       >gr.VStaStorU Copy Tile Set Regs
+                    lbsr      CpyBlk
+                    ldu       >gr.U5
                     leay      V.TS0AddrH,u
                     ldu       #$3180
                     ldd       #32
-                    lbsr       CpyBlk
+                    lbsr      CpyBlk
                     puls      y,u
 end@                clrb
                     jmp       >GrfMod+SysRet
 
-; Take high and middle address byte in d and resutrn block number in a
+; Take high and middle address byte in d and return block number in a
 Addr2Blk            lslb
                     rola
                     lslb
@@ -627,16 +630,12 @@ PullBuf             lbsr      SetBlkC2C3
                     ldd       #$1000
                     lbsr      CpyBlk
 * restore display registers
-                    ldd       >gr.VStaStorU
-                    anda      #%00011111
-                    ora       #$A0
-                    std       >gr.VStaStorU
-                    ldu       >gr.VStaStorU
+                    ldu       >gr.U5
                     leau      V.V_MCR,u  copy VICKY_MCR Regs, Layer, Backgroun
                     ldy       #$FFC0
                     ldd       #16
                     lbsr      CpyBlk
-                    ldu       >gr.VStaStorU Copy BitMap Regs
+                    ldu       >gr.U5
                     lda       V.BM0Cl_En,u
                     sta       $3000
                     lda       V.BM0Blk,u
@@ -653,25 +652,133 @@ PullBuf             lbsr      SetBlkC2C3
                     sta       $3010
                     lda       V.BM2Blk,u
                     clrb
-                    lbsr       Blk2Addr
+                    lbsr      Blk2Addr
                     std       $3011
                     ldy       #$3100
                     leau      V.TM0,u   Copy Tile Map Regs
                     ldd       #36
-                    lbsr       CpyBlk
-                    ldu       >gr.VStaStorU Copy Tile Set Regs
+                    lbsr      CpyBlk
+                    ldu       >gr.U5
                     leau      V.TS0AddrH,u
                     ldy       #$3180
                     ldd       #32
-                    lbsr       CpyBlk
+                    lbsr      CpyBlk
                     puls      y,u
 end@                clrb
                     jmp       >GrfMod+SysRet
 
 
+EraseLine	    lbsr      SetBlkC2C3
+	            clrb                          start erasing at column 0
+                    lda       V.CurRow,u          of the current row
+		    bsr       EraseLineCore
+                    jmp       >GrfMod+SysRet
+* Entry:  A = The row to erase.
+*         B = The column to start erasing on.
+EraseLineCore       pshs      u
+		    pshs      b                   save the start column
+                    ldb       V.WWidth,u
+                    mul                           get the product
+                    addb      ,s                  add the column to start erasing from
+                    adca      #0                  consider the carry
+                    tfr       d,x                 X = cell offset
+                    lda       V.WWidth,u          get the number of columns
+                    suba      ,s+                 A = cells to erase
+                    tfr       a,b
+                    clra
+                    tfr       d,y                 Y = fill count
+		    cmpy      #0
+		    beq       elcexit
+                    lda       #C$SPAC		  A=glyph, X=cell offset, Y=count
+		    ldb	      V.FBCol,u
+		    stb	      >gr.WColor
+                    ldb	      V.TermLive,u
+		    beq	      EraseLineShadow
+		    leau      $4000,x
+		    leax      $2000,x
+		    bra	      FillChars
+EraseLineShadow	    leau      $6000+T.TXTCOLOR,x
+		    leax      $6000,x
+FillChars	    ldb	      >gr.WColor
+loop@		    sta	      ,x+
+		    stb	      ,u+
+		    leay      -1,y
+		    bne	      loop@
+elcexit		    puls      u
+		    rts
 
-		    
 
+ErEOLine	    lbsr      SetBlkC2C3
+ErEOLine2           ldd       >V.CurRow,u         get the current row and column
+                    bsr       EraseLineCore       go erase from that point to the end of line
+                    jmp       >GrfMod+SysRet		    
+
+ErEOScrn	    lbsr      SetBlkC2C3
+		    ldd	      >V.CurRow,u
+		    bsr	      EraseLineCore
+                    lda       V.CurRow,u          get the current row
+l@                  clrb                          clear the column
+                    inca                          increment row
+                    cmpa      V.WHeight,u         are we at the end?
+                    bge       ex@                 branch if so
+                    pshs      a                   save our row counter
+                    bsr       EraseLineCore       go erase the line
+                    puls      a                   recover our row counter
+                    bra       l@                  go erase more
+ex@                 jmp       >GrfMod+SysRet      return		    
+
+
+PSGInit             lbsr      SetBlkC4
+                    lda       #%10011111
+                    sta       $2000+PSGM.Base
+                    lda       #%10111111
+                    sta       $2000+PSGM.Base
+                    lda       #%11011111
+                    sta       $2000+PSGM.Base
+                    lda       #%11111111
+                    sta       $2000+PSGM.Base
+                    jmp       >GrfMod+SysRet
+
+
+PSGBell		    lbsr      SetBlkC4
+		    ldx       #$2000+PSGM.Base
+                    lda       #%10111111
+                    sta       ,x
+                    lda       #%11011111
+                    sta       ,x
+                    lda       #%11111111
+                    sta       ,x
+                    lda       >gr.WColor
+                    coma
+                    anda      #%00001111
+                    ora       #%10010000
+                    sta       ,x
+                    ldd       >gr.WOff
+                    coma
+                    comb
+                    pshs      d
+                    andb      #%00001111
+                    orb       #%10000000
+                    stb       ,x
+                    puls      d
+                    lsrb
+                    lsrb
+                    lsrb
+                    lsrb
+                    lsla
+                    lsla
+                    lsla
+                    lsla
+                    anda      #%00110000
+                    pshs      a
+                    orb       ,s+
+                    stb       ,x
+                    jmp       >GrfMod+SysRet
+
+PSGOff		    lbsr      SetBlkC4
+		    lda       #%10011111
+                    sta       $2000+PSGM.Base
+                    jmp       >GrfMod+SysRet
 
 SetBlkC0C1          pshs      cc
                     orcc      #IntMasks
@@ -684,6 +791,31 @@ SetBlkC0C1          pshs      cc
                     stb       MMU_SLOT_2 $4000
                     std       ,x
                     puls      cc,pc
+
+SetBlkC2C3          pshs      cc,d,x
+                    orcc      #IntMasks
+                    clra
+                    ldx       #gr.DATImg+2
+                    ldb       #$C2
+                    stb       MMU_SLOT_1 $2000
+                    std       ,x++
+                    ldb       #$C3
+                    stb       MMU_SLOT_2 $4000
+                    std       ,x++
+                    ldb       >gr.TermBlk
+                    stb       MMU_SLOT_3 $6000
+                    std       ,x++
+                    incb
+                    stb       MMU_SLOT_4 $8000
+                    std       ,x++
+                    ldb       >gr.VBlk
+                    stb       MMU_SLOT_5 $A000
+                    std       ,x
+		    ldu	      >gr.U5
+                    puls      cc,d,x,pc
+
+
+
 
 SetBlkC4            pshs      cc
                     orcc      #IntMasks

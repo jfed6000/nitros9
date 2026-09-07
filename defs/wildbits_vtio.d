@@ -236,6 +236,15 @@ V.GMAPBLK           RMB       2         mapped in logical address of block
 
 V.InBuf             RMB       KBufSz    the input buffer
 V.KSBuf             RMB       KBufSz
+* grfdrv256 SetBlkC2C3 maps the DSS through ONE MMU slot (slot 5).
+* Safe only while the whole area fits a single 256-byte page: F$SRqMem
+* hands out page-aligned pages and 256 divides 8192, so <=256 bytes
+* can never span two 8K blocks.  Past a page, slot 5 must become a
+* 2-slot window.
+                    ifgt      .-256
+                    error     vtio device static > 256 bytes - fix grfdrv256 DSS mapping
+                    endc
+
                     RMB       250-.
 V.Last              EQU       .
 
@@ -295,6 +304,7 @@ gr.TermCnt          RMB       1         ; number of open terminals
 gr.TermBlk          RMB       1         ; Current Terminal Block for Buffer Operations
 gr.VStaStorU        rmb       2         ; Static Storage
 gr.VBlk             rmb       1         ; block # containing static storage
+gr.U5		    rmb	      2		; Static storage in grfdrv for slot 5
 gr.SwitchTerm	    rmb	      1		; $00=None, $FE=pref, $FF=Next
 gr.SwitchReq	    rmb	      1
 SW.None		    equ	      $00
@@ -302,8 +312,8 @@ SW.Prev		    equ	      $FF
 SW.Next		    equ	      $01
 * Screen table (9 screens × 4 bytes = 36 bytes)
 gr.LiveTerm         rmb       1         ; this is the active terminal
-gr.TermSz           equ       4         ; Size per entry
-gr.TermTbl          RMB       36        ; Screen table base
+gr.TermSz           equ       8         ; Size per entry (8 bytes to make idx math easier)
+gr.TermTbl          RMB       72        ; Screen table base
 * GF.Write snapshot. Filled in the system task before Flip1; do not
 * index U after LUT 1 has stolen slots.
 gr.WOp              rmb       1         ; 0=cell 1=fill 2=scroll 3=blank 4=initdisp 5=pal 6=psg 7=bmreg
@@ -318,8 +328,17 @@ gr.PalBuf           rmb       64        ; palette snapshot for WO.InitDisp
 T.Flags             rmb       1         ; Acrive Flag - only one screen should be active
 T.Block             rmb       1
 T.StatPtr           rmb       2         ; Pointer to Static Vars (V. vars ) for screen
+T.VBlk		    rmb	      1		; block containing static vars
+T.grU5		    rmb	      2         ; U in grfdrv if in mmu slot 5
+T.Unused	    rmb	      1		; Unused
+* Term table row is 8 bytes to make the math easier for indexing.
+* can use lsr to compute index instead of multiplying by 5
+* Plus we have 1 unused byte for future use without breaking anything else
+* Note:  Driver Static Storage will never span 2 blocks because of 256 byte pages
+* Driver Static Storage will always be 256 bytes on a 256 byte boundary
+
 T.Init              equ       %00000001 ; Terminal is initialized/open
-T.Live            equ       %00000010 ; Terminal is currently active (optional redundancy
+T.Live              equ       %00000010 ; Terminal is currently active (optional redundancy
 
 
 * Rest available for F256-specific data
@@ -346,7 +365,12 @@ GF.SSFntChar        equ       6         ; SetStat font char
 GF.SSDScrn          equ       7         ; SetStat display screen
 GF.PushBuf          equ       8         ; Push Vicky state to term buffer
 GF.PullBuf          equ       9         ; Pull term buffer to Vicky
-GF.Write            equ       10        ; cell/fill/scroll/blank/initdisp/pal/psg/bmreg (ASLB index, not $10)
+GF.EraseLine	    equ	      10
+GF.ErEOLine	    equ	      11
+GF.ErEOScrn         equ       12        ; Erase End of Screen
+GF.PSGInit	    equ	      13
+GF.PSGBell	    equ	      14
+GF.PSGOff	    equ	      15
 WO.Cell             equ       0
 WO.Fill             equ       1
 WO.Scroll           equ       2
