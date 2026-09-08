@@ -316,14 +316,67 @@ extended from 25 to all 60 text rows and now also prints
 `HW CURSOR: x=.. y=.. ctrl=$..`.  Both are what make these two bugs
 diagnosable without attaching `-debug`.
 
+### grfdrv parameter registers renamed to `gr.b1-b5` / `gr.d1-d2`
+
+vtio reaches grfdrv through a register-bank flip (`CallGrfDrv2` →
+`jmp [D.Flip1]`) and so cannot pass arguments in CPU registers — it snapshots
+them into a block of globals in GrfMem first. Those globals were named after
+the *first* use of each slot and had drifted into being actively wrong:
+`gr.WColor` carried a PSG **volume** and a bitmap **control byte**; `gr.WOff`
+("cell offset 0..4799") carried a PSG **frequency**, a bitmap **physical
+address**, and text-LUT bytes 0-1; `gr.WWidth` was a **0=FG / 1=BG selector**;
+`gr.WOp` was dead.
+
+They are now a numbered register file — `bN` = 1 byte, `dN` = 2 bytes
+("double") — so no name can claim the wrong thing:
+
+| old | new | | old | new |
+|---|---|---|---|---|
+| `gr.WOp`    | `gr.b1` (unassigned) | | `gr.WOff`   | `gr.d1` |
+| `gr.WGlyph` | `gr.b2` | | `gr.WCount` | `gr.d2` |
+| `gr.WColor` | `gr.b3` | | | |
+| `gr.WDest`  | `gr.b4` | | | |
+| `gr.WWidth` | `gr.b5` | | | |
+
+The meaning moved to an ABI table in `defs/wildbits_vtio.d` above the
+declarations (which op uses which register for what), a parameter block in
+every grfdrv handler header, and a trailing comment at all 81 store/load
+sites. **Read the `.d` table before adding a `GF.*` op.** Two things it
+records that are easy to trip over:
+
+- **`GF.ClrScrn` and the erase family clobber `b3`.** They take no parameters
+  there, but both spill `V.FBCol` into it because `U` gets reused as the
+  colour-plane pointer. Nothing may hold a live `b3` across those calls.
+- **The direct-call entries bypass the block entirely.**
+  `WriteCharLive`/`Shadow` and `ScrollLive`/`Shadow` take everything in
+  `A`/`B`/`Y`.
+
+Declarations kept their physical order (`b1 b2 d1 d2 b3 b4 b5`) so GrfMem
+offsets did not move — the interleave is historical, not meaningful.
+
+The one code change alongside the rename: the dead `sta >gr.WWidth` in vtio's
+scroll block is deleted. `ScrollLive`/`ScrollShadow` take the width in `A` and
+never read it; it was left over from the removed `GF.Write WO.Scroll` op, and
+under generic names it would have read as a meaningful write to the register
+`GF.Pal` actually uses. The `ldd V.WWidth,u` before it stays — `B` (the
+height) feeds the two `beq noscroll` guards.
+
+Verified behaviour-neutral: `.mods/grfdrv256` builds **byte-identical** to
+commit `00abe155` (1923 bytes), and `.mods/vtio` is exactly 3 bytes smaller
+(4312 → 4309, one extended `sta`). Boot, scrolling and the cursor are
+unchanged in MAME.
+
+This pass also surfaced that **`GFInitDisp` is a bare `rts`** — `GF.InitDisp`
+(19) is a live entry in `FuncTbl` that does nothing, while the `.d` comment
+described a gamma ramp / font copy / screen fill. The comment now says STUB;
+the stub itself is untouched and still open.
+
 ### Known-latent, deliberately left alone
 
 - `ScrollLive`/`ScrollShadow` blank the exposed last row of the **character**
   plane only; the colour plane keeps the old bottom row's attributes.
   Masked on every current path because the caller reaches `clrline` →
   `EraseLine` immediately after and `EraseLineCore` fills both planes.
-- The `sta >gr.WWidth` in vtio's scroll block is dead — grfdrv's `Scroll*`
-  take the width in `A`.
 
 ### Still open / worth doing
 
@@ -338,8 +391,9 @@ diagnosable without attaching `-debug`.
 - `InsLine` / `DelLine` are still `rts` stubs.
 - `SS.DevNm` is unimplemented in vtio; Shell+ calls it and handles the error
   gracefully.
-- The two known-latent scroll items above (colour-plane last row, dead
-  `gr.WWidth` store).
+- The known-latent scroll item above (the colour-plane last row).
+- `GFInitDisp` is a bare `rts`, but `GF.InitDisp` (19) is still a live
+  `FuncTbl` entry.
 
 ---
 

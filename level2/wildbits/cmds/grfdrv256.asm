@@ -58,7 +58,8 @@ entry               equ       *
 *	y:   offset in textmap
 *
 * Writing text is so common, calls are direct for extra speed
-* and to reduce overhead.
+* and to reduce overhead.  Being direct, they take their arguments in
+* CPU registers and use none of the gr.b*/gr.d* parameter block.
 *
 *******************************************************************
 * Direct calls skip 'entry', so they must select LUT 1 for editing
@@ -115,10 +116,11 @@ WriteCharShadow	    pshs      cc,a,b,y
 *
 *	a:   width
 *	b:   height
-*	y:   screen size in bytes
+*	y:   screen size in bytes  (V.ScreenSize = V.WWidth * V.WHeight)
 *
 * Writing text is so common, calls are direct for extra speed
-* and to reduce overhead.
+* and to reduce overhead.  Being direct, they take their arguments in
+* CPU registers and use none of the gr.b*/gr.d* parameter block.
 *
 *******************************************************************
 ScrollLive	    pshs      a
@@ -713,8 +715,11 @@ EraseLineCore       pshs      u
 		    cmpy      #0
 		    beq       elcexit
                     lda       #C$SPAC		  A=glyph, X=cell offset, Y=count
+* b3 is scratch here, not a parameter: U is about to be reused as the
+* colour-plane pointer, so V.FBCol has to be spilled somewhere first.
+* Callers must not hold a live b3 across GF.EraseLine/ErEOLine/ErEOScrn.
 		    ldb	      V.FBCol,u
-		    stb	      >gr.WColor
+		    stb	      >gr.b3               spill V.FBCol (colour attr)
                     ldb	      V.TermLive,u
 		    beq	      EraseLineShadow
 		    leau      $4000,x
@@ -722,7 +727,7 @@ EraseLineCore       pshs      u
 		    bra	      FillChars
 EraseLineShadow	    leau      $6000+T.TXTCOLOR,x
 		    leax      $6000,x
-FillChars	    ldb	      >gr.WColor
+FillChars	    ldb	      >gr.b3               recover the colour attr
 loop@		    sta	      ,x+
 		    stb	      ,u+
 		    leay      -1,y
@@ -763,6 +768,10 @@ PSGInit             lbsr      SetBlkC4
                     jmp       >GrfMod+SysRet
 
 
+*******************************************************************
+* GF.PSGBell (b14) - fire-and-forget tone on the PSG at $C4.
+*   b3 = volume 0-15 (inverted below)   d1 = frequency
+*******************************************************************
 PSGBell		    lbsr      SetBlkC4
 		    ldx       #$2000+PSGM.Base
                     lda       #%10111111
@@ -771,12 +780,12 @@ PSGBell		    lbsr      SetBlkC4
                     sta       ,x
                     lda       #%11111111
                     sta       ,x
-                    lda       >gr.WColor
+                    lda       >gr.b3              volume 0-15
                     coma
                     anda      #%00001111
                     ora       #%10010000
                     sta       ,x
-                    ldd       >gr.WOff
+                    ldd       >gr.d1              frequency
                     coma
                     comb
                     pshs      d
@@ -804,22 +813,23 @@ PSGOff		    lbsr      SetBlkC4
                     jmp       >GrfMod+SysRet
 
 *******************************************************************
-* GF.Cell (b16) - write gr.WGlyph / gr.WColor at cell gr.WOff.
-* gr.WDest: 0 = 16K buffer, 1 = live $C2/$C3.
+* GF.Cell (b16) - write one cell.
+*   b2 = glyph          b3 = colour attr        d1 = cell offset
+*   b4 = WD.Buf (16K terminal buffer) / WD.Vicky (live $C2/$C3)
 *******************************************************************
 GFCell              lbsr      SetBlkC2C3
-                    ldx       >gr.WOff
-                    tst       >gr.WDest
+                    ldx       >gr.d1              cell offset
+                    tst       >gr.b4              live or 16K buffer?
                     beq       GFCellBuf
-                    lda       >gr.WGlyph
+                    lda       >gr.b2              glyph
                     sta       $2000,x
-                    lda       >gr.WColor
+                    lda       >gr.b3              colour attr
                     sta       $4000,x
                     bra       GWRet
-GFCellBuf           lda       >gr.WGlyph
+GFCellBuf           lda       >gr.b2              glyph
                     sta       $6000,x            T.TXT origin 0
                     leax      T.TXTCOLOR,x
-                    lda       >gr.WColor
+                    lda       >gr.b3              colour attr
                     sta       $6000,x
 GWRet               clrb
                     jmp       >GrfMod+SysRet
@@ -838,8 +848,9 @@ GFClrScrn           lbsr      SetBlkC2C3
                     bls       GFCSok
                     ldd       #4800
 GFCSok              tfr       d,y               Y = cell count
+* b3 is scratch here, not a parameter - same spill as EraseLineCore.
                     lda       V.FBCol,u         grab colour before U is reused
-                    sta       >gr.WColor
+                    sta       >gr.b3            spill V.FBCol (colour attr)
                     ldb       V.TermLive,u
                     beq       GFCSbuf
                     ldx       #$2000
@@ -848,7 +859,7 @@ GFCSok              tfr       d,y               Y = cell count
 GFCSbuf             ldx       #$6000
                     ldu       #$6000+T.TXTCOLOR
 GFCSgo              lda       #C$SPAC
-                    ldb       >gr.WColor
+                    ldb       >gr.b3            recover the colour attr
 GFCSlp              sta       ,x+
                     stb       ,u+
                     leay      -1,y
@@ -856,19 +867,19 @@ GFCSlp              sta       ,x+
                     jmp       >GrfMod+SysRet
 
 *******************************************************************
-* GF.Blank (b18) - blank the 16K term buffer: T.TXT with gr.WGlyph,
-* T.TXTCOLOR with gr.WColor.
+* GF.Blank (b18) - blank the 16K terminal buffer.
+*   b2 = fill glyph -> T.TXT     b3 = fill colour -> T.TXTCOLOR
 *******************************************************************
 GFBlank             lbsr      SetBlkC2C3
                     ldx       #$6000
                     ldy       #4800
-                    lda       >gr.WGlyph
+                    lda       >gr.b2
 GFBlkT              sta       ,x+
                     leay      -1,y
                     bne       GFBlkT
                     ldx       #$6000+T.TXTCOLOR
                     ldy       #4800
-                    lda       >gr.WColor
+                    lda       >gr.b3
 GFBlkC              sta       ,x+
                     leay      -1,y
                     bne       GFBlkC
@@ -878,48 +889,49 @@ GFInitDisp	    rts
 
 *******************************************************************
 * GF.Pal (b20) - one 4-byte text-LUT entry.
-* gr.WDest 1 = live $C1, 0 = 16K T.FLUT/T.BLUT.  gr.WWidth 0=FG 1=BG.
-* gr.WGlyph = palette reg #.  Bytes: gr.WOff, gr.WOff+1, gr.WCount,
-* gr.WCount+1.
+*   b2 = palette register # (0-15)
+*   b4 = WD.Vicky -> live $C1 / WD.Buf -> 16K T.FLUT/T.BLUT
+*   b5 = 0 foreground LUT, 1 background LUT
+*   d1 = LUT bytes 0-1 (blue, green)   d2 = LUT bytes 2-3 (red, alpha)
 *******************************************************************
-GFPal               tst       >gr.WDest
+GFPal               tst       >gr.b4              live $C1 or 16K buffer?
                     beq       GFPalBuf
                     lbsr      SetBlkC0C1
                     ldx       #$4000+TEXT_LUT_FG
-                    tst       >gr.WWidth
+                    tst       >gr.b5              0 = FG LUT, 1 = BG LUT
                     beq       GFPalIdx
                     ldx       #$4000+TEXT_LUT_BG
                     bra       GFPalIdx
 GFPalBuf            lbsr      SetBlkC2C3
                     ldx       #$6000+T.FLUT
-                    tst       >gr.WWidth
+                    tst       >gr.b5              0 = FG LUT, 1 = BG LUT
                     beq       GFPalIdx
                     ldx       #$6000+T.BLUT
-GFPalIdx            ldb       >gr.WGlyph
-                    lslb
+GFPalIdx            ldb       >gr.b2              palette register #
+                    lslb                          4 bytes per entry
                     lslb
                     abx
-                    lda       >gr.WOff
+                    lda       >gr.d1              blue
                     sta       ,x
-                    lda       >gr.WOff+1
+                    lda       >gr.d1+1            green
                     sta       1,x
-                    lda       >gr.WCount
+                    lda       >gr.d2              red
                     sta       2,x
-                    lda       >gr.WCount+1
+                    lda       >gr.d2+1            alpha
                     sta       3,x
                     jmp       >GrfMod+SysRet
 
 *******************************************************************
 * GF.BmEnable (b21) / GF.BmFree (b22) / GF.BmPalet (b23)
-* Poke the bitmap registers at $3000 + gr.WGlyph*8 on $C0.
-*   Enable: gr.WColor -> ctrl, gr.WOff (2) -> phys, clr 3,x
+* Poke the bitmap registers at $3000 + b2*8 on $C0.  b2 = bitmap # (0-2).
+*   Enable: b3 = control byte -> ctrl, d1 = phys addr -> 1,x, clr 3,x
 *   Free  : zero all four bytes
-*   Palet : gr.WColor -> ctrl
+*   Palet : b3 = CLUT# rolled with the enable bit -> ctrl
 *******************************************************************
 GFBmEnable          bsr       GFBmX
-                    lda       >gr.WColor
+                    lda       >gr.b3              control byte
                     sta       ,x
-                    ldd       >gr.WOff
+                    ldd       >gr.d1              physical address
                     std       1,x
                     clr       3,x
                     jmp       >GrfMod+SysRet
@@ -930,12 +942,12 @@ GFBmFree            bsr       GFBmX
                     clr       3,x
                     jmp       >GrfMod+SysRet
 GFBmPalet           bsr       GFBmX
-                    lda       >gr.WColor
+                    lda       >gr.b3              CLUT# | enable
                     sta       ,x
                     jmp       >GrfMod+SysRet
-* GFBmX - map $C0/$C1, return X = $3000 + gr.WGlyph*8.
+* GFBmX - map $C0/$C1, return X = $3000 + b2*8 (b2 = bitmap #).
 GFBmX               lbsr      SetBlkC0C1
-                    ldb       >gr.WGlyph
+                    ldb       >gr.b2              bitmap # 0-2
                     lda       #8
                     mul
                     addd      #$3000

@@ -314,15 +314,53 @@ SW.Next		    equ	      $01
 gr.LiveTerm         rmb       1         ; this is the active terminal
 gr.TermSz           equ       8         ; Size per entry (8 bytes to make idx math easier)
 gr.TermTbl          RMB       72        ; Screen table base
-* GF.* op parameter snapshot. Filled in the system task before Flip1;
-* do not index U after LUT 1 has stolen slots.
-gr.WOp              rmb       1         ; unused (was the GF.Write sub-op selector)
-gr.WGlyph           rmb       1         ; glyph / palette reg # / bitmap #
-gr.WOff             rmb       2         ; cell offset 0..4799 / BM phys addr
-gr.WCount           rmb       2         ; LUT entry bytes 2-3
-gr.WColor           rmb       1         ; V.FBCol / BM control byte
-gr.WDest            rmb       1         ; WD.Buf (16K backup) / WD.Vicky ($C2/$C3)
-gr.WWidth           rmb       1         ; GF.InitDisp font hi block / GF.Pal 0=FG 1=BG
+*******************************************************************
+* GrfDrv parameter registers.
+*
+* vtio reaches grfdrv through a register-bank flip (CallGrfDrv2 ->
+* jmp [D.Flip1]) and so cannot pass arguments in CPU registers.  It
+* snapshots them into this block first, in the system task, before
+* Flip1.  Do not index U after LUT 1 has stolen slots.
+*
+* Named by size and number, not by meaning: bN = 1 byte, dN = 2 bytes
+* ("double").  Each register carries something different per GF.* op,
+* so a descriptive name would be a lie at most call sites.  This table
+* is the ABI; every store/load site also names its value inline.
+*
+*   op                   b2          b3           b4     b5     d1         d2
+*   -------------------- ----------- ------------ ------ ------ ---------- ---------
+*   GF.PSGBell  (14)     -           volume 0-15  -      -      frequency  -
+*   GF.Cell     (16)     glyph       colour attr  dest   -      cell off   -
+*   GF.Blank    (18)     fill glyph  fill colour  -      -      -          -
+*   GF.Pal      (20)     pal reg #   -            dest   0=FG   LUT byte   LUT byte
+*                                                        1=BG   0-1 (B,G)  2-3 (R,A)
+*   GF.BmEnable (21)     bitmap #    ctrl byte    -      -      phys addr  -
+*   GF.BmFree   (22)     bitmap #    -            -      -      -          -
+*   GF.BmPalet  (23)     bitmap #    CLUT#|enable -      -      -          -
+*
+* b1 is unassigned - a free parameter byte.  (It was the GF.Write
+*   sub-op selector before that dispatch layer was removed.)
+* b4 "dest" is set by vtio's SetWDest: WD.Buf = the 16K terminal backup
+*   buffer at LUT1 $6000, WD.Vicky = the live $C2/$C3 planes.
+* d1/d2 halves are addressed gr.d1 / gr.d1+1 the way D splits into A/B.
+* The direct-call entries (WriteCharLive/Shadow, ScrollLive/Shadow)
+*   bypass this block entirely - they take everything in A/B/Y.
+*
+* HAZARD: GF.ClrScrn (17) and the erase family (GF.EraseLine 10 /
+*   GF.ErEOLine 11 / GF.ErEOScrn 12) take no parameters here, but both
+*   CLOBBER b3 - they spill V.FBCol into it because U gets reused as the
+*   colour-plane pointer.  Nothing may hold a live b3 across those calls.
+*
+* The physical order below (b1 b2 d1 d2 b3 b4 b5) is historical, not
+* meaningful; it is kept so GrfMem offsets did not move in the rename.
+*******************************************************************
+gr.b1               rmb       1         ; unassigned - free parameter byte
+gr.b2               rmb       1         ; glyph / palette reg # / bitmap #
+gr.d1               rmb       2         ; cell offset / PSG freq / BM addr / LUT b0-1
+gr.d2               rmb       2         ; GF.Pal LUT bytes 2-3 only
+gr.b3               rmb       1         ; colour attr / PSG volume / BM ctrl byte
+gr.b4               rmb       1         ; WD.Buf (16K backup) / WD.Vicky ($C2/$C3)
+gr.b5               rmb       1         ; GF.Pal 0=FG 1=BG LUT select
 gr.PalBuf           rmb       64        ; palette snapshot for GF.InitDisp
                     org       0
 T.Flags             rmb       1         ; Acrive Flag - only one screen should be active
@@ -371,10 +409,11 @@ GF.ErEOScrn         equ       12        ; Erase End of Screen
 GF.PSGInit	    equ	      13
 GF.PSGBell	    equ	      14
 GF.PSGOff	    equ	      15
-GF.Cell             equ       16        ; cell write: gr.WGlyph/gr.WColor at gr.WOff
+GF.Cell             equ       16        ; one cell: b2 glyph, b3 colour, d1 offset
 GF.ClrScrn          equ       17        ; clear whole screen (dims read from DSS)
 GF.Blank            equ       18        ; blank the 16K term buffer
-GF.InitDisp         equ       19        ; gamma $C0, font/pal $C1, 80x60 $C2/$C3 fill
+GF.InitDisp         equ       19        ; STUB - GFInitDisp is a bare rts.  Was:
+*                                       ; gamma $C0, font/pal $C1, $C2/$C3 fill
 GF.Pal              equ       20        ; one text-LUT entry (1B 60 / 1B 61)
 GF.BmEnable         equ       21        ; bitmap: enable + phys addr
 GF.BmFree           equ       22        ; bitmap: zero the four registers

@@ -910,9 +910,9 @@ BlankTermText       pshs      cc,d,x,y
                     sta       $12EC
                     sta       >gr.TermBlk
                     lda       #C$SPAC
-                    sta       >gr.WGlyph
+                    sta       >gr.b2              fill glyph
                     lda       V.FBCol,u
-                    sta       >gr.WColor
+                    sta       >gr.b3              fill colour attr
                     ldb       #GF.Blank
                     lbsr      CallGrfDrvNoPD
 BTTSkip             puls      cc,d,x,y,pc
@@ -1136,10 +1136,10 @@ SetWDest            lda       V.TermLive,u
                     lda       V.TermBufBlk,u
                     beq       SWVicky
                     sta       >gr.TermBlk
-                    clr       >gr.WDest           WD.Buf
+                    clr       >gr.b4              WD.Buf - the 16K terminal buffer
                     rts
 SWVicky             lda       #WD.Vicky
-                    sta       >gr.WDest
+                    sta       >gr.b4              WD.Vicky - the live $C2/$C3 planes
                     lda       V.TermBufBlk,u
                     beq       SWDestX
                     sta       >gr.TermBlk         keep SetBlkC2C3 off block 0
@@ -1148,13 +1148,14 @@ SWDestX             rts
 *******************************************************************
 * PutCell - A = glyph, X = cell offset.  Snapshot + GF.Cell.
 * Colour = V.FBCol; dest via SetWDest.  Used by EraseChar.
+*   -> b2 glyph, b3 colour attr, d1 cell offset, b4 dest
 *******************************************************************
 PutCell             pshs      d,x
-                    sta       >gr.WGlyph
-                    stx       >gr.WOff
+                    sta       >gr.b2              glyph
+                    stx       >gr.d1              cell offset
                     lda       V.FBCol,u
-                    sta       >gr.WColor
-                    lbsr      SetWDest
+                    sta       >gr.b3              colour attr
+                    lbsr      SetWDest            sets b4
                     ldb       #GF.Cell
                     lbsr      CallGrfDrvNoPD
                     puls      d,x,pc
@@ -1218,8 +1219,11 @@ incrow              inca                          and we increment the row
                     lbeq      CurHome
                     deca
                     pshs      d                   last row, column from B
+* A = width (unused here - the Scroll* direct calls take it in A below),
+* B = height, which the two guards that follow need.  There used to be a
+* 'sta >gr.b5' here feeding the old GF.Write WO.Scroll op; ScrollLive/
+* ScrollShadow never read it, so it is gone.
                     ldd       V.WWidth,u
-                    sta       >gr.WWidth
                     tstb
                     beq       noscroll
                     decb
@@ -1662,8 +1666,8 @@ Bell                ldd       #$0F1F              A = start volume (15), B = dur
 BellTone            tst       D.SndPrcID
                     bne       BellBusy
                     stb       D.TnCnt             store the duration counter in the global
-                    sta       >gr.WColor          volume 0-15; LUT 1 inverts
-                    sty       >gr.WOff            frequency
+                    sta       >gr.b3              volume 0-15; LUT 1 inverts
+                    sty       >gr.d1              frequency
                     ldb	      #GF.PSGBell
 		    lbsr      CallGrfDrvNoPD
 BellBusy            clrb
@@ -1869,22 +1873,24 @@ BoldSw	            rts
 *** R G B A = red / green / blue / alpha components.
 *** FG vs BG is set by the entry point, not a parameter.
 ***
-ChgForePal	    clrb                          gr.WWidth 0 = foreground LUT
+*** -> b2 palette reg #, b4 dest, b5 FG/BG select,
+***    d1 LUT bytes 0-1 (blue, green), d2 LUT bytes 2-3 (red, alpha).
+ChgForePal	    clrb                          0 = foreground LUT
                     bra       ChgPal
-ChgBackPal          ldb       #1                  gr.WWidth 1 = background LUT
+ChgBackPal          ldb       #1                  1 = background LUT
 ChgPal              pshs      d,x
-                    stb       >gr.WWidth
+                    stb       >gr.b5              FG/BG LUT select
                     lda       V.EscParms+0,u      PRN
-                    sta       >gr.WGlyph
-                    lda       V.EscParms+3,u      blue
-                    sta       >gr.WOff
-                    lda       V.EscParms+2,u      green
-                    sta       >gr.WOff+1
-                    lda       V.EscParms+1,u      red
-                    sta       >gr.WCount
-                    lda       V.EscParms+4,u      alpha
-                    sta       >gr.WCount+1
-                    lbsr      SetWDest
+                    sta       >gr.b2              palette register #
+                    lda       V.EscParms+3,u
+                    sta       >gr.d1              blue     (LUT byte 0)
+                    lda       V.EscParms+2,u
+                    sta       >gr.d1+1            green    (LUT byte 1)
+                    lda       V.EscParms+1,u
+                    sta       >gr.d2              red      (LUT byte 2)
+                    lda       V.EscParms+4,u
+                    sta       >gr.d2+1            alpha    (LUT byte 3)
+                    lbsr      SetWDest            sets b4
                     ldb       #GF.Pal
                     lbsr      CallGrfDrvNoPD
                     puls      d,x
@@ -2631,13 +2637,13 @@ map@                lda       R$Y+1,x             load bitmap@
                     stb       a,y                 store block # in V.[BMX]Block where [BMX] is BM00, BM11 or BM2w
                     clra
                     std       R$X,x               store block # in X for return value
-* Snapshot BM# / phys addr / enable; GF.Write WO.BmReg in LUT 1.
+* -> b2 bitmap #, b3 control byte, d1 physical address.
                     lda       R$Y+1,x
-                    sta       >gr.WGlyph
+                    sta       >gr.b2              bitmap # 0-2
                     lbsr      Blk2Addr
-                    std       >gr.WOff
+                    std       >gr.d1              physical address
                     lda       #%00000001
-                    sta       >gr.WColor
+                    sta       >gr.b3              control byte (enable)
                     ldb       #GF.BmEnable
                     lbsr      CallGrfDrvNoPD
                     clrb
@@ -2765,7 +2771,7 @@ clr_bmvar@          leay      V.BM0Blk,u           clear the bitmap storage
                     clra
                     sta       ,y
                     lda       R$Y+1,x
-                    sta       >gr.WGlyph
+                    sta       >gr.b2              bitmap # 0-2
                     ldb       #GF.BmFree
                     lbsr      CallGrfDrvNoPD
                     clrb
@@ -2784,11 +2790,11 @@ clr_bmvar@          leay      V.BM0Blk,u           clear the bitmap storage
 ;;;       CC = Carry flag clear to indicate success
 ;;;
 SSPalet             lda       R$Y+1,x
-                    sta       >gr.WGlyph
+                    sta       >gr.b2              bitmap # 0-2
                     ldd       R$X,x               d now has CLUT#
                     orcc      #Carry              set carry bit
                     rolb                          shift B, and rotate in enable it
-                    stb       >gr.WColor
+                    stb       >gr.b3              CLUT# | enable
                     ldb       #GF.BmPalet
                     lbsr      CallGrfDrvNoPD
                     clrb
@@ -2925,13 +2931,13 @@ dbgwrite
                     pshs      d,x,y,u
                     ldx       >gr.Entry
                     beq       dbgdn
-                    sta       >gr.WGlyph
+                    sta       >gr.b2              glyph
                     ldx       #1
-                    stx       >gr.WOff
+                    stx       >gr.d1              cell offset 1
                     lda       #$10
-                    sta       >gr.WColor
+                    sta       >gr.b3              colour attr
                     lda       #WD.Vicky
-                    sta       >gr.WDest
+                    sta       >gr.b4              straight to the live planes
                     ldb       #GF.Cell
                     lbsr      CallGrfDrvNoPD
 dbgdn               puls      d,x,y,u,pc
