@@ -49,10 +49,9 @@ start               lbra      Init
                     lbra      SetStat
                     lbra      Term
 
-* Font and palette data are stored in data modules.
-* These are the module names.
-fontmod             fcs       /font/
-palettemod          fcs       /palette/
+* The 'font' and 'palette' data modules used to be F$Linked here by
+* InitDisplayMem and installed by GF.InitDisp.  Both are gone: the FPGA
+* preloads the font into $C1 and the text palettes into $C0 at reset.
 keydrvmod           fcs       /keydrv/
 msdrvmod            fcs       /mousedrv/             mouse driver module
 llpath              fcc       "/dd/CMDS/"

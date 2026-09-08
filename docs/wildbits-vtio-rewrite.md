@@ -371,6 +371,59 @@ This pass also surfaced that **`GFInitDisp` is a bare `rts`** — `GF.InitDisp`
 described a gamma ramp / font copy / screen fill. The comment now says STUB;
 the stub itself is untouched and still open.
 
+### `GF.InitDisp` deleted; text LUTs were on the wrong block
+
+`GF.InitDisp` (19) had decayed to a bare `rts` behind a live `FuncTbl` entry
+annotated *"Verify obsolute then delete"*, and its vtio caller
+`InitDisplayMem` was already gone. It used to do four things:
+
+| job | status |
+|---|---|
+| 256-entry identity gamma ramp into `$C0` | dead — vtio never sets `Mstr_Ctrl_GAMMA_En`, so the gamma LUT is never consulted |
+| install the `palette` data module into the text LUTs | the FPGA preloads it (so does MAME's `device_reset`) |
+| copy the `font` data module into `$C1` | ditto |
+| fill `$C2`/`$C3` with spaces + `$10` | that is `GF.ClrScrn`'s job now |
+
+So it is genuinely obsolete and is **deleted**, along with `gr.PalBuf` (its
+64-byte snapshot area, the last field in the `gr.` block) and the dangling
+`fontmod`/`palettemod` name strings in L2 `vtio.asm`. Ops above it renumber
+down one: **`GF.Pal` 20→19, `GF.BmEnable` 21→20, `GF.BmFree` 22→21,
+`GF.BmPalet` 23→22.** Safe because `FuncTbl` is a dense `jmp [b,y]` with no
+bounds check and every call site goes through the `GF.*` equs.
+
+> Both consumers now rely on the FPGA having preloaded the font and the text
+> palettes at reset. That is true of the current FPGA load and of MAME's
+> `device_reset`. If a bare board ever comes up without them, this is the
+> code that used to install them — see `grfdrv256.asm~`'s `GWInitDisp` and
+> `vtio.asm~`'s `InitDisplayMem`, and note L1 `vtio.asm` still does the whole
+> job (gamma, palette, font) around lines 315-350.
+
+**The real find: the text LUTs were being written to the wrong block.** All
+four sites used `$4000+TEXT_LUT_FG/BG`, but `SetBlkC0C1` maps **`$C0` at
+`$2000`** and `$C1` at `$4000`, while `defs/wildbits.d:446` says
+`TEXT_LUT_BLK equ $C0`. So they landed on `$C1+$1700` — inside graphics LUT1
+(`GRPH_LUT0_OFF+$700`) — instead of `$C0+$1700`. Corroborated three ways: the
+`TEXT_LUT_BLK` equ, L1 `vtio.asm` (which maps `TEXT_LUT_BLK` into `MAPSLOT`
+and writes at `TEXT_LUT_FG` within it), and MAME reading the text palette from
+`m_vram_c0[0x1700]`. Now `$2000+TEXT_LUT_FG/BG`. Affected:
+
+- **`GFPal`** — `1B 60` / `1B 61` (`ChgForePal`/`ChgBackPal`) had never worked;
+  they were quietly corrupting a graphics CLUT instead.
+- **`PushBuf` / `PullBuf`** — a terminal switch was saving and restoring 128
+  bytes of graphics LUT rather than the text palette. **This one is on the
+  multiterm critical path** and would have shown up as per-terminal colours
+  not surviving a switch.
+
+That also settles the old open question *"`ChgForePal` byte order assumed
+BGRA — verify against the Vicky text LUT format when palette actually
+works"*: **the order is correct.** `display 1B 60 01 00 00 FF FF` (PRN 1,
+R=00 G=00 B=FF A=FF) leaves `$C0+$1700` entry 1 reading `FF,00,00,FF`, and
+MAME's renderer reads that slot as B,G,R,A.
+
+Verification: `.mods/grfdrv256` 1923 → 1920 (the 1-byte `rts` plus its 2-byte
+`fdb`), `.mods/vtio` 4309 → 4298 (`fcs /font/` 4 + `fcs /palette/` 7), `Krn`
+still 4096, boot and cursor unchanged.
+
 ### Known-latent, deliberately left alone
 
 - `ScrollLive`/`ScrollShadow` blank the exposed last row of the **character**
@@ -392,8 +445,6 @@ the stub itself is untouched and still open.
 - `SS.DevNm` is unimplemented in vtio; Shell+ calls it and handles the error
   gracefully.
 - The known-latent scroll item above (the colour-plane last row).
-- `GFInitDisp` is a bare `rts`, but `GF.InitDisp` (19) is still a live
-  `FuncTbl` entry.
 
 ---
 

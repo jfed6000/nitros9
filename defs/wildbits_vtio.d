@@ -332,11 +332,11 @@ gr.TermTbl          RMB       72        ; Screen table base
 *   GF.PSGBell  (14)     -           volume 0-15  -      -      frequency  -
 *   GF.Cell     (16)     glyph       colour attr  dest   -      cell off   -
 *   GF.Blank    (18)     fill glyph  fill colour  -      -      -          -
-*   GF.Pal      (20)     pal reg #   -            dest   0=FG   LUT byte   LUT byte
+*   GF.Pal      (19)     pal reg #   -            dest   0=FG   LUT byte   LUT byte
 *                                                        1=BG   0-1 (B,G)  2-3 (R,A)
-*   GF.BmEnable (21)     bitmap #    ctrl byte    -      -      phys addr  -
-*   GF.BmFree   (22)     bitmap #    -            -      -      -          -
-*   GF.BmPalet  (23)     bitmap #    CLUT#|enable -      -      -          -
+*   GF.BmEnable (20)     bitmap #    ctrl byte    -      -      phys addr  -
+*   GF.BmFree   (21)     bitmap #    -            -      -      -          -
+*   GF.BmPalet  (22)     bitmap #    CLUT#|enable -      -      -          -
 *
 * b1 is unassigned - a free parameter byte.  (It was the GF.Write
 *   sub-op selector before that dispatch layer was removed.)
@@ -361,7 +361,6 @@ gr.d2               rmb       2         ; GF.Pal LUT bytes 2-3 only
 gr.b3               rmb       1         ; colour attr / PSG volume / BM ctrl byte
 gr.b4               rmb       1         ; WD.Buf (16K backup) / WD.Vicky ($C2/$C3)
 gr.b5               rmb       1         ; GF.Pal 0=FG 1=BG LUT select
-gr.PalBuf           rmb       64        ; palette snapshot for GF.InitDisp
                     org       0
 T.Flags             rmb       1         ; Acrive Flag - only one screen should be active
 T.Block             rmb       1
@@ -412,12 +411,15 @@ GF.PSGOff	    equ	      15
 GF.Cell             equ       16        ; one cell: b2 glyph, b3 colour, d1 offset
 GF.ClrScrn          equ       17        ; clear whole screen (dims read from DSS)
 GF.Blank            equ       18        ; blank the 16K term buffer
-GF.InitDisp         equ       19        ; STUB - GFInitDisp is a bare rts.  Was:
-*                                       ; gamma $C0, font/pal $C1, $C2/$C3 fill
-GF.Pal              equ       20        ; one text-LUT entry (1B 60 / 1B 61)
-GF.BmEnable         equ       21        ; bitmap: enable + phys addr
-GF.BmFree           equ       22        ; bitmap: zero the four registers
-GF.BmPalet          equ       23        ; bitmap: assign CLUT
+* 19 was GF.InitDisp - gamma ramp, font + text-LUT install, $C2/$C3 fill.
+* Deleted: the FPGA (and MAME's device_reset) preload the font and the text
+* palettes, vtio never sets Mstr_Ctrl_GAMMA_En so the gamma LUT is unused,
+* and the $C2/$C3 fill is GF.ClrScrn's job.  Its vtio caller InitDisplayMem
+* was already gone.  Ops above it renumbered down one.
+GF.Pal              equ       19        ; one text-LUT entry (1B 60 / 1B 61)
+GF.BmEnable         equ       20        ; bitmap: enable + phys addr
+GF.BmFree           equ       21        ; bitmap: zero the four registers
+GF.BmPalet          equ       22        ; bitmap: assign CLUT
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 

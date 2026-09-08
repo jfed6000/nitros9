@@ -229,11 +229,10 @@ FuncTbl
 		    fdb	      GrfMod+GFCell	  ; b=16
 		    fdb	      GrfMod+GFClrScrn	  ; b=17
 		    fdb	      GrfMod+GFBlank	  ; b=18
-		    fdb	      GrfMod+GFInitDisp	  ; b=19  *Verify obsolute then delete*
-		    fdb	      GrfMod+GFPal	  ; b=20
-		    fdb	      GrfMod+GFBmEnable	  ; b=21
-		    fdb	      GrfMod+GFBmFree	  ; b=22
-		    fdb	      GrfMod+GFBmPalet	  ; b=23
+		    fdb	      GrfMod+GFPal	  ; b=19
+		    fdb	      GrfMod+GFBmEnable	  ; b=20
+		    fdb	      GrfMod+GFBmFree	  ; b=21
+		    fdb	      GrfMod+GFBmPalet	  ; b=22
 
 
 *******************************************************************
@@ -556,7 +555,7 @@ PushBuf             lbsr      SetBlkC2C3
                     lbsr      CpyBlk
                     lbsr      SetBlkC0C1
                     ldy       #$6000+T.FLUT text FG/BG LUTs on $C1
-                    ldu       #$4000+TEXT_LUT_FG
+                    ldu       #$2000+TEXT_LUT_FG  text LUTs live on $C0 at $2000
                     ldd       #128
                     lbsr      CpyBlk
                     ldy       #$6000+T.SPRITE0 sprite registers on $C0
@@ -639,7 +638,7 @@ PullBuf             lbsr      SetBlkC2C3
                     lbsr      CpyBlk
                     lbsr      SetBlkC0C1
                     ldu       #$6000+T.FLUT restore text FG/BG LUTs
-                    ldy       #$4000+TEXT_LUT_FG
+                    ldy       #$2000+TEXT_LUT_FG  text LUTs live on $C0 at $2000
                     ldd       #128
                     lbsr      CpyBlk
                     ldu       #$6000+T.SPRITE0 restore sprite registers
@@ -885,10 +884,9 @@ GFBlkC              sta       ,x+
                     bne       GFBlkC
                     jmp       >GrfMod+SysRet
 
-GFInitDisp	    rts
 
 *******************************************************************
-* GF.Pal (b20) - one 4-byte text-LUT entry.
+* GF.Pal (b19) - one 4-byte text-LUT entry.
 *   b2 = palette register # (0-15)
 *   b4 = WD.Vicky -> live $C1 / WD.Buf -> 16K T.FLUT/T.BLUT
 *   b5 = 0 foreground LUT, 1 background LUT
@@ -897,10 +895,10 @@ GFInitDisp	    rts
 GFPal               tst       >gr.b4              live $C1 or 16K buffer?
                     beq       GFPalBuf
                     lbsr      SetBlkC0C1
-                    ldx       #$4000+TEXT_LUT_FG
+                    ldx       #$2000+TEXT_LUT_FG  $C0, not $C1
                     tst       >gr.b5              0 = FG LUT, 1 = BG LUT
                     beq       GFPalIdx
-                    ldx       #$4000+TEXT_LUT_BG
+                    ldx       #$2000+TEXT_LUT_BG  $C0, not $C1
                     bra       GFPalIdx
 GFPalBuf            lbsr      SetBlkC2C3
                     ldx       #$6000+T.FLUT
@@ -922,7 +920,7 @@ GFPalIdx            ldb       >gr.b2              palette register #
                     jmp       >GrfMod+SysRet
 
 *******************************************************************
-* GF.BmEnable (b21) / GF.BmFree (b22) / GF.BmPalet (b23)
+* GF.BmEnable (b20) / GF.BmFree (b21) / GF.BmPalet (b22)
 * Poke the bitmap registers at $3000 + b2*8 on $C0.  b2 = bitmap # (0-2).
 *   Enable: b3 = control byte -> ctrl, d1 = phys addr -> 1,x, clr 3,x
 *   Free  : zero all four bytes
