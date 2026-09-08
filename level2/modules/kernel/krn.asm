@@ -89,6 +89,12 @@ MName               fcs       /Krn/
                     fcc       /www.nitros9.org /
                     fcc       /www.nitros9.org /
                     fcc       /www.nitros9.org /
+* +3 bytes: the wildbits FLink slot-7 guard (flink.asm, MUL form) is 3 bytes
+* shorter than the CoCo3 shift chain it replaces.  Krn must stay exactly $1000
+* bytes so that, with the bootfile ending at $FE00, Krn lands on $EE00 - which
+* is where bootos9 looks for it.  3 bytes short = "Can't locate the kernel in
+* the bootfile."  Adjust this filler whenever wildbits-conditional code changes.
+                    fcc       /www/
                   ELSE
                     fcc       /www.nitr/
                   ENDC

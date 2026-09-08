@@ -148,7 +148,7 @@ DoInit              ldx       InitAddr,u
                     pshs      u,y
 
 * Fork shell startup here
-DoStartup           bra       DoAuto              ***TEMP: skip Shell "startup -p" fork***
+DoStartup
                     leax      >Shell,pcr
                     leau      >Startup,pcr
                     ldd       #256

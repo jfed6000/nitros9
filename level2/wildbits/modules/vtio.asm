@@ -517,7 +517,20 @@ datcopy             ldu       ,x++
                     puls      x,u,y,b
 CallGrfDrvNoPD
                     ldx       gr.Entry
-CallGrfDrv2         orcc      #Entire
+* U (the device static storage pointer) must survive the flip.  The
+* return path is SysRet -> D.Flip0 -> R.Flip0, which restores only S
+* (from gr.Stack) and CC (from A); D/X/Y/U/DP come back holding what-
+* ever grfdrv left in them.  SetBlkC2C3 ends with 'ldu >gr.U5' (the
+* $A0xx slot-5 alias), GFClrScrn leaves U past the end of the fill,
+* and ScrollLive/ScrollShadow leave U from leau/CpyBlk - so without
+* this the caller's next V.xxx,u access lands in the SYSTEM map.  The
+* prior vtio did this at its single CallWrite funnel; keep it here so
+* no new call site can forget it.  gr.Stack/R.Flip0 return to the bsr
+* below, which then restores U and returns to the real caller.
+CallGrfDrv2         pshs      u
+                    bsr       CallGrfDrvGo
+                    puls      u,pc
+CallGrfDrvGo        orcc      #Entire
                     pshs      d
                     tfr       cc,a
                     sta       gr.Temp
@@ -1438,7 +1451,10 @@ NoOp                rts
 *
 CurHome             clr       V.CurCol,u
                     clr       V.CurRow,u
-		    clr	      V.CurPos,u
+* V.CurPos is a 2-byte field; a single clr only zeroed the high byte
+* (6809 words are big-endian), so home left the low byte behind.
+                    clr       V.CurPos,u
+                    clr       V.CurPos+1,u
                     rts
 		    
 ***********************************************************************
