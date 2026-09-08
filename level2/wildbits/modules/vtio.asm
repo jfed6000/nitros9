@@ -187,6 +187,7 @@ Init
                     stb       V.FBCol,u store it in our foreground/background color variable
                     ldd	      #0	clear D
                     std       V.CurRow,u set the current row and column
+                    std       V.CurPos,u and the cached linear cell offset
                     lda       #1
                     sta       V.TermLive,u first console writes Vicky $C2/$C3
                     clr       >gr.SwitchReq
@@ -280,6 +281,7 @@ InitDisplay         pshs      u
                     ldx       #TXT.Base
                     ldd       #80*256+60
                     std       V.WWidth,u
+                    lbsr      SetScreenSize
                     lda       #Mstr_Ctrl_Text_Mode_En
                     sta       MASTER_CTRL_REG_L,x
                     clr       MASTER_CTRL_REG_H,x
@@ -693,6 +695,9 @@ SwFound
                     deca
                     sta       V.CurRow,u
 SwCurY              sta       VKY_TXT_CURSOR_Y_REG_L,x
+* The clamp above can have moved V.CurRow; resync the cached cell offset
+* so the new live term's first PutGlyph paints where the cursor now is.
+                    lbsr      CalcCurPos
                     lbra      SwDone
 SwFail
                     puls      d
@@ -846,8 +851,13 @@ InitTermStatic      pshs      d,x,y
                     stb       V.FBCol,u
                     ldd       #80*256+60
                     std       V.WWidth,u
+                    lbsr      SetScreenSize
                     clr       V.CurRow,u
                     clr       V.CurCol,u
+* V.CurPos is the cached V.CurRow*V.WWidth+V.CurCol that PutGlyph paints
+* at; clearing row/col without it leaves a stale cell offset behind.
+                    clr       V.CurPos,u
+                    clr       V.CurPos+1,u
                     clr       V.IBufH,u
                     clr       V.IBufT,u
                     clr       V.LastCh,u
@@ -864,6 +874,7 @@ InitTermStatic      pshs      d,x,y
 * the last line sat below the DBL_Y visible area.
                     ldd       V.WWidth,x
                     std       V.WWidth,u
+                    lbsr      SetScreenSize
                     lda       V.FBCol,x
                     sta       V.FBCol,u
                     lda       V.ST,x
@@ -1200,11 +1211,13 @@ incrow              inca                          and we increment the row
 * Always land on the last row of THIS term. CurRow can be 50 on a
 * 80x30 after DWSet 80x60. Height 0 would decb to $FF and CpyBlk
 * 80*255 bytes through LUT 1 $A000 (path table / DevTbl).
+* B is already the column we want to land on: PutGlyph's line wrap clrb's
+* just above, and CurDown ($0A at the bottom row) enters incrow with
+* B = V.CurCol so a plain line feed keeps its column.
                     lda       V.WHeight,u
                     lbeq      CurHome
                     deca
-                    clrb
-                    pshs      d                   last row, column 0
+                    pshs      d                   last row, column from B
                     ldd       V.WWidth,u
                     sta       >gr.WWidth
                     tstb
@@ -1256,7 +1269,15 @@ ChkESC              cmpa      #$1B                is the character ESC?
                     leax      <DCodeTbl,pcr     else deal with screen codes
                     lsla                          adjust A for the table entry size
                     ldd       a,x                 get the address offset in D
-                    jmp       d,x                 and jump to routine
+* jsr, not jmp: the handler must come back so the hardware cursor gets
+* refreshed.  A bare jmp rts'd straight to SCF, so CurHome/CurRght/
+* CurLeft/CurUp/Retrn/ClrScrn/the erase codes all moved V.CurRow/V.CurCol
+* without ever touching VKY_TXT_CURSOR_X/Y and the cursor lagged the text.
+* UpdateLiveCursor ends andcc #^Carry / rts, which also scrubs the dirty
+* carry CurRght's bye@ path used to hand back to SCF.
+                    jsr       d,x                 run the handler...
+                    clrb
+                    lbra      UpdateLiveCursor   ...then refresh the hw cursor and rts
 ChkRet              clrb
                     andcc     #^Carry
                     rts
@@ -1465,7 +1486,18 @@ CurHome             clr       V.CurCol,u
 *** Call after any handler that moves the cursor without going through
 *** PutGlyph.  Clobbers D.  Returns carry clear (SCF Write checks it).
 ***
-CalcCurPos          lda       V.CurRow,u
+*** Also clamps V.CurRow to V.WHeight-1.  DWSet 80x60 then 80x30 can leave
+*** CurRow at 50; the prior tree re-clamped on every character in RawWrite
+*** and the rewrite dropped it, so do it here - the one point every cursor
+*** handler already routes through.
+***
+CalcCurPos          lda       V.WHeight,u
+                    beq       CCPzero             degenerate window - cell 0
+                    cmpa      V.CurRow,u
+                    bhi       CCProw              CurRow < WHeight, fine
+                    deca                          else clamp to the last row
+                    sta       V.CurRow,u
+CCProw              lda       V.CurRow,u
                     ldb       V.WWidth,u
                     mul
                     addb      V.CurCol,u
@@ -1473,6 +1505,27 @@ CalcCurPos          lda       V.CurRow,u
                     std       V.CurPos,u
                     andcc     #^Carry
                     rts
+CCPzero             clra
+                    clrb
+                    std       V.CurPos,u
+                    andcc     #^Carry
+                    rts
+
+***********************************************************************
+*** SetScreenSize - V.ScreenSize = V.WWidth * V.WHeight (cells to scroll).
+*** MUST be called after every write to V.WWidth/V.WHeight.  grfdrv's
+*** ScrollLive/ScrollShadow take it in Y and subtract one row from it; a
+*** zero here makes the count 0-WWidth, CpyBlk's source-end address wraps
+*** below the source start so it copies nothing, and the "blank the
+*** exposed row" loop then wipes row 0 instead of the last row.
+*** Preserves D.
+***
+SetScreenSize       pshs      d
+                    lda       V.WWidth,u
+                    ldb       V.WHeight,u
+                    mul
+                    std       V.ScreenSize,u
+                    puls      d,pc
 
 **********************************************************************
 * 02 - Cursor XY  - 02 LCX LCY
@@ -1578,8 +1631,10 @@ CurRate             ldx       #TXT.Base
 *
 CurRght             ldd       V.CurRow,u
                     incb                          increment the column
+* bhs, not bgt: at the last column incb makes B = WWidth, which bgt let
+* through and stored as V.CurCol - one cell off the end of the row.
                     cmpb      V.WWidth,u          is it >= the number of columns?
-                    bgt       nextrow@
+                    bhs       nextrow@
 ex@                 std       V.CurRow,u
                     lbsr      CalcCurPos
 bye@                rts
@@ -1587,7 +1642,7 @@ nextrow@            ldb       V.WHeight,u
                     decb
                     pshs      b
                     cmpa      ,s+                 are we at the last row?
-                    bge       bye@                yep, nothing to change.
+                    bhs       bye@                yep, nothing to change.
                     clrb                          else clear the column
                     inca                          increment the row
                     bra       ex@                 save and return
@@ -1631,14 +1686,10 @@ CurLeft             ldd       V.CurRow,u          get the current row and column
 * Entry:  A = The row of the character to erase.
 *         B = The column of the character to erase.
 EraseChar           std       V.CurRow,u          save D to the current row and column
-                    ldb       V.WWidth,u          get the number of columns
-                    mul                           calculate the product
-                    addb      V.CurCol,u          add in the current column
-                    adca      #0                  add in the carry bit
-                    tfr       d,x                 X = cell offset
+                    lbsr      CalcCurPos          resync (and row-clamp) V.CurPos
+                    ldx       V.CurPos,u          X = cell offset
                     lda       #C$SPAC
                     lbsr      PutCell             erase the one cell
-                    lbsr      CalcCurPos
 leave               rts                           return
 
 **********************************************************************
@@ -1662,9 +1713,9 @@ CurDown             ldd       V.CurRow,u          get the current row and column
                     blt       CDmv@               room below - just move
                     ldd       V.CurRow,u          at bottom - scroll (shared path)
                     lbra      incrow
+* ChkESC's jsr dispatch refreshes the hardware cursor on the way out now.
 CDmv@               sta       V.CurRow,u
-                    lbsr      CalcCurPos
-                    lbra      UpdateLiveCursor    refresh hw cursor, then rts
+                    lbra      CalcCurPos
 
 
 
@@ -1738,6 +1789,7 @@ SetWin40x30         ldb       #DBL_Y|DBL_X
 * (that made /term 80x60, and the next PushBuf saved it into the
 * active term's V.V_MCR). PullBuf restores V.V_MCR.
 SetWin              stx       V.WWidth,u
+                    lbsr      SetScreenSize
                     pshs      b
                     ldx       #TXT.Base
                     lda       V.TermLive,u

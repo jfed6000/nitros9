@@ -216,6 +216,115 @@ following conclusions are **wrong** and should not be acted on:
   earlier `inc V.CurPos` bug; only the high byte was cleared, so "home" left
   the low byte behind.  Now clears both.
 
+## Console usability  (2026-09-08, same day)  — **cursor + scrolling FIXED**
+
+With the boot chain working, the console itself still was not: the screen
+never scrolled at the bottom, and the hardware cursor lagged the text.  Two
+separate regressions from the vtio reorg, both verified fixed in MAME.
+
+### 1. `V.ScreenSize` was never written — the screen could not scroll
+
+`V.ScreenSize` (`defs/wildbits_vtio.d:36`) was declared and **read exactly
+once** — `ldy V.ScreenSize,u` in `vtio.asm`'s scroll block, just before
+`CallScrollLive`/`CallScrollShadow`.  Nothing in the tree ever stored to it,
+so it was always `0`.
+
+In `grfdrv256.asm` `ScrollLive`/`ScrollShadow` the byte count is computed as
+`V.ScreenSize - V.WWidth`, i.e. `0 - 80` = `$FFB0`.  `CpyBlk` opens with
+`leax d,u` to form the source-end address; with a count that large it wraps
+to *below* the source start, the very first `cmpu ,s / blo CpyLp` fails, and
+**zero bytes are copied**.  `Y` is therefore still `#$2000` (`#$6000` for
+shadow) when the "blank the exposed last row" loop runs, so that loop wiped
+**row 0**.  Net symptom, exactly as reported: no scroll, top line blanks,
+bottom line churns.
+
+The prior tree does not have this bug because it never used
+`V.ScreenSize` — it computed `gr.WCount = WWidth*(WHeight-1)` inline and
+passed that.  The rewrite moved the arithmetic into grfdrv and read a field
+nobody initialises.
+
+Fix: new `SetScreenSize` helper next to `CalcCurPos` (`V.ScreenSize =
+V.WWidth * V.WHeight`, preserves D), called at all three writes to
+`V.WWidth`/`V.WHeight` — `InitDisplay`, `InitTermStatic` (both the 80x60
+default *and* the "match the live console" copy), and `SetWin` (the shared
+`DWSet` tail).
+
+> **Invariant: any new write to `V.WWidth`/`V.WHeight` must be followed by
+> `lbsr SetScreenSize`.**  A stale value here does not fail loudly; it just
+> silently stops scrolling.
+
+The `WWidth * WHeight` stride assumption is right: MAME's renderer indexes
+`cell_idx = row * cols + col` with `cols = dbl_x ? 40 : 80`
+(`wildbits_jr2.cpp:2293`), matching `CalcCurPos` and `EraseLineCore`.
+
+### 2. `ChkESC` dispatched with `jmp d,x` — the hardware cursor never moved
+
+`ChkESC`'s `DCodeTbl` dispatch was `jmp d,x`, so every single-byte control
+code handler `rts`'d **straight back to SCF**, never reaching
+`UpdateLiveCursor`.  `CurHome $01`, `EraseLine $03`, `ErEOLine $04`,
+`CurRght $06`, `CurLeft $08`, `CurUp $09`, `ErEOScrn $0B`, `ClrScrn $0C` and
+`Retrn $0D` all moved `V.CurRow`/`V.CurCol` without ever writing
+`VKY_TXT_CURSOR_X/Y_REG_L`.  Only `CurDown $0A`, the `PutGlyph` path and
+`EscCodeComplete` updated it — which is why the cursor looked right at a
+fresh prompt (the last thing written is a glyph) but drifted the moment you
+pressed Backspace.
+
+The prior tree's `Write` was `ldx V.EscVect,u / jsr ,x` and then fell into
+the cursor update, so every code got it for free.  Fix: `jsr d,x / clrb /
+lbra UpdateLiveCursor`.  Because `UpdateLiveCursor` ends `andcc #^Carry /
+rts`, this also scrubs the dirty carry `CurRght`'s `bye@` path used to hand
+back to SCF (`cmpa` leaves `C` set), which SCF would have read as an error.
+`CurDown`'s now-redundant `lbra UpdateLiveCursor` became `lbra CalcCurPos`.
+
+### Smaller fixes made alongside
+
+- **`CurRght` off-by-one.**  `cmpb V.WWidth,u / bgt nextrow@` let column
+  `WWidth` be stored: at column 79 of an 80-wide window `incb` gives 80,
+  `bgt` is not taken, and `V.CurCol` became 80 — one cell off the end.  Now
+  `bhs`; the row test `bge bye@` is likewise `bhs`.  (The prior tree has the
+  same `bgt`; it is not a reorg regression.)
+- **`$0A` at the bottom row now keeps its column.**  `CurDown` shares the
+  scroll block via `incrow`, which did `clrb` before `pshs d` and so forced
+  column 0 — inconsistent with its own mid-screen `CDmv@`.  That `clrb` is
+  deleted: `B` is already correct at both entries (`PutGlyph`'s line wrap
+  clears it itself; `CurDown` enters with `B = V.CurCol`).
+- **`CalcCurPos` re-clamps `V.CurRow` to `V.WHeight-1`** (and handles
+  `WHeight = 0`).  The prior tree's `RawWrite` clamped on every character to
+  guard "DWSet 80x60 then 80x30 leaves CurRow at 50"; the rewrite dropped
+  it.  Doing it in `CalcCurPos` covers every handler, since they all route
+  through it.  `EraseChar` now uses `CalcCurPos`'s result instead of
+  carrying its own copy of the `row*width+col` arithmetic.
+- **`V.CurPos` resync gaps closed.**  `V.CurPos` is a cache of
+  `CurRow*WWidth + CurCol` that `PutGlyph` paints at directly.  `Init` and
+  `InitTermStatic` cleared row/col but left it stale, and `SwitchTerm`
+  clamped `V.CurRow` without recomputing it.  All three fixed — the
+  `SwitchTerm` one matters for multiterm.
+
+### Verification
+
+`dir -e /dd/CMDS` appended to `startup` (~100 lines) scrolls correctly: the
+60-row VRAM snapshot shows the tail of the listing followed by the Shell+
+prompt, with no blanked row 0.  Cursor: `display 0C 41 42 43 08 08` +
+`sleep 3000` leaves `A` alone on row 0 and `HW CURSOR: x=1 y=0` — the two
+backspaces moved the hardware cursor.  Before the fix it stayed at `x=3`.
+Regression: the full `sysgo` → `Shell "startup -p"` → nested-fork chain
+still reaches an interactive prompt with the `wbinfo` line present, and
+`Krn` is still exactly 4096.
+
+`mame/src/mame/wildbits/wildbits_jr2.cpp`'s `device_stop()` exit dump was
+extended from 25 to all 60 text rows and now also prints
+`HW CURSOR: x=.. y=.. ctrl=$..`.  Both are what make these two bugs
+diagnosable without attaching `-debug`.
+
+### Known-latent, deliberately left alone
+
+- `ScrollLive`/`ScrollShadow` blank the exposed last row of the **character**
+  plane only; the colour plane keeps the old bottom row's attributes.
+  Masked on every current path because the caller reaches `clrline` →
+  `EraseLine` immediately after and `EraseLineCore` fills both planes.
+- The `sta >gr.WWidth` in vtio's scroll block is dead — grfdrv's `Scroll*`
+  take the width in `A`.
+
 ### Still open / worth doing
 
 - `FLinkProcess` (the "is it already linked in this process map?" scan) still
@@ -229,6 +338,8 @@ following conclusions are **wrong** and should not be acted on:
 - `InsLine` / `DelLine` are still `rts` stubs.
 - `SS.DevNm` is unimplemented in vtio; Shell+ calls it and handles the error
   gracefully.
+- The two known-latent scroll items above (colour-plane last row, dead
+  `gr.WWidth` store).
 
 ---
 
