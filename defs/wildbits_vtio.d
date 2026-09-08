@@ -299,7 +299,7 @@ gr.RGSADR           RMB       2         ; Address of PD.RGS
 gr.PDRGS            RMB       R$Size    ; GrfDrv copy of PD.RGS
 gr.PDAT             RMB       16
 gr.PTask            RMB       1         ; Virtual Task Number
-gr.KbdInit          RMB       1         ; Keyboard Init
+gr.FirstInitDone    RMB       1         ; Keyboard Init
 gr.TermCnt          RMB       1         ; number of open terminals
 gr.TermBlk          RMB       1         ; Current Terminal Block for Buffer Operations
 gr.VStaStorU        rmb       2         ; Static Storage

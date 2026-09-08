@@ -61,7 +61,14 @@ entry               equ       *
 * and to reduce overhead.
 *
 *******************************************************************
-WriteCharLive	    ldx	      MMU_SLOT_1
+* Direct calls skip 'entry', so they must select LUT 1 for editing
+* themselves - otherwise the stb MMU_SLOT_n below (and the fast-path
+* check) hit LUT 0 and corrupt the SYSTEM task's memory map.
+WriteCharLive	    pshs      a
+		    lda	      #EDIT_LUT_1+ACT_LUT_1
+		    sta	      MMU_MEM_CTRL
+		    puls      a
+		    ldx	      MMU_SLOT_1
 		    cmpx      #$C2C3
 		    beq	      goodmmu@
 		    pshs      cc,a,b,y
@@ -84,6 +91,8 @@ goodmmu@	    leax      $2000,y
 
 WriteCharShadow	    pshs      cc,a,b,y
                     orcc      #IntMasks
+                    lda	      #EDIT_LUT_1+ACT_LUT_1   select LUT 1 (direct call skips 'entry')
+                    sta	      MMU_MEM_CTRL
                     clra
                     ldx       #gr.DATImg+6
                     ldb       >gr.TermBlk
@@ -112,7 +121,11 @@ WriteCharShadow	    pshs      cc,a,b,y
 * and to reduce overhead.
 *
 *******************************************************************
-ScrollLive	    ldx	      MMU_SLOT_1
+ScrollLive	    pshs      a
+		    lda	      #EDIT_LUT_1+ACT_LUT_1   select LUT 1 (direct call skips 'entry')
+		    sta	      MMU_MEM_CTRL
+		    puls      a
+		    ldx	      MMU_SLOT_1
 		    cmpx      #$C2C3
 		    beq	      goodmmu@
 		    pshs      cc,a,b,y
@@ -156,6 +169,8 @@ loop@		    stb	      ,y+
 
 ScrollShadow	    pshs      cc,a,b,y
                     orcc      #IntMasks
+                    lda	      #EDIT_LUT_1+ACT_LUT_1   select LUT 1 (direct call skips 'entry')
+                    sta	      MMU_MEM_CTRL
                     clra
                     ldx       #gr.DATImg+6
                     ldb       >gr.TermBlk
@@ -212,7 +227,7 @@ FuncTbl
 		    fdb	      GrfMod+GFCell	  ; b=16
 		    fdb	      GrfMod+GFClrScrn	  ; b=17
 		    fdb	      GrfMod+GFBlank	  ; b=18
-		    fdb	      GrfMod+GFInitDisp	  ; b=19
+		    fdb	      GrfMod+GFInitDisp	  ; b=19  *Verify obsolute then delete*
 		    fdb	      GrfMod+GFPal	  ; b=20
 		    fdb	      GrfMod+GFBmEnable	  ; b=21
 		    fdb	      GrfMod+GFBmFree	  ; b=22
@@ -323,8 +338,6 @@ DoFontGetSet        pshs      a         store get/set state on stack
                     ldx       #gr.PDRGS load x with PDREGS to get shadow stack regs
                     ldx       R$X,x     setfont: source is x
                     ldy       #gr.PDAT
-                    stx       $1190
-                    sty       $1192
                     lbsr      GMapAddr2Blk
                     lda       #1
                     sta       MMU_MEM_CTRL
@@ -400,6 +413,8 @@ storeaddr@          pshs      y         store font offset on stack [O]
 *                   ****      map block into user dat and store address on stack
                     pshs      x,cc      preserve x,u
                     orcc      #IntMasks
+		    lda	      #EDIT_LUT_1+ACT_LUT_1
+		    sta	      MMU_MEM_CTRL
                     ldx       #FONT_BLK map in $C1
                     stx       MMU_SLOT_1
                     puls      x,cc      restore x,u [MO]
@@ -859,70 +874,7 @@ GFBlkC              sta       ,x+
                     bne       GFBlkC
                     jmp       >GrfMod+SysRet
 
-*******************************************************************
-* GF.InitDisp (b19) - gamma ramp on $C0, font + text LUTs on $C1,
-* blank $C2/$C3 to 80x60.  gr.PalBuf holds the 64-byte palette;
-* gr.WGlyph != 0 = load palette; font source blocks in gr.WDest
-* (lo) / gr.WWidth (hi), offset gr.WOff, byte count gr.WCount.
-*******************************************************************
-GFInitDisp          lbsr      SetBlkC0C1
-                    clrb
-GFIDgam             clra
-                    tfr       d,x
-                    stb       $2000,x
-                    stb       $2400,x
-                    stb       $2800,x
-                    incb
-                    bne       GFIDgam
-                    tst       >gr.WGlyph
-                    beq       GFIDfont
-                    pshs      u
-                    ldx       #gr.PalBuf
-                    ldy       #$4000+TEXT_LUT_FG
-                    ldb       #32
-GFIDpalF            ldu       ,x++
-                    stu       ,y++
-                    decb
-                    bne       GFIDpalF
-                    ldx       #gr.PalBuf
-                    ldy       #$4000+TEXT_LUT_BG
-                    ldb       #32
-GFIDpalB            ldu       ,x++
-                    stu       ,y++
-                    decb
-                    bne       GFIDpalB
-                    puls      u
-GFIDfont            ldd       >gr.WCount
-                    beq       GFIDc2c3
-                    pshs      cc,u
-                    orcc      #IntMasks
-                    clra
-                    ldx       #gr.DATImg+6
-                    ldb       >gr.WDest
-                    stb       MMU_SLOT_3
-                    std       ,x++
-                    ldb       >gr.WWidth
-                    stb       MMU_SLOT_4
-                    std       ,x
-                    puls      cc
-                    ldu       >gr.WOff
-                    leau      $6000,u
-                    ldy       #$4000
-                    ldd       >gr.WCount
-                    lbsr      CpyBlk
-                    puls      u
-GFIDc2c3            lbsr      SetBlkC2C3
-                    ldd       #$2020
-                    ldx       #$2000
-GFIDc2lp            std       ,x++
-                    cmpx      #$2000+4800
-                    bne       GFIDc2lp
-                    ldd       #$1010
-                    ldx       #$4000
-GFIDc3lp            std       ,x++
-                    cmpx      #$4000+4800
-                    bne       GFIDc3lp
-                    jmp       >GrfMod+SysRet
+GFInitDisp	    rts
 
 *******************************************************************
 * GF.Pal (b20) - one 4-byte text-LUT entry.
@@ -992,6 +944,8 @@ GFBmX               lbsr      SetBlkC0C1
 
 SetBlkC0C1          pshs      cc
                     orcc      #IntMasks
+		    lda	      #EDIT_LUT_1+ACT_LUT_1
+		    sta	      MMU_MEM_CTRL
                     clra
                     ldx       #gr.DATImg+2
                     ldb       #$C0
@@ -1004,6 +958,8 @@ SetBlkC0C1          pshs      cc
 
 SetBlkC2C3          pshs      cc,d,x
                     orcc      #IntMasks
+		    lda	      #EDIT_LUT_1+ACT_LUT_1
+		    sta	      MMU_MEM_CTRL
                     clra
                     ldx       #gr.DATImg+2
                     ldb       #$C2
@@ -1029,6 +985,8 @@ SetBlkC2C3          pshs      cc,d,x
 
 SetBlkC4            pshs      cc
                     orcc      #IntMasks
+		    lda	      #EDIT_LUT_1+ACT_LUT_1
+		    sta	      MMU_MEM_CTRL
                     clra
                     ldx       #gr.DATImg+2
                     ldb       #$C4
@@ -1104,13 +1062,12 @@ GMapAddr2Blk        pshs      d,x       x=address in process;y=Process DAT
                     lsra
                     anda      #%0001110
                     inca
-                    sta       $1194
-                    sty       $1196
                     lda       a,y
+		    ldb	      #EDIT_LUT_1+ACT_LUT_1
+		    stb	      MMU_MEM_CTRL
                     sta       MMU_SLOT_1
                     clr       gr.DATImg+2
                     sta       gr.DATImg+3
-                    sta       $1198
                     puls      x,d,pc
 
 ;;; GetXYU - get R$XYU from calling process

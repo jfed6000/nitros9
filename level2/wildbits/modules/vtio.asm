@@ -21,7 +21,7 @@
 tylg                set       Drivr+Objct
 atrv                set       ReEnt+rev
 rev                 set       $00
-edition             set       2
+edition             set       3
 
 PSG.Base            equ       PSGM.Base
 
@@ -72,13 +72,9 @@ llnam               fcs       "grfdrv256"
 AltISR              
                     ldu       D.KbdSta
 * Handle keyboard (if available)
-                    ldx       V.KeyDrvEPtr,u
+                    ldx       V.KeyDrvEPtr,u             Computer have polling keybard?
                     cmpx      #$0000
-                    ifgt      Level-1
-                    beq       HandleMSTimer
-                    else
-                    beq       HandleSound
-                    endc
+                    beq       HandleMSTimer		 No, just handle mouse
                     lda       V.LastCh,u                 if LastCh=0, skip keyrepeat handling
                     beq       HandleKeyboard@            
                     dec       V.KRTimer,u                decrement repeat timer
@@ -87,7 +83,7 @@ AltISR
                     jsr       9,x                        else jmp to keyrepeat routine
 HandleKeyboard@     ldx       V.KeyDrvEPtr,u                
                     jsr       6,x                        call AltIRQ routine in keydrv
-                    ifgt      Level-1
+
 * Handle Mouse Timer. When timer wraps to zero, turn it off
 * Mouse does not hide correctly, so park it at right side of screen
 * Check if mouse is already off, if it is, then skip timer code
@@ -102,6 +98,8 @@ HandleMSTimer       tst       MS_MEN             check if mouse cursor already o
                     ldd       #640               park mouse at right border
                     sta       MS_XH              turning off cursor doesn't work
                     stb       MS_XL              correctly at the moment
+
+* Handle Terminal Switching
 HandleKeySwtchTrm   lda       >gr.SwitchReq
                     beq       AltISRCont
                     sta       $12E4              last SwitchReq seen
@@ -115,7 +113,7 @@ HandleKeySwtchTrm   lda       >gr.SwitchReq
                     lda       >gr.LiveTerm
                     sta       $12E7
 AltISRCont
-                    endc
+
 * Handle sound. PSG $C4 via GF.Write LUT 1. AltISR cannot F$Sleep, so
 * skip Flip1 when gr.Busy and retry next tick (do not put WaitWrite
 * inside CallGrfDrvNoPD).
@@ -157,6 +155,72 @@ w@                  lda       CODECCtrl,x
                     lda       #$01
                     sta       CODECCtrl,x
                     rts
+
+*********************************************************************************
+* Init              
+*
+* Entry:
+*    Y  = address of device descriptor
+*    U  = address of device memory area
+*
+* Exit:
+*    CC = carry set on error
+*    B  = error code
+*
+* First INIZ (/term): hardware + InitTerm (IT.WND=0). Old Write still owns $C2.
+* Later named INIZ (/vtN): skip hardware, InitTerm only.
+* Factory INIZ (/vt, IT.WND=$FF): skip hardware and InitTerm; SS.Open binds.
+* Markers: $12FD='I' $12FE=$A5 $12FF=$5A entered
+*          $12FC='P' InitDisplay returned
+*          $12FB='Z' Init success rts
+* InitTerm log $12F0-'T' $12F1=id $12F2=blk $12F3-4=X $12F5=active $12F6=cnt $12F7=K/E
+Init
+                    pshs      y
+                    lda       >gr.FirstInitDone
+                    cmpa      #$FF
+                    beq       SkipHwInit
+                    stu       >D.KbdSta pointer to this device's static
+		    lbsr      ClearTermTbl
+		    lbsr      ClrGrfMem
+                    clr       V.WriteState,u  escape collector idle
+                    ldb       #$10      assume this foreground/background
+                    stb       V.FBCol,u store it in our foreground/background color variable
+                    ldd	      #0	clear D
+                    std       V.CurRow,u set the current row and column
+                    lda       #1
+                    sta       V.TermLive,u first console writes Vicky $C2/$C3
+                    clr       >gr.SwitchReq
+                    lbsr      InitDisplay initialize the display
+                    lbsr      InitSound initialize the sound
+                    lbsr      InitKeyboard initialize the keyboad
+                    lbsr      InitMouse
+                    lbsr      InitGrfDrv
+                    lbsr      InitPSG             $C4 silence in LUT 1
+                    ldx       >D.AltIRQ get the current alternate IRQ vector
+                    stx       >D.OrgAlt save it off in the original vector
+                    leax      AltISR,pcr get our alternate interrupt service routine
+                    stx       >D.AltIRQ and place it in the global vector
+                    lda       #$FF
+                    sta       >gr.FirstInitDone	         Hardware init done, don't do this on later terminals
+
+SkipHwInit
+                    puls      y
+                    lda       >gr.TermCnt
+HaveIdStart
+                    ldb       IT.WND,y  Y is the device descriptor (IOMAN Attach)
+                    bpl       HaveId
+* IT.WND=$FF is the /vt factory. Do not FindFreeTerm, do not InitTerm,
+* never pass $FF into id*4. Slot is bound later by SS.Open.
+                    bra       InitOk
+HaveId
+                    lbsr      InitTerm
+                    bcs       InitFail
+InitOk
+                    clrb                clear the carry and error code
+                    rts                 return to the caller
+InitFail
+                    rts                 carry and B already set
+
 
 * Initialize the sound hardware.
 InitSound           clr       D.SndPrcID          clear the process ID of the current sound emitter (none)
@@ -212,8 +276,6 @@ InitBELL            leax      Bell,pcr point to the bell emission code
                     rts
                     
 * Initialize the display I/O registers. No MAPSLOT.
-* Gamma / font / text LUTs / $C2 $C3 fill run later in InitDisplayMem
-* (after InitGrfDrv) via GF.Write WO.InitDisp in LUT 1.
 InitDisplay         pshs      u
                     ldx       #TXT.Base
                     ldd       #80*256+60
@@ -235,50 +297,7 @@ InitDisplay         pshs      u
                     sta       VKY_TXT_CURSOR_CHAR_REG,x
                     puls      u,pc
 
-*******************************************************************
-* InitDisplayMem - F$Link palette/font in the system task, snapshot
-* into gr.W* / gr.PalBuf, Flip1 GF.Write WO.InitDisp. After
-* InitGrfDrv (GrfMem clear wipes PalBuf). Do not index U in LUT 1.
-*******************************************************************
-InitDisplayMem      pshs      x,y,u
-                    clr       >gr.WGlyph
-                    clr       >gr.WCount
-                    clr       >gr.WCount+1
-                    leax      palettemod,pcr
-                    lda       #Data
-                    os9       F$Link
-                    bcs       IDFontLk
-                    lda       #$FF
-                    sta       >gr.WGlyph
-                    tfr       y,x
-                    ldy       #gr.PalBuf
-                    ldb       #32
-IDCpPal             ldu       ,x++
-                    stu       ,y++
-                    decb
-                    bne       IDCpPal
-IDFontLk            leax      fontmod,pcr
-                    lda       #Data
-                    os9       F$Link
-                    bcs       IDCall
-                    tfr       y,x
-                    bsr       Log2Blk
-                    sta       >gr.WDest
-                    stx       >gr.WOff
-                    tfr       y,d
-                    cmpa      #$E0
-                    bhs       IDSame
-                    leax      $2000,y
-                    bsr       Log2Blk
-                    sta       >gr.WWidth
-                    bra       IDCnt
-IDSame              lda       >gr.WDest
-                    sta       >gr.WWidth
-IDCnt               ldd       #2048
-                    std       >gr.WCount
-IDCall              ldb       #GF.InitDisp
-                    lbsr      CallGrfDrvNoPD
-                    puls      x,y,u,pc
+
 
 * X = logical address in D.Proc. Exit: A = block, X = offset in 8K.
 Log2Blk             pshs      y
@@ -350,21 +369,20 @@ ex@                 ldd       #0                  set D to 0
 ****************************************************************
 ******             Start GrfDrv Init Routines             ******
 ****************************************************************
-
-                  IFGT    Level-1
-****************************************************************
-* Init GrfDrv — from wildbits vtio. Module name is grfdrv256.
-* Clears GrfMem ($1100, 512 bytes) so call before gr.KbdInit=$FF
-* and before InitTerm. Task 1 / LUT 1; not system-task $6000.
-****************************************************************
-InitGrfDrv          pshs      u,y
-                    ldx       #GrfMem   point to GrfMem
+ClrGrfMem           ldx       #GrfMem   point to GrfMem
                     ldy       #512      Size
 clrgrf              clr       ,x+
                     leay      -1,y
                     bne       clrgrf
-                    lda       #1        **DEBUG**
-                    sta       $1200     **DEBUG**
+		    rts
+
+
+****************************************************************
+* Init GrfDrv — from wildbits vtio. Module name is grfdrv256.
+* Clears GrfMem ($1100, 512 bytes) so call before gr.FirstInitiDone=$FF
+* and before InitTerm. Task 1 / LUT 1; not system-task $6000.
+****************************************************************
+InitGrfDrv          pshs      u,y
                     leas      -2,s      buffer for process swap
                     lbsr      tosysproc swap to system process
                     lda       #Systm+Objct
@@ -373,7 +391,6 @@ clrgrf              clr       ,x+
                     lbsr      toproc
                     bcc       setupgrfdrv
                     tfr       b,a
-                    sta       $1201     **DEBUG**
                     cmpb      #E$MNF
                     lbne      initerr
                     lbsr      tosysproc
@@ -383,10 +400,6 @@ clrgrf              clr       ,x+
                     os9       F$NMLoad
                     lbsr      toproc
                     lbcs      initerr
-                    pshs      a         **DEBUG**
-                    lda       #2        **DEBUG**
-                    sta       $1201     **DEBUG**
-                    puls      a         **DEBUG**
 setupgrfdrv         leas      2,s       clean process buffer
                     pshs      a
                     lda       #GrfMem/256
@@ -394,7 +407,6 @@ setupgrfdrv         leas      2,s       clean process buffer
                     puls      a
                     ldu       #GrfMem
                     ldx       #gr.DATImg
-                    stx       $120A
                     clra
                     clrb
                     std       ,x++
@@ -416,10 +428,10 @@ setupgrfdrv         leas      2,s       clean process buffer
                     clra
                     ldd       ,y
                     std       ,x++
-                    std       $1206
                     ldd       2,y
                     bne       has2
-                    ldd       #DAT.Free
+                    clra
+		    ldb	      #7
                     bra       store7
 has2
                     clra
@@ -438,45 +450,18 @@ store7
                     ldx       #M$Exec
                     ldy       #gr.DATImg+12
                     os9       F$LDDDXY
-                    std       $1220
                     ora       #$C0
-                    std       gr.Entry
-                    std       $1210
-                    ldx       gr.Entry
-                    stx       $1212
-                    ldx       #gr.TermTbl
-                    ldb       #G.TermMax
-clrScr              pshs      b,x
-                    ldb       #gr.TermSz
-clrLoop             clr       ,x+
-                    decb
-                    bne       clrLoop
-                    puls      b,x
-                    leax      gr.TermSz,x
-                    decb
-                    bne       clrScr
+                    std       >gr.Entry
                     lda       #$FF
                     sta       gr.LiveTerm
-                    ldb       #GF.Init
-                    pshs      a         **DEBUG**
-                    lda       #3        **DEBUG**
-                    sta       $1203     **DEBUG**
-                    puls      a         **DEBUG**
-                    lbsr      CallGrfDrv
+                    ldb       #GF.Init           populate gr.WriteCharLive/Shadow + gr.ScrollLive/Shadow
+                    lbsr      CallGrfDrvNoPD
                     lbcs      initerr3
-                    pshs      a         **DEBUG**
-                    lda       #4        **DEBUG**
-                    sta       $1204     **DEBUG**
-                    puls      a         **DEBUG**
                     clrb
                     puls      y,u,pc
 initerr2            leas      4,s
 initerr             leas      2,s
-initerr3            pshs      a         **DEBUG**
-                    lda       #5        **DEBUG**
-                    sta       $1205     **DEBUG**
-                    puls      a         **DEBUG**
-                    coma
+initerr3            coma
                     puls      y,u,pc
 
 InitDevice          ldu       2,s
@@ -797,106 +782,9 @@ ClearEntry
 TermNotInit
                     clrb
                     puls      x,y,u,pc
-                  ENDC
 
-* Init              
-*
-* Entry:
-*    Y  = address of device descriptor
-*    U  = address of device memory area
-*
-* Exit:
-*    CC = carry set on error
-*    B  = error code
-*
-* First INIZ (/term): hardware + InitTerm (IT.WND=0). Old Write still owns $C2.
-* Later named INIZ (/vtN): skip hardware, InitTerm only.
-* Factory INIZ (/vt, IT.WND=$FF): skip hardware and InitTerm; SS.Open binds.
-* Markers: $12FD='I' $12FE=$A5 $12FF=$5A entered
-*          $12FC='P' InitDisplay returned
-*          $12FB='Z' Init success rts
-* InitTerm log $12F0-'T' $12F1=id $12F2=blk $12F3-4=X $12F5=active $12F6=cnt $12F7=K/E
-Init
-                    lda       #'I
-                    sta       $12FD
-                    lda       #$A5
-                    sta       $12FE
-                    lda       #$5A
-                    sta       $12FF
-                    pshs      y
-                    lda       >gr.KbdInit
-                    cmpa      #$FF
-                    beq       SkipHw
-                    lda       #'A
-                    lbsr      dbgwrite
-                    lda       #'B
-                    lbsr      dbgwrite
-                    stu       >D.KbdSta pointer to this device's static
-                    clr       V.WriteState,u  escape collector idle
-                    ldb       #$10      assume this foreground/background
-                    stb       V.FBCol,u store it in our foreground/background color variable
-                    clra                set D..
-                    clrb                to $0000
-                    std       V.CurRow,u set the current row and column
-                    lda       #1
-                    sta       V.TermLive,u first console writes Vicky $C2/$C3
-                    clr       >gr.SwitchReq
-                    lda       #'C
-                    lbsr      dbgwrite
-                    lbsr      InitDisplay initialize the display
-                    lda       #'P
-                    sta       $12FC
-                    lbsr      InitSound initialize the sound
-                    lbsr      InitKeyboard initialize the keyboad
-                  IFGT    Level-1
-                    lda       #'D
-                    lbsr      dbgwrite
-                    lbsr      InitMouse
-                    lda       #'E
-                    lbsr      dbgwrite
-                    lbsr      InitGrfDrv
-                    stu       >D.KbdSta
-                    lbsr      InitPSG             $C4 silence in LUT 1
-                    lbsr      InitDisplayMem gamma/font/pal/C2/C3 in LUT 1
-                  ENDC
-                    ldx       >D.AltIRQ get the current alternate IRQ vector
-                    stx       >D.OrgAlt save it off in the original vector
-                    leax      AltISR,pcr get our alternate interrupt service routine
-                    stx       >D.AltIRQ and place it in the global vector
-                    lbsr      ClearTermTbl
-                    lda       #$FF
-                    sta       gr.KbdInit
-* InitGrfDrv cleared $1100-$12FF. Restore Init markers.
-                    lda       #'I
-                    sta       $12FD
-                    lda       #$A5
-                    sta       $12FE
-                    lda       #$5A
-                    sta       $12FF
-                    lda       #'P
-                    sta       $12FC
-SkipHw
-                    puls      y
-                    lda       >gr.TermCnt
-                    bne       HaveIdStart
-                    lda       #'F
-                    lbsr      dbgwrite
-HaveIdStart
-                    ldb       IT.WND,y  Y is the device descriptor (IOMAN Attach)
-                    bpl       HaveId
-* IT.WND=$FF is the /vt factory. Do not FindFreeTerm, do not InitTerm,
-* never pass $FF into id*4. Slot is bound later by SS.Open.
-                    bra       InitOk
-HaveId
-                    lbsr      InitTerm
-                    bcs       InitFail
-InitOk
-                    lda       #'Z
-                    sta       $12FB
-                    clrb                clear the carry and error code
-                    rts                 return to the caller
-InitFail
-                    rts                 carry and B already set
+
+
 
 *******************************************************************
 * ClearTermTbl - zero gr.TermTbl and counts. First INIZ only.
@@ -904,10 +792,11 @@ InitFail
 ClearTermTbl        pshs      d,x
                     ldx       #gr.TermTbl
                     ldb       #G.TermMax*gr.TermSz
-ClrTT               clr       ,x+
+		    clra
+ClrTT               sta       ,x+
                     decb
                     bne       ClrTT
-                    clr       >gr.TermCnt
+                    sta       >gr.TermCnt
                     lda       #$FF
                     sta       >gr.LiveTerm
                     puls      d,x,pc
@@ -951,7 +840,7 @@ InitTermStatic      pshs      d,x,y
                     clr       V.LastCh,u
                     clr       V.Reverse,u
                     clr       V.ST,u
-                    ldx       >D.KbdSta
+                    ldx       >D.KbdSta        first term statics?
                     beq       InitTSDone
                     pshs      u
                     cmpx      ,s
@@ -979,12 +868,10 @@ CopyKS              ldb       ,x+
                     deca
                     bne       CopyKS
                     puls      x
-                  IFGT    Level-1
                     ldd       V.MSDrvMPtr,x
                     std       V.MSDrvMPtr,u
                     ldd       V.MSDrvEPtr,x
                     std       V.MSDrvEPtr,u
-                  ENDC
 InitTSDone          puls      d,x,y,pc
 
 *******************************************************************
@@ -998,18 +885,12 @@ BlankTermText       pshs      cc,d,x,y
                     beq       BTTSkip
                     sta       $12EC
                     sta       >gr.TermBlk
-                    lda       #'B
-                    sta       $12EB
                     lda       #C$SPAC
                     sta       >gr.WGlyph
-                    sta       $12ED
                     lda       V.FBCol,u
                     sta       >gr.WColor
-                    sta       $12EE
                     ldb       #GF.Blank
                     lbsr      CallGrfDrvNoPD
-                    lda       #'K
-                    sta       $12EF
 BTTSkip             puls      cc,d,x,y,pc
 
 *******************************************************************
@@ -1022,9 +903,6 @@ BTTSkip             puls      cc,d,x,y,pc
 *******************************************************************
 InitTerm
                     pshs      x,y,u
-                    lda       #'T
-                    sta       $12F0
-                    stb       $12F1
                     stb       V.TermID,u
                     lda       #gr.TermSz
                     mul
@@ -1037,12 +915,10 @@ InitTerm
                     ldd       #2
                     os9       F$AlHRAM
                     lbcs      InitError
-                    stx       $12F3
                     cmpx      #DAT.BlMx+1
                     bhs       AlHramD
                     tfr       x,d
 AlHramD             puls      x
-                    stb       $12F2
                     stb       T.Block,x
                     stb       V.TermBufBlk,u
                     lda       #T.Init
@@ -1053,8 +929,8 @@ AlHramD             puls      x
 		    anda      #$1F
 		    ora	      #$A0
 		    std	      T.grU5,x             store U for grfdrv slot 5
-                    ldy   >D.SysDAT                now oompute block # for static storage
-                    tfr   u,d
+                    ldy       >D.SysDAT                now oompute block # for static storage
+                    tfr       u,d
                     lsra
                     lsra
                     lsra
@@ -1062,9 +938,9 @@ AlHramD             puls      x
                     lsra              A = page (U >> 13)
                     lsla
                     inca              -> block-number byte of that DAT entry
-                    lda   a,y
-                    sta   T.VBlk,x	            store block # for static storage
-                    puls  d,y
+                    lda       a,y
+                    sta       T.VBlk,x	            store block # for static storage
+                    puls      d,y
                     lbsr      InitTermStatic
                     lda       >gr.TermCnt
                     bne       NotFirst
@@ -1074,6 +950,13 @@ AlHramD             puls      x
                     sta       T.Flags,x
                     lda       #1
                     sta       V.TermLive,u
+* BUG FIX: /term (first terminal) used to skip straight to TermInited,
+* which also skipped SetTermGrfPtrs (NotFirst's job below). That left
+* gr.TermBlk/gr.VBlk/gr.U5/gr.VStaStorU at InitGrfDrv's cleared zeros
+* until SetWDest's next per-call snapshot caught up - so any grfdrv op
+* that ran first (e.g. the sign-on banner's PutCell) mapped block 0
+* into MMU slots 3/4 via SetBlkC2C3. Load them now, same as NotFirst.
+                    lbsr      SetTermGrfPtrs
                     bra       TermInited
 NotFirst
                     clr       V.TermLive,u
@@ -1126,14 +1009,12 @@ InitError
 *    B  = error code
 *
 Term
-                  IFGT    Level-1
                     lbsr      TermTerm
                     lda       #'Q
                     sta       $12E1
                     lda       >gr.TermCnt
                     sta       $12E0
                     bne       TermEx
-                  ENDC
                     ldx       >D.OrgAlt
                     stx       <D.AltIRQ
                     ldx       V.KeyDrvEPtr,u
@@ -1147,7 +1028,6 @@ Term
                     os9       F$Unlink
                     puls      u
 NoUnlink
-                  IFGT    Level-1
                     ldx       V.MSDrvEPtr,u
                     cmpx      #0000
                     beq       NoMouse
@@ -1160,10 +1040,10 @@ NoUnlink
                     ldd       #0
                     std       V.MSDrvMPtr,u
 NoMouse
-                    clr       >gr.KbdInit
+                    clr       >gr.FirstInitDone
                     ldd       #0
                     std       >D.KbdSta
-                  ENDC
+
 TermEx              clrb
                     rts
 
@@ -1288,7 +1168,13 @@ PutGlyph	    ldy	      V.CurPos,u
 		    lbsr      CallWriteCharShadow
 		    bra	      cont@
 writelive	    lbsr      CallWriteCharLive
-cont@		    inc	      V.CurPos,u            increment cursor poisition in text map
+* BUG FIX: V.CurPos is a 2-byte field; `inc V.CurPos,u` only touched the
+* high byte (6809 words are big-endian), adding 256 - not 1 - per char.
+* That desynced it from V.CurRow/V.CurCol (advanced correctly below),
+* so each glyph landed WWidth-dependent rows/cols away from the last.
+cont@		    ldd	      V.CurPos,u
+		    addd      #1
+		    std	      V.CurPos,u            increment cursor poisition in text map
                     ldd       V.CurRow,u          get the current row and column (xy coordinates)
                     incb                          increment the column
                     cmpb      V.WWidth,u          compare it against the number of columns
@@ -1554,13 +1440,15 @@ CurHome             clr       V.CurCol,u
                     clr       V.CurRow,u
 		    clr	      V.CurPos,u
                     rts
-
-**********************************************************************
-* CalcCurPos - recompute V.CurPos from V.CurRow / V.CurCol.
-* V.CurPos = V.CurRow * V.WWidth + V.CurCol  (linear text-map cell).
-* Call after any handler that moves the cursor without going through
-* PutGlyph.  Clobbers D.  Returns carry clear (SCF Write checks it).
-*
+		    
+***********************************************************************
+*** Cursor Utility Function Used by 02, 06, 08. 09, 0A, 0D, and Write
+************************************************************************
+*** CalcCurPos - recompute V.CurPos from V.CurRow / V.CurCol.
+*** V.CurPos = V.CurRow * V.WWidth + V.CurCol  (linear text-map cell).
+*** Call after any handler that moves the cursor without going through
+*** PutGlyph.  Clobbers D.  Returns carry clear (SCF Write checks it).
+***
 CalcCurPos          lda       V.CurRow,u
                     ldb       V.WWidth,u
                     mul
@@ -2033,7 +1921,11 @@ GSKySns
 actv@               stb       R$A,x               save to caller reg
                     clrb                          return w/o error
                     rts
+**********************************************************************
+*                      GetStt Routines
+**********************************************************************
 
+**********************************************************************
 * GetStat
 *
 * Entry:
@@ -2048,6 +1940,7 @@ actv@               stb       R$A,x               save to caller reg
 ****************************
 * Get status entry point
 * Entry: A=Function call #
+*
 GetStat             cmpa      #SS.EOF             is this the EOF call?
                     beq       SSEOF               yes, exit without error
                     ldx       PD.RGS,y            else get the pointer to caller's registers (all other calls require this)
@@ -2079,7 +1972,33 @@ GetStat             cmpa      #SS.EOF             is this the EOF call?
                     ldb       #E$UnkSvc           load the "unknown service" error
                     rts                           return
 
-;;; SS.ScTyp
+**********************************************************************
+* SS.EOF    $06	
+* SS.Ready  $01
+*
+* Tests for data available on SCF-supported devices.
+*
+* Entry:  A = The path number.
+*         B = SS.Ready ($01)
+*
+* Exit:   B = The number of characters ready to read.
+*        CC = Carry flag clear to indicate success.
+*
+* Error:  B = E$NotRdy if there are no bytes ready to read.
+*        CC = Carry flag set to indicate error.
+*
+SSReady             lda       V.IBufH,u           else get get the buffer tail ptr
+                    suba      V.IBufT,u           A = the number of characters ready to read
+                    sta       R$B,x               save in the caller's B
+                    beq       NotReady            if there's no data in keyboard buffer, return the "not ready" error
+SSEOF               clrb                          clear the error code and carry
+                    rts                           return
+NotReady            comb                          set the carry
+                    ldb       #E$NotRdy           load the "not ready" error
+                    rts                           return
+
+
+;;; SS.ScTyp  $63
 ;;;
 ;;; Returns information about the current video screen.
 ;;;
@@ -2099,29 +2018,9 @@ SSScTyp             lda       V.ScTyp,u            get the screen type
                     sta       R$A,x
                     rts
 
-;;; SS.Ready
-;;;
-;;; Tests for data available on SCF-supported devices.
-;;;
-;;; Entry:  A = The path number.
-;;;         B = SS.Ready ($01)
-;;;
-;;; Exit:   B = The number of characters ready to read.
-;;;        CC = Carry flag clear to indicate success.
-;;;
-;;; Error:  B = E$NotRdy if there are no bytes ready to read.
-;;;        CC = Carry flag set to indicate error.
-SSReady             lda       V.IBufH,u           else get get the buffer tail ptr
-                    suba      V.IBufT,u           A = the number of characters ready to read
-                    sta       R$B,x               save in the caller's B
-                    beq       NotReady            if there's no data in keyboard buffer, return the "not ready" error
-SSEOF               clrb                          clear the error code and carry
-                    rts                           return
-NotReady            comb                          set the carry
-                    ldb       #E$NotRdy           load the "not ready" error
-                    rts                           return
 
-;;; SS.ScSiz
+
+;;; SS.ScSiz $1A
 ;;;
 ;;; Return the screen size.
 ;;;
@@ -2144,7 +2043,13 @@ SSScSiz             clra                          clear the upper 8 bits of D
                     std       R$X,x               save it in X
                     ldb       V.WHeight,u         get the row count
                     std       R$Y,x               save it in Y
-;;; SS.Joy
+* BUG FIX: this fell straight through into SSJoy below with no rts,
+* so R$X/R$Y (and R$A) got clobbered with joystick VIA-port data right
+* after being set correctly - SS.ScSiz callers (Shell included, at
+* startup) got garbage screen dimensions instead of an error.
+                    rts
+
+;;; SS.Joy $OD
 ;;;
 ;;; Returns the joystick information.
 ;;;
@@ -2487,55 +2392,16 @@ ex@                 rts
 
 ;;; difference between get and set is just two lines specifying
 ;;; source and destination.  So procedures are combined.
-GSFntChar           lda       #0
-                    bra       DoFontGetSet
-SSFntChar           lda       #1
-DoFontGetSet        pshs      a 
-                    ldd       R$Y,x               get the char# and mulitply by 8
-                    lslb
-                    rola
-                    lslb
-                    rola
-                    lslb
-                    rola
-                    tfr       d,y                 transfer result to y
-                    lda       R$A,x               add offset for font bank 0 or 1
-                    beq       font0@
-font1@              leay      FONT_1_OFFSET,y
-                    bra       cont@
-font0@              leay      FONT_0_OFFSET,y
-cont@               leas      -2,s                reserve 2 bytes for mapped address
-                    pshs      x,u                 preserve x,u
-                    ldx       #FONT_BLK           map in $C1
-                    ldb       #$01                map 1 block at address x (x set on entry)
-                    os9       F$MapBlk            map block into caller DAT
-                    bcc       mapgood@            if success, then continue
-                    puls      x,u                 else: error
-                    puls      a,x,pc              clean stack and return if error
-mapgood@            stu       4,s                 store mapped address on stack [XUMO]
-                    ldd       4,s                 load into d and add to y
-                    leay      d,y                 Y now contains address of font char
-                    puls      x,u                 restore x,u [MO]
-                    pshs      x,u
-                    ldx       <D.Proc
-                    lda       P$Task,x            copy data from caller to caller memory
-                    ldb       P$Task,x
-                    ldx       ,s
-                    tst       6,s                 Get or Set?
-                    beq       getfont@            0 = getfont
-                    ldx       R$X,x               setfont: source is x
-                    tfr       y,u                 destination is y
-                    bra       contfont@
-getfont@            ldu       R$X,x               getfont: destination is x
-                    tfr       y,x                 source is y
-contfont@           ldy       #8                  copy 8 bytes
-                    os9       F$Move
-                    puls      x,u                 error or not, clear block and return
-                    puls      u                   pull blk addr and getset flag
-                    puls      a
-                    ldb       #$01
-                    os9       F$ClrBlk
-                    rts
+GSFntChar           lbsr      SetThisTermGrfPtrs
+		    ldb	      #GF.GSFntChar
+		    lbsr      CallGrfDrv
+		    rts
+		    
+SSFntChar           lbsr      SetThisTermGrfPtrs
+		    ldb	      #GF.SSFntChar
+		    lbsr      CallGrfDrv
+		    rts
+
 
 ;;; SS.FntLoadF
 ;;;
