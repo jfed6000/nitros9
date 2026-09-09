@@ -906,10 +906,22 @@ Alt-arrow never recovers and the machine stays blind — alive but with nothing 
 screen.  `proc` on the real board confirmed it, showing the second terminal's
 shell sleeping normally in `Read`.
 
-`TermVRAMSave` (`defs/wildbits_vtio.d`) now gates all four copies in both
-routines, default **0**: a switch carries the character and colour planes and the
-`$FFC0-$FFCF` mirror, and nothing else.  The palette, font, sprites and CLUTs
-stay global.
+The four copies are each gated by their own `TermSave*` switch in
+`defs/wildbits_vtio.d`, so they can be brought back **one at a time on the
+board** — MAME models all of it as plain RAM and cannot tell us which region is
+at fault.  Addresses verified against the F256 Revision E map (2026-03-13);
+every constant in `defs/wildbits.d` checks out against it:
+
+| switch | region | Vicky | bytes |
+|---|---|---|---|
+| `TermSaveFont0` | font memory bank 0 | `$C1+$0000` | 2048 |
+| `TermSaveTextLUT` | text LUT foreground + background | `$C0+$1700` | 128 |
+| `TermSaveSprite0` | sprite bank 0 | `$C0+$1300` | 256 |
+| `TermSaveCLUT` | graphics LUT0-3 | `$C1+$1000` | 4096 |
+
+Sprite bank 1 (`$C0+$1400`) is deliberately not carried, so the sprite copy is
+256 bytes even though `T.SPRITE0` reserves 512; banks 2 and 3 are FUTURE on
+Revision E.  Whatever is switched off stays global, shared by every terminal.
 
 What each routine stops copying: `T.FLUT`+`T.BLUT` 128 bytes (text FG/BG
 palettes, `$C0+$1700`), `T.SPRITE0` 512 (`$C0+$1300`), `T.FONT0` 2048
@@ -920,9 +932,16 @@ the two 4800-byte planes.  At `CpyBlk`'s ~8.5 cycles/byte that is ~18ms less
 time with interrupts masked inside `SwitchTerm` — about a frame.  `grfdrv256`
 1703 → 1599, the 104 bytes being eight copy setups at 13 bytes each.
 
-The cost is real: `1B 60`/`1B 61` per-terminal palettes and a per-terminal font
-set no longer survive a switch.  Setting `TermVRAMSave` to 1 restores the old
-behaviour but also the bug.  The right way to get the feature back is the same
+The Revision E map also shows how bad the old `$2800` CLUT copy was: 4096 bytes
+from `$C0+$0800` runs to `$C0+$17FF`, across gamma R, the mouse graphics, the
+**BITMAP and TILE control registers**, the memtext registers, all four sprite
+banks and the text LUTs — so `PullBuf` was programming the bitmap and tile
+registers with whatever had been captured.  `$C1+$1000` (LUT0 `$1000`, LUT1
+`$1400`, LUT2 `$1800`, LUT3 `$1C00`) is exactly the 4096 bytes intended.
+
+The cost is real: `1B 60`/`1B 61` per-terminal palettes need `TermSaveTextLUT`,
+and a per-terminal font set needs `TermSaveFont0`.  If a region turns out not to
+read back, the right way to get the feature back is the same
 write-only mirror discipline the display registers now have — vtio owns the
 value, writes it to both the buffer and the hardware, and never reads Vicky
 back.  `GFPal` already writes the buffer copy for a shadow terminal, so that

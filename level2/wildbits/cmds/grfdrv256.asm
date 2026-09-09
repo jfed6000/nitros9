@@ -450,30 +450,39 @@ PushBuf             lbsr      SetBlkC2C3
                     ldd       #4800
                     lbsr      CpyBlk
                     lbsr      SetBlkC0C1
-* These four READ Vicky memory back.  See TermVRAMSave in
-* defs/wildbits_vtio.d for why that is off by default.
-                    ifne      TermVRAMSave
-                    ldy       #$6000+T.FLUT text FG/BG LUTs on $C1
-                    ldu       #$2000+TEXT_LUT_FG  text LUTs live on $C0 at $2000
+* The four copies below READ Vicky memory back.  Each is gated on its own
+* switch so they can be re-enabled one at a time on real hardware - see
+* the TermSave* table in defs/wildbits_vtio.d.  SetBlkC0C1 maps $C0 at
+* $2000 and $C1 at $4000.
+                    ifne      TermSaveTextLUT
+                    ldy       #$6000+T.FLUT   text LUT fg+bg, 2 x 64 bytes
+                    ldu       #$2000+TEXT_LUT_FG  $C0+$1700, NOT $C1
                     ldd       #128
                     lbsr      CpyBlk
-                    ldy       #$6000+T.SPRITE0 sprite registers on $C0
-                    ldu       #$3300
-                    ldd       #$200
+                    endc
+                    ifne      TermSaveSprite0
+                    ldy       #$6000+T.SPRITE0 sprite bank 0 only
+                    ldu       #$2000+SPRITE_REC_OFF  $C0+$1300
+                    ldd       #$100           bank 1 at $1400 deliberately not carried
                     lbsr      CpyBlk
-                    ldy       #$6000+T.FONT0 font 0 on $C1
-                    ldu       #$4000
+                    endc
+                    ifne      TermSaveFont0
+                    ldy       #$6000+T.FONT0  font memory bank 0
+                    ldu       #$4000+FONT_0_OFFSET   $C1+$0000
                     ldd       #$800
                     lbsr      CpyBlk
+                    endc
 * CLUTs 0-3 are GRPH_LUT0_OFF ($1000) within FONT_BLK ($C1), which
 * SetBlkC0C1 maps at $4000 - so $5000, not $2800.  $2800 is $C0+$0800,
-* and 4096 bytes from there runs to $C0+$17FF, straight across the sprite
-* records ($1300) and the text LUTs ($1700) this routine has just saved
-* separately.  A push/pull round trip was self-consistent, which is why
-* nothing showed: it saved and restored the gamma area instead of the
-* graphics CLUTs, so per-terminal CLUTs simply did not exist.
-                    ldy       #$6000+T.CLUT0 CLUTs 0-3 on $C1 at GRPH_LUT0_OFF
-                    ldu       #$5000
+* and 4096 bytes from there runs to $C0+$17FF: on Revision E that is
+* gamma R, the mouse graphics, the BITMAP and TILE control registers,
+* the memtext registers, all four sprite banks and the text LUTs.  A
+* push/pull round trip was self-consistent, which is why nothing showed,
+* but PullBuf was programming the bitmap and tile registers with
+* whatever had been captured.
+                    ifne      TermSaveCLUT
+                    ldy       #$6000+T.CLUT0  graphics LUT0-3, $400 each
+                    ldu       #$4000+GRPH_LUT0_OFF   $C1+$1000
                     ldd       #$1000
                     lbsr      CpyBlk
                     endc
@@ -545,26 +554,32 @@ PullBuf             lbsr      SetBlkC2C3
                     ldd       #4800
                     lbsr      CpyBlk
                     lbsr      SetBlkC0C1
-* The counterparts of PushBuf's four read-back copies; with
-* TermVRAMSave 0 the palette, sprites, font and CLUTs are global and are
-* simply left alone across a switch.  This is the block that blacked the
-* screen on real hardware - it programmed whatever PushBuf managed to
-* read out of write-only Vicky memory.
-                    ifne      TermVRAMSave
-                    ldu       #$6000+T.FLUT restore text FG/BG LUTs
-                    ldy       #$2000+TEXT_LUT_FG  text LUTs live on $C0 at $2000
+* The counterparts of PushBuf's four read-back copies, gated the same
+* way.  Whatever is switched off is global state that a switch simply
+* leaves alone.  This is the block that blacked the screen on real
+* hardware with all four on - it programs whatever PushBuf managed to
+* read out of Vicky.
+                    ifne      TermSaveTextLUT
+                    ldu       #$6000+T.FLUT   text LUT fg+bg
+                    ldy       #$2000+TEXT_LUT_FG  $C0+$1700, NOT $C1
                     ldd       #128
                     lbsr      CpyBlk
-                    ldu       #$6000+T.SPRITE0 restore sprite registers
-                    ldy       #$3300
-                    ldd       #$200
+                    endc
+                    ifne      TermSaveSprite0
+                    ldu       #$6000+T.SPRITE0 sprite bank 0 only
+                    ldy       #$2000+SPRITE_REC_OFF  $C0+$1300
+                    ldd       #$100
                     lbsr      CpyBlk
-                    ldu       #$6000+T.FONT0 restore font 0
-                    ldy       #$4000
+                    endc
+                    ifne      TermSaveFont0
+                    ldu       #$6000+T.FONT0  font memory bank 0
+                    ldy       #$4000+FONT_0_OFFSET   $C1+$0000
                     ldd       #$800
                     lbsr      CpyBlk
-                    ldu       #$6000+T.CLUT0 restore CLUTs 0-3 to $C1+GRPH_LUT0_OFF
-                    ldy       #$5000          not $2800 - see PushBuf
+                    endc
+                    ifne      TermSaveCLUT
+                    ldu       #$6000+T.CLUT0  graphics LUT0-3
+                    ldy       #$4000+GRPH_LUT0_OFF   $C1+$1000, not $2800
                     ldd       #$1000
                     lbsr      CpyBlk
                     endc

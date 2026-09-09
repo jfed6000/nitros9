@@ -433,33 +433,44 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 *******************************************************************
 * 16K termainal storage for switching screens = excactly 16384
 *
-* TermVRAMSave - does a terminal switch also carry the text palette,
-* sprite records, font 0 and the four graphics CLUTs (T.FLUT..T.CLUT3),
-* or only the character and colour planes?
+* Beyond the character and colour planes, a terminal switch can also
+* carry four regions of Vicky memory.  Each is gated separately so they
+* can be brought back ONE AT A TIME on real hardware: saving them means
+* READING Vicky back, and with all four on, the first Alt-arrow switch
+* blacked the screen and never recovered (coming back restores the other
+* terminal's equally-garbage capture).  MAME models all of it as plain
+* RAM, so it cannot tell us which one - only the board can.
 *
-*   0 = text/colour planes only (default).  The palette, font, sprites
-*       and CLUTs stay global, shared by every terminal.
-*   1 = per-terminal, the original behaviour.
+* Addresses verified against the F256 Revision E map, 2026-03-13.
 *
-* It is 0 because saving them requires READING them back out of Vicky,
-* and on real hardware that does not work: FPGA palette and font memory
-* is commonly written by the CPU and read only by video scanout, with no
-* CPU read port.  PushBuf then captures garbage and PullBuf programs it,
-* which blacks the screen on the first Alt-arrow switch - and blacks it
-* in BOTH directions, since coming back restores the other terminal's
-* equally-garbage capture.  MAME models these as plain RAM, so it never
-* showed it.  Dropping the four copies also takes 6784 bytes out of each
-* of PushBuf and PullBuf - 13568 bytes per switch, since a switch runs
-* both - leaving only the 4800-byte character and colour planes.
+*   switch            region                    Vicky        bytes
+*   ----------------- ------------------------- ------------ -----
+*   TermSaveFont0     font memory bank 0        $C1+$0000     2048
+*   TermSaveTextLUT   text LUT foreground+bg    $C0+$1700      128
+*   TermSaveSprite0   sprite bank 0             $C0+$1300      256
+*   TermSaveCLUT      graphics LUT0-3           $C1+$1000     4096
 *
-* The cost is that 1B 60 / 1B 61 (per-terminal text palette) and a
-* per-terminal font set no longer survive a switch.  Restoring that
-* feature means giving those regions the same write-only mirror
-* discipline the $FFC0-$FFCF registers now have - vtio owns the value,
-* writes it to both the buffer and the hardware, and never reads Vicky
-* back - not turning this switch on.
+* Sprite bank 1 ($C0+$1400) is deliberately NOT carried, so the sprite
+* copy is 256 bytes even though T.SPRITE0 reserves 512 in the buffer.
+* Banks 2 and 3 ($1500/$1600) are FUTURE on Revision E.
+*
+* Each byte here costs twice per switch: SwitchTerm runs PushBuf on the
+* terminal it leaves and PullBuf on the one it enters.  All four on is
+* 6784 bytes per routine, 13568 per switch, against 9600/19200 for the
+* two planes that are always carried.
+*
+* Whatever stays off is global, shared by every terminal - so 1B 60 /
+* 1B 61 per-terminal palettes need TermSaveTextLUT, and a per-terminal
+* font set needs TermSaveFont0.  If a region turns out not to read back,
+* the way to get its feature anyway is the write-only mirror discipline
+* the $FFC0-$FFCF registers now have: vtio owns the value, writes it to
+* both the buffer and the hardware, and never reads Vicky.  GFPal
+* already does the buffer half for the text LUT.
 *******************************************************************
-TermVRAMSave        equ       0
+TermSaveFont0       equ       1         font bank 0    - under test
+TermSaveTextLUT     equ       0         text LUT fg/bg
+TermSaveSprite0     equ       0         sprite bank 0
+TermSaveCLUT        equ       0         graphics LUT0-3
                     org       0
 T.TXT               rmb       4800      ; 80x60 text screen
 T.TXTCOLOR          rmb       4800      ; 80x60 color matrix
