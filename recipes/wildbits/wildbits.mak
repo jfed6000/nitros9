@@ -92,7 +92,7 @@ CMDS += dmem minted mmap modpatch \
 	proc pmap smap \
 	gfxstatus xtclut drawtest play \
 	shellbg shellbgoff ntptime view utilpak1 fadein fadeout \
-	sprtest2
+	sprtest2 assetload
 endif
 
 BASIC09 = basic09 runb inkey syscall wild
