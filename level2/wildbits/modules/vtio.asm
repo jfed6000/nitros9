@@ -305,6 +305,12 @@ IDprog              lda       ,y+
                     sta       ,x+
                     decb
                     bne       IDprog
+* IDprog leaves X at $FFD0.  Reload it - the cursor writes below are all
+* TXT.Base-relative, and without this they land at $FFE0-$FFE6, which is
+* undocumented I/O page on a real board (MAME maps only $FFC0-$FFDF to
+* Vicky and lets the rest fall through to slot-7 RAM past the end of Krn,
+* where it is inert, so MAME booted and hardware did not).
+                    ldx       #TXT.Base
                     lda       #Vky_Cursor_Enable|Vky_Cursor_Flash_Rate0|Vky_Cursor_Flash_Rate1
                     sta       VKY_TXT_CURSOR_CTRL_REG,x
                     clra
