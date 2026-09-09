@@ -923,6 +923,28 @@ Sprite bank 1 (`$C0+$1400`) is deliberately not carried, so the sprite copy is
 256 bytes even though `T.SPRITE0` reserves 512; banks 2 and 3 are FUTURE on
 Revision E.  Whatever is switched off stays global, shared by every terminal.
 
+**Bisect results so far, on the board:**
+
+- **`TermSaveFont0` — works.** Font memory bank 0 reads back correctly, and
+  three terminals with independent fonts *and* colours switch between each other
+  cleanly.  So the black screen is not the font, and per-terminal font sets are
+  a real feature now.
+- `TermSaveTextLUT` — under test next.
+- `TermSaveSprite0`, `TermSaveCLUT` — still off.
+
+Three live terminals also supersedes the prior tree's *"One extra VT is enough.
+Do not restore two shell i=/vtN& + proc."*  Two and three both work, on hardware
+and in MAME.
+
+> **Build trap: no rule lists a defs file as a prerequisite.**  Editing
+> `defs/wildbits_vtio.d` alone did not rebuild `grfdrv256`, so a `TermSave*`
+> change assembled to nothing and the `.mods` file was untouched — the same
+> class of trap as `krn` not depending on `flink.asm`, and it nearly sent an
+> untested build to the board.  `recipes/wildbits/l2/makefile` now adds
+> `$(MODDIR)/vtio $(MODDIR)/grfdrv256: $(DEFSDIR)/wildbits_vtio.d
+> $(DEFSDIR)/wildbits.d` after the include.  The tell, if it ever regresses, is
+> `.mods/grfdrv256` not changing size when a switch is flipped.
+
 What each routine stops copying: `T.FLUT`+`T.BLUT` 128 bytes (text FG/BG
 palettes, `$C0+$1700`), `T.SPRITE0` 512 (`$C0+$1300`), `T.FONT0` 2048
 (`$C1+$0000`) and `T.CLUT0`-`T.CLUT3` 4096 (`$C1+$1000`) — **6784 bytes**.  A

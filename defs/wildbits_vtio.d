@@ -467,8 +467,8 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 * both the buffer and the hardware, and never reads Vicky.  GFPal
 * already does the buffer half for the text LUT.
 *******************************************************************
-TermSaveFont0       equ       1         font bank 0    - under test
-TermSaveTextLUT     equ       0         text LUT fg/bg
+TermSaveFont0       equ       1         font bank 0    - CONFIRMED works on hardware
+TermSaveTextLUT     equ       1         text LUT fg/bg - under test
 TermSaveSprite0     equ       0         sprite bank 0
 TermSaveCLUT        equ       0         graphics LUT0-3
                     org       0
