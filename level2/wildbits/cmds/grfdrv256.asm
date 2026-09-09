@@ -462,8 +462,15 @@ PushBuf             lbsr      SetBlkC2C3
                     ldu       #$4000
                     ldd       #$800
                     lbsr      CpyBlk
-                    ldy       #$6000+T.CLUT0 CLUTs 0-3 on $C0
-                    ldu       #$2800
+* CLUTs 0-3 are GRPH_LUT0_OFF ($1000) within FONT_BLK ($C1), which
+* SetBlkC0C1 maps at $4000 - so $5000, not $2800.  $2800 is $C0+$0800,
+* and 4096 bytes from there runs to $C0+$17FF, straight across the sprite
+* records ($1300) and the text LUTs ($1700) this routine has just saved
+* separately.  A push/pull round trip was self-consistent, which is why
+* nothing showed: it saved and restored the gamma area instead of the
+* graphics CLUTs, so per-terminal CLUTs simply did not exist.
+                    ldy       #$6000+T.CLUT0 CLUTs 0-3 on $C1 at GRPH_LUT0_OFF
+                    ldu       #$5000
                     ldd       #$1000
                     lbsr      CpyBlk
 * copy main display registers
@@ -545,8 +552,8 @@ PullBuf             lbsr      SetBlkC2C3
                     ldy       #$4000
                     ldd       #$800
                     lbsr      CpyBlk
-                    ldu       #$6000+T.CLUT0 restore CLUTs 0-3
-                    ldy       #$2800
+                    ldu       #$6000+T.CLUT0 restore CLUTs 0-3 to $C1+GRPH_LUT0_OFF
+                    ldy       #$5000          not $2800 - see PushBuf
                     ldd       #$1000
                     lbsr      CpyBlk
 * restore display registers

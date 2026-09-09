@@ -636,6 +636,153 @@ An unrelated one found alongside: vtio's armed escape-collector path calls
 writing two Vicky cursor registers each time to no effect.  Stock returns
 immediately (`Do1E: clrb / rts`).
 
+## Multiterminal works  (2026-09-08)  — **two live terminals, verified**
+
+Multiterminal had never been tested; only `/term` had ever been opened.
+`InitTerm`'s `NotFirst` branch, `BlankTermText`, `SwitchTerm`,
+`PushBuf`/`PullBuf` and `gr.TermTbl` had never executed, and two of them had
+only just been made correct (`PushBuf`/`PullBuf` addressed the wrong block
+until `b0f35885`, `SwitchTerm`'s `V.CurPos` resync until `00abe155`).
+
+All four stages now pass in MAME `wbjr2`, deterministically:
+
+| stage | result |
+|---|---|
+| `iniz /vt1` + `echo HelloVT >/vt1`, no shell | `HelloVT` lands in `/vt1`'s `T.Block` buffer, nothing on screen, `/term` untouched |
+| Alt-Left / Alt-Right switching, no second shell | `/vt1` appears, `/term` restored **intact**; both buffer checksums identical across the round trip |
+| `dir -e /dd/CMDS >/vt1` while `/vt1` is shadow | ~100 lines scroll `/vt1`'s buffer correctly through `ScrollShadow`, no blanked row 0 |
+| `shell i=/vt1&`, then both shells interactive | `free` and `pwd` typed on each terminal, switching between them, each shell reads its own keyboard input and paints its own screen |
+
+`gr.TermCnt=2`, `T.Live` on exactly one entry, `D.KbdSta` following the live
+terminal, `HW CURSOR` tracking the live terminal's `V.CurRow`/`V.CurCol`, and
+the grfdrv re-entry counter at 0 throughout.
+
+### The one blocker: `PutGlyph`'s shadow path never set `gr.TermBlk`
+
+`WriteCharShadow` / `ScrollShadow` are *direct* calls — they bypass the
+`gr.b*`/`gr.d*` parameter block and take A/B/Y in registers — so `gr.TermBlk`
+is their only parameter out of GrfMem, and they use it to map the 16K buffer
+into MMU slots 3/4.  Every other grfdrv entry that consumes `gr.TermBlk` has a
+caller that refreshes it first:
+
+| grfdrv entry | vtio caller refreshes via |
+|---|---|
+| `PushBuf` / `PullBuf` | `SetTermGrfPtrs` (InitTerm, SwitchTerm, TermTerm) |
+| `EraseLine` / `ErEOLine` / `ErEOScrn` / `ClrScrn` | `SetThisTermGrfPtrs` |
+| `GFCell` (PutCell), `GFPal` (ChgPal) | `SetWDest` |
+| `GFBlank` | `BlankTermText` stores it itself |
+| **`WriteCharShadow` / `ScrollShadow`** | **nothing** |
+
+So a glyph written to a non-live terminal landed in whichever terminal's buffer
+`gr.TermBlk` happened to name — in practice `/term`'s, because the live shell's
+own scrolling reaches `EraseLine` → `SetThisTermGrfPtrs(/term)` first.  With one
+terminal it could never be wrong; with two it was wrong most of the time, and it
+would have looked exactly like a `PushBuf`/`PullBuf` failure.
+
+Fixed with a `SetShadowBlk` helper next to `SetWDest`, called at both shadow
+sites in `PutGlyph`.  It preserves A/B/X/Y/U (the glyph path needs all of them)
+and returns **Z set** when `V.TermBufBlk` is 0 so the caller skips the write
+entirely — the same refusal `BlankTermText` makes, because block 0 at LUT 1
+`$6000` is the kernel.  `LDA`/`STA` both set Z and `PULS` does not touch CC, so
+the flag survives the `puls a,pc`.
+
+### `gr.Busy`: a detector, deliberately not a gate
+
+`gbusy` (`vtio.asm:555`) is still never branched to.  That was re-examined
+before adding a second writer, and the conclusion is to leave the foreground
+path ungated:
+
+- **A driver cannot be preempted mid-call.**  Slice expiry only sets
+  `P$State |= TimOut` (`falltsk.asm:190-200`); the switch is taken in the
+  system-call *return* path (`krn.asm` `KrnShutDownInts`), i.e. when returning
+  to user state.  Two shells writing concurrently cannot overlap inside
+  `CallGrfDrv2` — which the two-live-terminal test confirms.
+- The window between `sts gr.Stack` and `jmp [D.Flip1]` is covered by
+  `orcc #IntMasks`, and `gr.Busy` is set inside it, so the AltISR (which *does*
+  check `gr.Busy`, `vtio.asm:105` and `:126`) cannot enter there either.
+- The hole opens only if something inside the grfdrv window *blocks*.  Nothing
+  does; `SS.FntLoadF`'s `I$Read` is in vtio, not grfdrv.
+- A gate would turn silent corruption into a stall, and because `gr.Busy` is
+  what the AltISR tests before `SwitchTerm`, that stall would freeze Alt-arrow
+  switching for its duration.  The commented-out `WaitPush` in `InitTerm`
+  already says so.
+
+So it is **counted** instead: `CallGrfDrvGo` bumps `$12E2` and records the
+second entrant's `GF.*` code in `$12E3`, and the MAME exit dump prints both.
+It stayed 0 through every test above.  If it ever goes non-zero, the fix is
+known and the culprit is named.
+
+### `PushBuf`/`PullBuf` were copying the wrong 4K
+
+`T.CLUT0`-`T.CLUT3` were copied to/from `$2800`, but CLUTs 0-3 are
+`GRPH_LUT0_OFF` (`$1000`) within `FONT_BLK` (`$C1`), which `SetBlkC0C1` maps at
+`$4000` — so `$5000`.  `$2800` is `$C0+$0800`, and 4096 bytes from there runs to
+`$C0+$17FF`, straight across the sprite records (`$1300`) and the text LUTs
+(`$1700`) the same routine has just saved separately.
+
+A push/pull round trip was self-consistent, which is why nothing ever showed: it
+saved and restored the gamma area instead of the graphics CLUTs, so
+per-terminal CLUTs simply did not exist.  Same family as the text-LUT bug
+recorded above.  Fixed in both routines; `grfdrv256` stays 1718 bytes (two
+changed immediates), and the two-terminal round trip is unchanged.
+
+### Verification harness in the MAME driver
+
+A terminal switch cannot be checked from the screen alone — the terminal you
+switched *away* from exists only in its buffer.  `wildbits_jr2.cpp` grew two
+pieces, both reading through `get_physical_block_ptr()` so they perturb nothing:
+
+- **`dump_multiterm()`**, called from `device_stop()`.  Prints the GrfMem
+  globals, the block map use counts and the system DAT image, then per terminal:
+  the decoded `gr.TermTbl` entry, the driver static (`V.TermID`/`V.TermLive`/
+  `V.TermBufBlk`/cursor/dimensions/`V.V_MCR`/`V.WAKE`/`V.IBuf*`), a checksum of
+  both blocks of the 16K pair, and its `T.TXT` rendered as text rows.  The
+  checksums are what prove a round trip did not corrupt anything.  GrfMem
+  addresses come from `vtio.list`, the `V.*` offsets from `vtio.map`;
+  re-derive both if `defs/wildbits_vtio.d` changes.
+- **`WB_KEYS`** — frame-scheduled PS/2 scancode injection through the existing
+  `queue_kbd_scancode()` FIFO, e.g.
+  `WB_KEYS="1200:alt-left;1450:pwd;1520:enter;1800:alt-right"` (60 frames per
+  second).  This drives the genuine path — `keydrv_ps2`'s `E0Handler` →
+  `DoLeftArrowDown` → `changewindowl` → `gr.SwitchReq` → vtio's AltISR — rather
+  than poking `gr.SwitchReq` behind the driver's back, and it is the only way to
+  exercise two live terminals in a headless run.  `WB_SYSDAT=1` additionally
+  prints every change to the system DAT image.
+
+### One thing that looks like a bug and is not
+
+The exit dump shows `/term`'s 16K buffer block (`$3E`) sitting in the active
+LUT at slot 1, which reads like a block handed out twice: the buffer comes from
+`F$AlHRAM`, i.e. the top of RAM, and `PushBuf` writes 16K into it.  It is not.
+The block-map use count for `$3E` is 1, and the same slot-1/2 churn — `$3E`
+included — happens before `/term`'s `InitTerm` runs at all: those two slots are
+a kernel scratch mapping window.  Corroborated by the buffer checksums, which
+are byte-identical across a switch out and back.
+
+### Gaps found and deliberately left
+
+- **Cursor control registers are not per terminal.**  `PushBuf` saves
+  `$FFC0-$FFCF` (= `V.V_MCR` + `V.V_LayerCTL` + `V.BordBack`, exactly 16 bytes);
+  the cursor registers start at `$FFD0`, so enable / character / flash rate are
+  global.  `SwitchTerm` sets X/Y explicitly, which is what matters.
+- **`ChgFont0`/`ChgFont1` poke the live MCR unconditionally**, without the
+  `V.TermLive` guard `SetWin` and `CurOff`/`CurOn` have — so `1B 62`/`1B 63`
+  from a shadow terminal changes the *live* font set, and the next `PushBuf`
+  saves it into the wrong terminal's `V.V_MCR`.  Exactly the failure `SetWin`'s
+  comment describes.  `CurChar` and the cursor flash-rate setter are the same
+  shape.  Nothing in the tests issues those codes.
+- `InitTermStatic` does not inherit `V.CapsLck`, so caps-lock state is per
+  terminal while the keyboard LED is global.
+- `InitTerm`'s `cmpx #DAT.BlMx+1 / bhs AlHramD / tfr x,d` around `F$AlHRAM` is
+  dead code.  `F$AlHRAM` returns the starting block in **`D`**
+  (`fallram.asm:54-61`, sharing `FAllramStartReqBlk` with `F$AllRAM`), never in
+  `X`; the branch is always taken because `X` is still the `gr.TermTbl` entry
+  pointer (`$114D`+), which is why it works.
+- The known-latent colour-plane last row in `ScrollLive`/`ScrollShadow` is still
+  masked on the shadow path too: `PutGlyph`'s scroll block reaches `clrline` →
+  `EraseLine`, and `EraseLineCore`'s `EraseLineShadow` leg fills both planes.
+
+
 ---
 
 ## SUPERSEDED — see 2026-09-08 above.

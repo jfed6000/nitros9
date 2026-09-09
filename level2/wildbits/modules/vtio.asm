@@ -544,7 +544,27 @@ CallGrfDrvGo        orcc      #Entire
                     stx       R$PC,s
                     lda       gr.Temp
                     sta       R$CC,s
-                    sta       gr.Busy
+* Re-entrancy DETECTOR, not a gate.  grfdrv's context is single-instance:
+* gr.Stack holds one caller's S and lds <D.CCStk resets to the top of one
+* shared stack, so a second entrant silently overwrites the first.  The
+* gbusy path below is deliberately still unused - gating here would turn
+* silent corruption into a stall, and because gr.Busy is what the AltISR
+* tests before SwitchTerm (line 105) and PSGOff (line 126), that stall
+* would freeze Alt-arrow switching for its duration.
+*
+* It should be unreachable: a driver cannot be preempted mid-call (slice
+* expiry only sets P$State|TimOut in falltsk.asm, and the switch is taken
+* in the system-call RETURN path, krn.asm KrnShutDownInts), and the
+* window before Flip1 is covered by the orcc #IntMasks above.  It opens
+* only if something inside the grfdrv window blocks.  So count it instead
+* of guessing: $12E2 = count, $12E3 = the GF.* code of the second entrant
+* (B still holds it here).  A/X/Y are untouched - the sta gr.Busy below
+* still needs A.
+                    tst       >gr.Busy
+                    beq       notreent@
+                    inc       $12E2
+                    stb       $12E3
+notreent@           sta       gr.Busy
                     jmp       [>D.Flip1]
                     rts
 
@@ -1145,6 +1165,30 @@ SWVicky             lda       #WD.Vicky
 SWDestX             rts
 
 *******************************************************************
+* SetShadowBlk - point gr.TermBlk at THIS terminal's 16K buffer.
+*
+* WriteCharShadow / ScrollShadow are direct calls: they bypass the
+* gr.b*/gr.d* block entirely and take A/B/Y in registers, so gr.TermBlk
+* is their ONLY parameter out of GrfMem.  Nothing else on the PutGlyph
+* path refreshes it - the last writer could have been another terminal's
+* EraseLine (SetThisTermGrfPtrs) or PutCell/ChgPal (SetWDest) - so
+* without this a shadow glyph lands in the wrong terminal's backup
+* buffer.  With one terminal it could never be wrong; with two it is
+* wrong most of the time.
+*
+* Exit: Z clear = gr.TermBlk loaded, go ahead.  Z set = V.TermBufBlk is
+* 0, so there is no buffer and the caller must skip the write; block 0
+* at LUT 1 $6000 is the kernel.  Same refusal BlankTermText makes.
+* STA/LDA both set Z and PULS does not touch CC, so the flag survives.
+* Preserves A/B/X/Y/U - PutGlyph needs all of them.
+*******************************************************************
+SetShadowBlk        pshs      a
+                    lda       V.TermBufBlk,u
+                    beq       SSBlkX
+                    sta       >gr.TermBlk
+SSBlkX              puls      a,pc
+
+*******************************************************************
 * PutCell - A = glyph, X = cell offset.  Snapshot + GF.Cell.
 * Colour = V.FBCol; dest via SetWDest.  Used by EraseChar.
 *   -> b2 glyph, b3 colour attr, d1 cell offset, b4 dest
@@ -1189,6 +1233,8 @@ PutGlyph	    ldy	      V.CurPos,u
 		    ldb	      V.FBCol,u
 		    tst	      V.TermLive,u
 		    bne	      writelive
+		    lbsr      SetShadowBlk          aim at THIS term's 16K buffer
+		    beq	      cont@                 no buffer: drop the glyph
 		    lbsr      CallWriteCharShadow
 		    bra	      cont@
 writelive	    lbsr      CallWriteCharLive
@@ -1231,6 +1277,8 @@ incrow              inca                          and we increment the row
 		    ldy	      V.ScreenSize,u
  		    tst	      V.TermLive,u
 		    bne	      scrolllive
+		    lbsr      SetShadowBlk          aim at THIS term's 16K buffer
+		    beq	      noscroll              no buffer: do not scroll it
 		    lbsr      CallScrollShadow
 		    bra	      noscroll
 scrolllive	    lbsr      CallScrollLive
