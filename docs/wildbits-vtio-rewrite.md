@@ -3,6 +3,31 @@
 Branch `wb/multiterm`. Rewrite of `level2/wildbits/modules/vtio.asm` +
 `level2/wildbits/cmds/grfdrv256.asm` (built into `grfdrv256`).
 
+## CURRENT STATUS  (2026-09-09)  — multiterminal and per-terminal bitmaps both
+## work on real hardware.
+
+Head `ab12cb35`.  Three terminals with independent fonts, colours **and
+background images**; Alt+Right walks up the terminal ids, Alt+Left down.
+`keydrv_k2` has the same Alt+arrow switching as `keydrv_ps2`.  All four build
+targets (`l1`/`l2` × `jr2`/`k2`) build, and both disks boot in MAME.
+
+The sections below are in date order, oldest first; the newest work is the
+three 2026-09-09 sections near the bottom of this half of the document —
+**Bitmaps**, **…and the bitmap registers do not read back either**, and
+**Alt+arrow on the K2 keyboard**.  The running list of what is and is not
+readable on this FPGA is in the second of those.
+
+Still open, in the order I would take them:
+
+1. **Does the graphics CLUT read back?**  Procedure and the staged remedy are
+   under "Still open: does the graphics CLUT read back?".  Only the board can
+   answer it.  Sprite bank 0 is the same question with `sprtest2`.
+2. **Per-terminal text palettes** (`1B 60` / `1B 61`) via the `GFPal`
+   dual-write plus `T.FLUT`/`T.BLUT` seeding — see "Getting per-terminal
+   palettes back without the read-back".  Do **not** do this with
+   `TermSaveTextLUT`.
+3. The known-latent list under "Gaps found and deliberately left".
+
 ## STATUS  (2026-09-08)  — **RESOLVED.**  Boots the full `sysgo` → `Shell
 ## "startup -p"` → nested-fork chain to an interactive prompt.  The cause was
 ## **not** in vtio or grfdrv256.
