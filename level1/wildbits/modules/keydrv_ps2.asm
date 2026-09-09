@@ -325,13 +325,18 @@ bye@                clrb                          clear carry
                     rts                           return
 
 
-changewindowl       lda       #SW.Next
+* Named for the KEY, not the direction.  SwitchTerm's SW.Next walks UP
+* the terminal ids (SwFindNext does inca) and SW.Prev walks down, so
+* Alt+Right takes you toward /vt1, /vt2 and Alt+Left back toward /term.
+* These two were the other way round until 2026-09-09; test tables dated
+* before that in docs/wildbits-vtio-rewrite.md read the opposite way.
+changewindowl       lda       #SW.Prev            Alt+Left = previous terminal
                     sta       >gr.SwitchReq
                     andb      #^(LEFTBIT+RIGHTBIT) keep ALTBIT if Alt still down
                     stb       D.KySns
                     comb                          do not treat as input
                     rts
-changewindowr       lda       #SW.Prev
+changewindowr       lda       #SW.Next            Alt+Right = next terminal
                     sta       >gr.SwitchReq
                     andb      #^(LEFTBIT+RIGHTBIT)
                     stb       D.KySns
@@ -422,12 +427,12 @@ DoUpArrowDown       lda       #$0C                load up arrow character
 DoDownArrowDown     lda       #$0A                load down arrow character
                     orb       #DOWNBIT
                     bra       StoreKySnsAndReport
-DoLeftArrowDown     bitb      #ALTBIT             Alt+Left = next term
+DoLeftArrowDown     bitb      #ALTBIT             Alt+Left = previous term
                     lbne      changewindowl
                     lda       #$08                load left arrow character
                     orb       #LEFTBIT
                     bra       StoreKySnsAndReport
-DoRightArrowDown    bitb      #ALTBIT             Alt+Right = prev term
+DoRightArrowDown    bitb      #ALTBIT             Alt+Right = next term
                     lbne      changewindowr
                     lda       #$09                load right arrow character
                     orb       #RIGHTBIT

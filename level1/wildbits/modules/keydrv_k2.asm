@@ -225,7 +225,41 @@ processarrows       bsr       KeyDownTest       check if modifier is KeyUp/Down
                     bcc       puparrows         KeyUp - clear modifier bits
                     pshs      d,x
                     ldb       D.KySns           set KySns keydown modifier bits
-                    leax      ModChrTbl,pcr     get ModChr table
+********************************************************************
+* Alt+Left / Alt+Right switch terminals instead of producing a
+* character, the same as keydrv_ps2's DoLeftArrowDown/DoRightArrowDown.
+* Tested here on the arrow's KEYDOWN and nowhere else: a latched ALTBIT
+* plus any later key used to look like a switch in the PS/2 driver.
+* SwitchTerm's SW.Next walks UP the terminal ids, so Alt+Right takes you
+* toward /vt1, /vt2 and Alt+Left back toward /term.
+*
+* Exits through skipbuffer@ rather than bufferit@ - the K2 equivalent of
+* the PS/2 driver's 'comb' (do not treat as input).  That also means no
+* key repeat is armed, so holding Alt+Left does not repeat the switch,
+* which is what the PS/2 driver does too.
+*
+* ORDERING: rows are scanned 0..8 and the FIFO delivers the whole matrix
+* per event, so a same-scan Alt press is seen AFTER kLEFT (row 0 col 5)
+* and BEFORE kRIGHT (row 8 col 1); RALT is row 6 col 2.  Press Alt first
+* - which is what anyone actually does, and it is then already latched
+* from its own earlier event.  Land both keys inside one 16ms scan and
+* Alt+Left emits its character ($08) instead of switching.
+********************************************************************
+                    bitb      #ALTBIT           Alt held?
+                    beq       noswitch@
+                    cmpa      #kLEFT
+                    beq       switchl@
+                    cmpa      #kRIGHT
+                    bne       noswitch@
+                    lda       #SW.Next          Alt+Right = next terminal
+                    bra       switch@
+switchl@            lda       #SW.Prev          Alt+Left = previous terminal
+switch@             sta       >gr.SwitchReq
+                    andb      #^(LEFTBIT+RIGHTBIT) keep ALTBIT if Alt still down
+                    stb       D.KySns
+                    puls      d,x
+                    lbra      skipbuffer@       do not treat as input
+noswitch@           leax      ModChrTbl,pcr     get ModChr table
                     suba      #$E0              subtract to get index
                     orb       a,x               set KySns value
                     stb       D.KySns           store KySns

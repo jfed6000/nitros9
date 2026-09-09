@@ -1210,6 +1210,88 @@ moved onto `SS.DfPal`.
 Sprite bank 0 (`$C0+$1300`, `TermSaveSprite0`) is still unconfirmed the same
 way; `sprtest2` is the equivalent test for it.
 
+### Alt+arrow on the K2 keyboard, and the direction swap  (2026-09-09)
+
+**The direction changed.**  `SwitchTerm`'s `SW.Next` (`$01`) reaches
+`SwFindNext`, which does `inca` and walks *up* the terminal ids; `SW.Prev`
+(`$FF`) is caught by `bmi` and walks down.  `keydrv_ps2` had Alt+**Left** on
+`SW.Next`, so the left arrow moved toward `/vt1`, `/vt2`.  Now Alt+Right is
+`SW.Next` and Alt+Left is `SW.Prev`.
+
+> **Test tables in this document dated before 2026-09-09 read the opposite
+> way.**  They are left as written — they record what those runs actually did.
+
+Two terminals cannot show this: `+1` and `-1` land on the same place, which is
+why every MAME run up to here was blind to it.  With three:
+
+| from | key | to | evidence |
+|---|---|---|---|
+| `/term` (0) | Alt+Right | `/vt1` (1) | `aaa` in `T1.TXT` |
+| `/vt1` (1) | Alt+Right | `/vt2` (2) | `bbb` on the live screen, `LiveTerm=$02` |
+| `/term` (0) | Alt+Left | `/vt2` (2) | wraps down; `zzz` in `T2.TXT` |
+| `/vt2` (2) | Alt+Left | `/vt1` (1) | `yyy` on the live screen, `LiveTerm=$01` |
+
+**`keydrv_k2` gained the feature.**  The K2 is a matrix scanner, not a scancode
+stream, so it is not a copy of the PS/2 code — but the hook is cleaner.  All
+four arrows plus Space funnel through one routine, `processarrows`, with the
+key code in `A` (`kLEFT $E2`, `kRIGHT $E3`), so the test goes there, after the
+`bcc puparrows` key-down branch and before the `ModChrTbl` bits are set.  The
+ALTBIT it reads needs no new work: `RALT` is `$F2` and `ModTbl` maps
+`suba #$F0` to `CTRLBIT,SHIFTBIT,ALTBIT`, so `processmodifier`/`pupmodifier`
+already maintain it exactly the way the PS/2 driver does.
+
+Three details that make that placement the right one.  Being after
+`KeyDownTest` leaves the key-up path alone, so `puparrows` still clears
+LEFTBIT/RIGHTBIT and still reaches `rstkeyrpt@`.  Exiting through
+`skipbuffer@` rather than `bufferit@` is the K2 equivalent of the PS/2
+driver's `comb` — "do not treat as input" — and it balances, because the
+routine's own `puls d,x` matches its `pshs d,x` and `skipbuffer@`'s `puls a`
+then recovers the shifted eora bits for the rest of the bit loop.  And never
+reaching `BufferChar` means no key repeat is armed, so holding Alt+Left does
+not repeat the switch — which is what the PS/2 driver does too.
+
+Everything inside is an `@` local, deliberately: `ProcessRow`'s `bufferit@`
+(`$00A6`) and `BufferChar`'s (`$01BB`) are two different symbols with the same
+name, and the existing `lbra bufferit@` in `processarrows` resolves backwards
+to the first.  Adding non-local labels in between would be asking for trouble.
+Verified in `keydrv_k2.list` instead of assumed: `lbra skipbuffer@` assembles
+as `16 FF7E` at `$013A`, i.e. `$013D - $82 = $00BB`, which is `skipbuffer@`;
+`sta >gr.SwitchReq` is `B7 114B`, matching `gr.SwitchReq` in the defs listing.
+
+**A K2-only ordering hazard, left in.**  PS/2 scancodes are inherently
+sequential so Alt always precedes the arrow.  The K2 FIFO delivers a whole
+matrix snapshot per event and `ReadFIFOData` walks rows 0..8 in order.  From
+`WBKKeys`: **kLEFT is row 0 col 5, RALT is row 6 col 2, kRIGHT is row 8 col
+1.**  So if Alt and Left go down inside the same 16ms scan, row 0 is processed
+before row 6, ALTBIT is not set yet, and Left is buffered as its character
+(`$08`) instead of switching.  Alt+Right cannot hit this — row 8 comes after
+row 6.  Pressing Alt first, which is what anyone actually does, avoids it
+entirely, because Alt-down is then its own earlier FIFO event.  The fix, if it
+ever matters, is to hoist the modifier rows ahead of the main loop in
+`ReadFIFOData`; not worth the restructure speculatively.
+
+**This cannot be tested in MAME.**  `mame.lst` has one Wildbits machine,
+`wbjr2`, and `wildbits_jr2.cpp` models the Jr2's PS/2 controller with nothing
+at `OKB.Base` (`$FE10`).  So `keydrv_k2` is assemble-and-inspect here and the
+board is the only functional test — which is the argument for keeping the diff
+a mechanical mirror of the PS/2 logic rather than an improvement on it.  What
+was checked: `PLATFORM=k2` builds the whole L2 disk, `Krn` still 4096,
+`.mods/keydrv_k2` 755 → 785, and both drivers assemble clean at Level 1 as
+well (783 / 909).
+
+**Left alone deliberately: `>gr.SwitchReq` is unguarded at Level 1.**
+`gr.SwitchReq`, `SW.Next` and `SW.Prev` sit at `wildbits_vtio.d:309-312`,
+outside every `IFGT Level-1` block, so they resolve at Level 1 — but there is
+no grfdrv and no terminal table there, and `$114B` is ordinary system RAM.
+`keydrv_ps2` has always poked it unconditionally and the L1 recipe builds the
+same driver, so `keydrv_k2` now reproduces that rather than diverging.  If it
+should be `IFGT Level-1`, it belongs in both drivers in one change.
+
+> Unrelated, found while checking: **the L1 recipe does not build at all.**
+> `level1/wildbits/modules/vtio.asm:2226` references `V.MapSav`, which is
+> defined nowhere; it came in with `01013877` and predates this work.  The
+> keydrv modules themselves assemble fine there.
+
 ---
 
 ## SUPERSEDED — see 2026-09-08 above.
