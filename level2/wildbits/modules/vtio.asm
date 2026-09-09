@@ -988,9 +988,14 @@ BTTSkip             puls      cc,d,x,y,pc
 * InitTerm
 * B = terminal id (0-8). Never $FF.
 * First term: V.TermLive=1, no BlankTermText, no PushBuf.
-* Later: V.TermLive=0, PushBuf live Vicky (MCR/font/CLUTs) into
-* the new 16K, then BlankTermText. Without PushBuf, PullBuf restores
-* uninitialized MCR and the display goes black after a one-frame flash.
+* Later: V.TermLive=0, PushBuf into the new 16K, then BlankTermText.
+* PushBuf used to be what seeded the new terminal's display registers,
+* and skipping it left PullBuf programming an uninitialized MCR - the
+* display went black after a one-frame flash. That is no longer its job:
+* InitTermStatic inherits the $FFC0-$FFCF mirror from the live console,
+* and PushBuf no longer reads any Vicky register or Vicky memory back
+* (see TermVRAMSave). What it still captures is the bitmap and tilemap
+* register block, so keep it.
 *******************************************************************
 InitTerm
                     pshs      x,y,u

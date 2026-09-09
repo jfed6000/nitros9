@@ -876,16 +876,48 @@ The two-live-terminal sequence still passes with **Alt+Right as the first
 switch** this time, as does the font-set deferral table above.  `vtio` 4356 →
 4389, `grfdrv256` 1718 → 1703, `Krn` still 4096, re-entry counter still 0.
 
-**If a real board still flashes and blanks**, the registers are exonerated and
-the next suspects are the two other things `PullBuf` writes that can blacken
-text, in the order they land: `T.FLUT` → `$C0+$1700` (a zeroed text palette
-gives black on black) and `T.FONT0` → `$C1+$0000` (a zeroed font gives blank
-glyphs).  Both are captured by reading VRAM back, which cannot be avoided the
-way the registers could — per-terminal palettes and fonts have no other source.
-Comment out one `CpyBlk` at a time in `PullBuf` to bisect.  A useful eyes-only
-test first: from the black screen, press Alt+Right again to cycle back to
-`/term`.  If `/term` reappears, the machine was alive the whole time and the
-registers are now being restored correctly.
+### …and it was Vicky memory too: `TermVRAMSave`
+
+Two more real-hardware rounds settled the rest.
+
+First, a regression of my own: `InitDisplay` programs `$FFC0-$FFCF` with
+`sta ,x+`, which leaves `X` at `$FFD0`, and the four cursor-register writes that
+follow are all `TXT.Base`-relative — so they went to `$FFE0`-`$FFE6`.  Nothing in
+`defs/wildbits.d` even names that range; on a real board it is undocumented I/O
+page and the boot stalled before the shell.  MAME maps only `$FFC0-$FFDF` to
+Vicky and lets the rest fall through to slot-7 RAM past the end of `Krn`, where
+the writes are inert — so MAME booted clean and hardware did not.  Fixed by
+reloading `X` (`52332714`).  A cheap reminder to check what an index register
+holds after a copy loop, and that MAME's memory map is more forgiving than the
+board's.
+
+With that fixed the switch still blacked out, which exonerated the registers and
+left the other thing `PushBuf` reads back: **Vicky memory**.  `PushBuf` captured
+the text palette (`$C0+$1700`), the sprite records (`$C0+$1300`), font 0
+(`$C1+$0000`) and the four graphics CLUTs (`$C1+$1000`), and `PullBuf` programmed
+them.  On an FPGA, palette and font RAM is commonly written by the CPU and read
+only by video scanout, with no CPU read port — so the capture is garbage and
+`PullBuf` installs it.  A zeroed text palette is black on black; a zeroed font is
+blank glyphs.  MAME models all of it as plain RAM.
+
+The reported behaviour matches exactly, including the part that looks like a
+hang: switching *back* restores the other terminal's equally-garbage capture, so
+Alt-arrow never recovers and the machine stays blind — alive but with nothing on
+screen.  `proc` on the real board confirmed it, showing the second terminal's
+shell sleeping normally in `Read`.
+
+`TermVRAMSave` (`defs/wildbits_vtio.d`) now gates all four copies in both
+routines, default **0**: a switch carries the character and colour planes and the
+`$FFC0-$FFCF` mirror, and nothing else.  The palette, font, sprites and CLUTs
+stay global.  `grfdrv256` 1703 → 1599, and 6.8K of copying leaves every switch.
+
+The cost is real: `1B 60`/`1B 61` per-terminal palettes and a per-terminal font
+set no longer survive a switch.  Setting `TermVRAMSave` to 1 restores the old
+behaviour but also the bug.  The right way to get the feature back is the same
+write-only mirror discipline the display registers now have — vtio owns the
+value, writes it to both the buffer and the hardware, and never reads Vicky
+back.  `GFPal` already writes the buffer copy for a shadow terminal, so that
+half exists.
 
 ---
 

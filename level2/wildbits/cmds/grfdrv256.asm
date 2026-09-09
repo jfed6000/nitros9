@@ -450,6 +450,9 @@ PushBuf             lbsr      SetBlkC2C3
                     ldd       #4800
                     lbsr      CpyBlk
                     lbsr      SetBlkC0C1
+* These four READ Vicky memory back.  See TermVRAMSave in
+* defs/wildbits_vtio.d for why that is off by default.
+                    ifne      TermVRAMSave
                     ldy       #$6000+T.FLUT text FG/BG LUTs on $C1
                     ldu       #$2000+TEXT_LUT_FG  text LUTs live on $C0 at $2000
                     ldd       #128
@@ -473,6 +476,7 @@ PushBuf             lbsr      SetBlkC2C3
                     ldu       #$5000
                     ldd       #$1000
                     lbsr      CpyBlk
+                    endc
 * The 16 main display registers ($FFC0-$FFCF) are NOT read back here any
 * more.  V.V_MCR / V.V_LayerCTL / V.BordBack are seeded by vtio's
 * InitDisplay, inherited by InitTermStatic and updated by every writer
@@ -541,6 +545,12 @@ PullBuf             lbsr      SetBlkC2C3
                     ldd       #4800
                     lbsr      CpyBlk
                     lbsr      SetBlkC0C1
+* The counterparts of PushBuf's four read-back copies; with
+* TermVRAMSave 0 the palette, sprites, font and CLUTs are global and are
+* simply left alone across a switch.  This is the block that blacked the
+* screen on real hardware - it programmed whatever PushBuf managed to
+* read out of write-only Vicky memory.
+                    ifne      TermVRAMSave
                     ldu       #$6000+T.FLUT restore text FG/BG LUTs
                     ldy       #$2000+TEXT_LUT_FG  text LUTs live on $C0 at $2000
                     ldd       #128
@@ -557,6 +567,7 @@ PullBuf             lbsr      SetBlkC2C3
                     ldy       #$5000          not $2800 - see PushBuf
                     ldd       #$1000
                     lbsr      CpyBlk
+                    endc
 * restore display registers
                     ldu       >gr.U5
                     leau      V.V_MCR,u  copy VICKY_MCR Regs, Layer, Backgroun

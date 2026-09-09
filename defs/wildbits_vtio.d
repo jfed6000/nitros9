@@ -432,7 +432,33 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 
 *******************************************************************
 * 16K termainal storage for switching screens = excactly 16384
+*
+* TermVRAMSave - does a terminal switch also carry the text palette,
+* sprite records, font 0 and the four graphics CLUTs (T.FLUT..T.CLUT3),
+* or only the character and colour planes?
+*
+*   0 = text/colour planes only (default).  The palette, font, sprites
+*       and CLUTs stay global, shared by every terminal.
+*   1 = per-terminal, the original behaviour.
+*
+* It is 0 because saving them requires READING them back out of Vicky,
+* and on real hardware that does not work: FPGA palette and font memory
+* is commonly written by the CPU and read only by video scanout, with no
+* CPU read port.  PushBuf then captures garbage and PullBuf programs it,
+* which blacks the screen on the first Alt-arrow switch - and blacks it
+* in BOTH directions, since coming back restores the other terminal's
+* equally-garbage capture.  MAME models these as plain RAM, so it never
+* showed it.  Dropping the four copies also takes 6.8K of copying out of
+* every switch.
+*
+* The cost is that 1B 60 / 1B 61 (per-terminal text palette) and a
+* per-terminal font set no longer survive a switch.  Restoring that
+* feature means giving those regions the same write-only mirror
+* discipline the $FFC0-$FFCF registers now have - vtio owns the value,
+* writes it to both the buffer and the hardware, and never reads Vicky
+* back - not turning this switch on.
 *******************************************************************
+TermVRAMSave        equ       0
                     org       0
 T.TXT               rmb       4800      ; 80x60 text screen
 T.TXTCOLOR          rmb       4800      ; 80x60 color matrix
