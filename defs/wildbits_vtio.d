@@ -397,29 +397,36 @@ GF.Term             equ       1         ; Terminate
 GF.GSMouse          equ       2         ; GetStat mouse
 GF.GSDScrn          equ       3         ; GetStat display screen
 GF.GSFntChar        equ       4         ; GetStat font char
-GF.SSFntLoadF       equ       5         ; SetStat load font
-GF.SSFntChar        equ       6         ; SetStat font char
-GF.SSDScrn          equ       7         ; SetStat display screen
-GF.PushBuf          equ       8         ; Push Vicky state to term buffer
-GF.PullBuf          equ       9         ; Pull term buffer to Vicky
-GF.EraseLine	    equ	      10
-GF.ErEOLine	    equ	      11
-GF.ErEOScrn         equ       12        ; Erase End of Screen
-GF.PSGInit	    equ	      13
-GF.PSGBell	    equ	      14
-GF.PSGOff	    equ	      15
-GF.Cell             equ       16        ; one cell: b2 glyph, b3 colour, d1 offset
-GF.ClrScrn          equ       17        ; clear whole screen (dims read from DSS)
-GF.Blank            equ       18        ; blank the 16K term buffer
-* 19 was GF.InitDisp - gamma ramp, font + text-LUT install, $C2/$C3 fill.
+* 5 was GF.SSFntLoadF - load a font from a file inside grfdrv.  Deleted: it
+* was never reachable (vtio's SSFntLoadF does the whole job itself and never
+* dispatched here), and the body was already dead-ended by a 'bra errorclose@'
+* placed before its I$Open.  grfdrv cannot do file I/O anyway - it is entered
+* through a register-bank flip onto one shared D.CCStk with gr.Stack holding a
+* single caller's S, and nothing gates the foreground path, so a blocking read
+* would let a second entrant overwrite the sleeper rather than serialise.
+* Ops above it renumbered down one.
+GF.SSFntChar        equ       5         ; SetStat font char
+GF.SSDScrn          equ       6         ; SetStat display screen
+GF.PushBuf          equ       7         ; Push Vicky state to term buffer
+GF.PullBuf          equ       8         ; Pull term buffer to Vicky
+GF.EraseLine	    equ	      9
+GF.ErEOLine	    equ	      10
+GF.ErEOScrn         equ       11        ; Erase End of Screen
+GF.PSGInit	    equ	      12
+GF.PSGBell	    equ	      13
+GF.PSGOff	    equ	      14
+GF.Cell             equ       15        ; one cell: b2 glyph, b3 colour, d1 offset
+GF.ClrScrn          equ       16        ; clear whole screen (dims read from DSS)
+GF.Blank            equ       17        ; blank the 16K term buffer
+* 18 was GF.InitDisp - gamma ramp, font + text-LUT install, $C2/$C3 fill.
 * Deleted: the FPGA (and MAME's device_reset) preload the font and the text
 * palettes, vtio never sets Mstr_Ctrl_GAMMA_En so the gamma LUT is unused,
 * and the $C2/$C3 fill is GF.ClrScrn's job.  Its vtio caller InitDisplayMem
 * was already gone.  Ops above it renumbered down one.
-GF.Pal              equ       19        ; one text-LUT entry (1B 60 / 1B 61)
-GF.BmEnable         equ       20        ; bitmap: enable + phys addr
-GF.BmFree           equ       21        ; bitmap: zero the four registers
-GF.BmPalet          equ       22        ; bitmap: assign CLUT
+GF.Pal              equ       18        ; one text-LUT entry (1B 60 / 1B 61)
+GF.BmEnable         equ       19        ; bitmap: enable + phys addr
+GF.BmFree           equ       20        ; bitmap: zero the four registers
+GF.BmPalet          equ       21        ; bitmap: assign CLUT
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 

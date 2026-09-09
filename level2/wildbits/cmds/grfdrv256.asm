@@ -215,24 +215,23 @@ FuncTbl
                     fdb       GrfMod+GSMouse      ; B=2
                     fdb       GrfMod+GSDScrn      ; B=3
                     fdb       GrfMod+GSFntChar    ; B=4
-                    fdb       GrfMod+SSFntLoadF   ; B=5
-                    fdb       GrfMod+SSFntChar    ; B=6
-                    fdb       GrfMod+SSDScrn      ; B=7
-                    fdb       GrfMod+PushBuf      ; B=8
-                    fdb       GrfMod+PullBuf      ; B=9
-		    fdb	      GrfMod+EraseLine	  ; b=10
-		    fdb	      GrfMod+ErEOLine	  ; b=11
-		    fdb	      GrfMod+ErEOScrn	  ; b=12
-		    fdb	      GrfMod+PSGInit	  ; b=13
-		    fdb	      GrfMod+PSGBell      ; b=14
-		    fdb	      GrfMod+PSGOff	  ; b=15
-		    fdb	      GrfMod+GFCell	  ; b=16
-		    fdb	      GrfMod+GFClrScrn	  ; b=17
-		    fdb	      GrfMod+GFBlank	  ; b=18
-		    fdb	      GrfMod+GFPal	  ; b=19
-		    fdb	      GrfMod+GFBmEnable	  ; b=20
-		    fdb	      GrfMod+GFBmFree	  ; b=21
-		    fdb	      GrfMod+GFBmPalet	  ; b=22
+                    fdb       GrfMod+SSFntChar    ; B=5
+                    fdb       GrfMod+SSDScrn      ; B=6
+                    fdb       GrfMod+PushBuf      ; B=7
+                    fdb       GrfMod+PullBuf      ; B=8
+		    fdb	      GrfMod+EraseLine	  ; b=9
+		    fdb	      GrfMod+ErEOLine	  ; b=10
+		    fdb	      GrfMod+ErEOScrn	  ; b=11
+		    fdb	      GrfMod+PSGInit	  ; b=12
+		    fdb	      GrfMod+PSGBell      ; b=13
+		    fdb	      GrfMod+PSGOff	  ; b=14
+		    fdb	      GrfMod+GFCell	  ; b=15
+		    fdb	      GrfMod+GFClrScrn	  ; b=16
+		    fdb	      GrfMod+GFBlank	  ; b=17
+		    fdb	      GrfMod+GFPal	  ; b=18
+		    fdb	      GrfMod+GFBmEnable	  ; b=19
+		    fdb	      GrfMod+GFBmFree	  ; b=20
+		    fdb	      GrfMod+GFBmPalet	  ; b=21
 
 
 *******************************************************************
@@ -388,109 +387,6 @@ end@                puls      u         pull blk addr and getset flag
                     puls      cc
                     puls      a
 debugend@           jmp       >GrfMod+SysRet
-
-;;; SS.FntLoadF
-;;;
-;;; Load a font from a file.  File should be full path.
-;;; Don't load module into memory, just read directly from file.
-;;;
-;;; Entry: R$X = pointer to font name
-;;;        R$Y = font set 0 or 1
-;;;
-;;; Exit:  B = non-zero error code
-;;;       CC = carry flag clear to indicate success
-
-SSFntLoadF
-*                    lbra      quit@
-                    ldx       >gr.PDRGS
-                    ldy       R$Y,x
-                    beq       font0@
-font1@              ldy       #$800     FONT_1_OFFSET   $0800
-                    bra       storeaddr@
-font0@              ldy       #FONT_0_OFFSET $0000
-storeaddr@          pshs      y         store font offset on stack [O]
-                    leas      -2,s      reserve 2 bytes on stack for mapped addr [MO]
-* s= ADDR|OFFSET|
-*                   ****      map block into user dat and store address on stack
-                    pshs      x,cc      preserve x,u
-                    orcc      #IntMasks
-		    lda	      #EDIT_LUT_1+ACT_LUT_1
-		    sta	      MMU_MEM_CTRL
-                    ldx       #FONT_BLK map in $C1
-                    stx       MMU_SLOT_1
-                    puls      x,cc      restore x,u [MO]
-                    bra       errorclose@
-                    ldb       <D.Proc
-                    pshs      b
-                    clr       <D.Proc
-                    inc       <D.Proc
-*                   ****      open file to read
-endcopy@            ldx       R$X,x     pointer to file name in caller memory
-                    lda       #READ.    READ access mode
-                    os9       I$Open
-                    puls      b
-                    stb       <D.Proc
-                    bcc       modulecheck@
-                    bra       error@
-* Verify that file is module.
-* Load file's first two bytes onto the stack to verify and check for $87DC
-modulecheck@        leas      -2,s      add space to stack to store 2 bytes [DMO]
-                    leax      ,s        load x with stack address
-                    lbsr      Rd2B2Mem
-                    puls      x         load x with the data [MO]
-                    cmpx      #$87CD    check if module
-                    bcc       getstart@ if module, get start of data
-                    ldb       #3
-                    bra       errorclose@ else, error
-* Module header byte $09-0A = Execution Offset.
-* This is the start of the data in a data module
-getstart@           pshs      u         seek to data start address in file [UMO]
-                    ldx       #$00      set high byte addr
-                    ldu       #$09      set low byte
-                    os9       I$Seek
-                    bcc       readaddr@ if success, read font
-                    puls      u         else error  [MO]
-                    ldb       #4
-                    bra       errorclose@
-* s= u|addr|offset
-readaddr@           leas      -2,s      add 2 bytes stack storage [DUMO]
-                    leax      ,s        use the 2 bytes in stack to store addr
-                    lbsr      Rd2B2Mem  read 2 bytes from file
-                    bcc       seekaddr@ if success, seek to data address
-                    leas      2,s       else: clean stack and error [MO]
-                    bra       errorclose@
-* s= addr|u|addr|offset
-seekaddr@           puls      u         load u with low byte addr [UMO]
-* s= u|addr|offset
-                    ldx       #0        load x high byte
-                    os9       I$Seek
-*                    puls      u         restore u [MO]
-* s=addr|offset
-*                   ldx       ,s                   ldx with mapblock address
-                    pshs      a         store path# on stack [AMO]
-                    ldd       1,s       put offset in d
-                    addd      #$2000
-                    tfr       d,x
-*                   leax      d,x                  add offset to x
-                    puls      a         restore path# [MO]
-                    ldb       <D.Proc
-                    pshs      b
-                    ldb       #1
-                    stb       <D.Proc
-                    ldy       #$800     read 2K of font data into it
-                    os9       I$Read    a=path x=addr y=#bytes
-                    puls      b
-                    stb       <D.Proc
-errorclose@         pshs      b         [BMO]
-                    os9       I$Close   close the file
-                    puls      b         [MO]
-error@              leas      4,s       clear stack
-                    tstb
-                    beq       quit@
-                    coma
-quit@               jmp       >GrfMod+SysRet
-
-
 
 ;;;  GS.DScrn
 ;;;  Get Display Screen Settings
@@ -1029,37 +925,6 @@ SysRet
 *******************************************************************
 
 * Add your F256-specific helper routines here
-
-;;; Rd2B2Mem
-;;; Read 2 bytes to addr
-;;;
-;;; Entry:  A = path #
-;;;         X = memory address to read to
-;;;
-;;; Exit:   B = a non-zero error code (F$MapBlk)
-;;;        CC = carry flag clear=success set=error
-;;;
-;;; I$Read reads data into the current process in D.Proc
-;;; To use I$Read for the system, assign system to D.Proc
-;;; Call I$Read, then change the processes back
-;;; Make sure to mask interrupts so processes don't switch while
-;;; the change is happening
-;;;
-Rd2B2Mem            pshs      cc        push cc and mask interrupts
-                    orcc      #IntMasks
-                    ldb       <D.Proc   ldy with current process descriptor
-                    pshs      b         store current proc descriptor on stack
-                    ldb       #1        copy system proc descriptor to current
-                    stb       <D.Proc
-                    ldy       #$02      read 2 bytes from file
-                    os9       I$Read
-                    puls      b         pull current proc descriptor from stack
-                    sty       <D.Proc   and save it back
-                    bcs       errnomap@ if I$Read error, then handle error
-                    puls      cc,pc     if no error, pull cc and return
-errnomap@           puls      cc        if error, pull cc
-                    coma                set carry bit
-                    rts                 and return
 
 ;;; y=DAT Image Address
 ;;; x=logical address in process
