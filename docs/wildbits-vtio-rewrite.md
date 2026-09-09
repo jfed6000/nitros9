@@ -765,12 +765,10 @@ are byte-identical across a switch out and back.
   `$FFC0-$FFCF` (= `V.V_MCR` + `V.V_LayerCTL` + `V.BordBack`, exactly 16 bytes);
   the cursor registers start at `$FFD0`, so enable / character / flash rate are
   global.  `SwitchTerm` sets X/Y explicitly, which is what matters.
-- **`ChgFont0`/`ChgFont1` poke the live MCR unconditionally**, without the
-  `V.TermLive` guard `SetWin` and `CurOff`/`CurOn` have — so `1B 62`/`1B 63`
-  from a shadow terminal changes the *live* font set, and the next `PushBuf`
-  saves it into the wrong terminal's `V.V_MCR`.  Exactly the failure `SetWin`'s
-  comment describes.  `CurChar` and the cursor flash-rate setter are the same
-  shape.  Nothing in the tests issues those codes.
+- The cursor flash-rate setter `CurRate` (`05 23`) still pokes
+  `VKY_TXT_CURSOR_CTRL_REG` without the `V.TermLive` guard its neighbours
+  `CurOff`/`CurOn`/`CurChar` have, so `05 23` from a shadow terminal changes the
+  live cursor's flash rate.  Same two-line fix as `CurChar`.
 - `InitTermStatic` does not inherit `V.CapsLck`, so caps-lock state is per
   terminal while the keyboard LED is global.
 - `InitTerm`'s `cmpx #DAT.BlMx+1 / bhs AlHramD / tfr x,d` around `F$AlHRAM` is
@@ -782,6 +780,45 @@ are byte-identical across a switch out and back.
   masked on the shadow path too: `PutGlyph`'s scroll block reaches `clrline` →
   `EraseLine`, and `EraseLineCore`'s `EraseLineShadow` leg fills both planes.
 
+
+### Font set and cursor character made per-terminal  (2026-09-08, same day)
+
+The gap above, closed for the three codes that had it.  Both fixes are in
+`vtio.asm`; verified in MAME against the live `$FFC0`/`$FFD0` registers, which
+`device_stop()` now prints as `HW MCR` and `HW CURSOR ... char=`.
+
+**`ChgFont0`/`ChgFont1` (`1B 62` / `1B 63`) now defer rather than drop.**  The
+font set is `FT_FSET` (`$20`) in `MASTER_CTRL_REG_H`, and `V.V_MCR` mirrors
+`$FFC0-$FFC1`, so `PushBuf`/`PullBuf` already carry it per terminal — it just
+was not being used.  Both entries now share a `ChgFont` tail with exactly
+`SetWin`'s split: live writes the register *and* the mirror, shadow writes only
+the mirror.  `tst V.TermLive,u` rather than `lda` so `A` survives for the escape
+dispatcher.  Measured, with `/term` at `80x30` (`MCR_H = $04`):
+
+| | live `MCR_H` | `/term` `V.V_MCR` | `/vt1` `V.V_MCR` |
+|---|---|---|---|
+| `display 1B 63` on live `/term` | `$24` | `$0024` | — |
+| `display 1B 63 >/vt1` (shadow) | `$04` unchanged | `$0004` unchanged | `$0124` |
+| …then Alt-Left to `/vt1` | `$24` | `$0104` | `$0124` |
+| …then Alt-Right back | `$04` | `$0104` | `$0124` |
+
+Before the fix the second row wrote `$24` to the live register and left `/vt1`'s
+mirror alone — the font changed under whatever was on screen, and the next
+`PushBuf` made it stick on the wrong terminal.
+
+**`CurChar` (`05 22`) can only be guarded, not deferred.**  `PushBuf`/`PullBuf`
+carry `$FFC0-$FFCF` (`V.V_MCR` + `V.V_LayerCTL` + `V.BordBack`) and the cursor
+registers start at `$FFD0`, so there is no per-terminal mirror to stage it in.
+It now returns early for a shadow terminal, the same shape as `CurOff`/`CurOn`:
+`display 05 22 2A` on the live terminal still sets the hardware cursor character
+to `$2A`, and `display 05 22 2A >/vt1` leaves it at the default `$5F` instead of
+hijacking the live cursor.  Giving the cursor registers a per-terminal mirror
+would mean 8 more bytes between `V.BordBack` and `V.BM0Cl_En` and widening both
+copies to 24 bytes, which moves every `V.*` offset after it (including the ones
+the MAME dump reads).  Not done.
+
+`Krn` still 4096, `vtio` 4331 → 4356, and the two-live-terminal sequence is
+unchanged with the re-entry counter still 0.
 
 ---
 

@@ -1651,10 +1651,19 @@ CurOnX              rts
 ************************************************************************
 *** 05 22 - Set Cursor Character - 05 22 CHR
 ***
-CurChar             ldx       #TXT.Base
+* Guarded like CurOff/CurOn: a shadow terminal must not reach the live
+* cursor registers, or it changes the cursor of whatever is actually on
+* screen.  Unlike ChgFont0/1 below this can only DROP the request, not
+* defer it: PushBuf/PullBuf carry $FFC0-$FFCF (V.V_MCR + V.V_LayerCTL +
+* V.BordBack), and the cursor registers start at $FFD0, so there is no
+* per-terminal mirror to stage it in.  Cursor character, colour, enable
+* and flash rate are therefore global - see the doc's gap list.
+CurChar             tst       V.TermLive,u
+                    beq       CurCharX
+                    ldx       #TXT.Base
 		    lda       V.EscParms,u
                     sta       VKY_TXT_CURSOR_CHAR_REG,x
-                    rts
+CurCharX            rts
 		    
 ************************************************************************
 *** 05 23 - Set Cursor Flash Rate
@@ -1947,20 +1956,37 @@ ChgPal              pshs      d,x
 ************************************************************************
 *** 1B 62 - Select Font Set 0
 ***
-ChgFont0            ldx       #TXT.Base
-                    ldb       MASTER_CTRL_REG_H,x
-                    andb      #~(FT_FSET)
-                    stb       MASTER_CTRL_REG_H,X
-                    rts
-		    
+ChgFont0            clrb                          FT_FSET clear = font set 0
+                    bra       ChgFont
 ************************************************************************
 *** 1B 63 - Select Font Set 1
 ***
-ChgFont1            ldx       #TXT.Base
+ChgFont1            ldb       #FT_FSET            FT_FSET set = font set 1
+* The font set is a bit in MASTER_CTRL_REG_H, which belongs to THIS
+* terminal, not to the hardware: V.V_MCR mirrors $FFC0-$FFC1 and PullBuf
+* writes it back on a switch.  Both entries used to poke the live
+* register unconditionally, so 1B 62 / 1B 63 from a shadow terminal
+* changed the font under whatever was actually on screen - and the next
+* PushBuf then captured it into that other terminal's V.V_MCR, making it
+* stick.  That is exactly the failure SetWin's comment describes, so use
+* SetWin's split: live updates the register and the mirror, shadow
+* updates only the mirror, and the change lands when the terminal is
+* switched in.  tst (not lda) so A survives for the escape dispatcher.
+ChgFont             pshs      b                   requested font-set bit
+                    ldx       #TXT.Base
+                    tst       V.TermLive,u
+                    beq       ChgFontSt
                     ldb       MASTER_CTRL_REG_H,x
-                    orb       #FT_FSET
-                    stb       MASTER_CTRL_REG_H,X
-                    rts
+                    andb      #~(FT_FSET)
+                    orb       ,s
+                    stb       MASTER_CTRL_REG_H,x
+                    stb       V.V_MCR+1,u
+                    puls      b,pc
+ChgFontSt           ldb       V.V_MCR+1,u
+                    andb      #~(FT_FSET)
+                    orb       ,s
+                    stb       V.V_MCR+1,u
+                    puls      b,pc
 
 **********************************************************************
 * 1F - Misc Font and Line Controls
