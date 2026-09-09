@@ -933,12 +933,22 @@ Revision E.  Whatever is switched off stays global, shared by every terminal.
   back.  `PushBuf` captured a dead palette and `PullBuf` programmed it — black
   on black, in both directions, which is exactly why Alt-arrow never recovered.
   128 bytes at `$C0+$1700`, and it cost the whole investigation.  **Left off.**
-- `TermSaveSprite0`, `TermSaveCLUT` — on together for the next round.
+- **`TermSaveSprite0` and `TermSaveCLUT` — work.**  Tested together; the
+  console switches cleanly with both on.
 
-> **Reading a "pass" on the last two carefully.**  Sprite records only matter
-> with sprites enabled and the graphics CLUTs only in bitmap/tile mode, so a
-> clean text-mode switch shows they do not *break* anything — not that they read
-> back correctly.  Confirming those needs a graphics test, not a console one.
+**Final state: everything but the text LUT is carried per terminal.**
+Multiterminal is working on real hardware — three terminals, independent fonts
+and colours, Alt-arrow switching in both directions.
+
+> **Reading the last two carefully.**  Sprite records only matter with sprites
+> enabled and the graphics CLUTs only in bitmap/tile mode, so a clean text-mode
+> switch shows they do not *break* anything — not that they read back
+> correctly.  Confirming those needs a graphics test, not a console one.
+
+> **The FPGA is being fixed.**  A future release will support reading the text
+> LUT, at which point `TermSaveTextLUT` 1 works — but only on that bitstream and
+> later.  The mirror approach below works on every version, so prefer it unless
+> you control which bitstream the board runs.
 
 ### Getting per-terminal palettes back without the read-back
 

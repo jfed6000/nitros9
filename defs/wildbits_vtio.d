@@ -472,20 +472,32 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 * T.BLUT for a new terminal.  That, not TermSaveTextLUT, is how 1B 60 /
 * 1B 61 per-terminal palettes come back.
 *******************************************************************
-* Bisected on real hardware:
-*   Font0    WORKS   - font memory bank 0 reads back; three terminals with
+* Bisected on real hardware, one region per build.  Settled:
+*
+*   Font0    WORKS   - font memory bank 0 reads back.  Three terminals with
 *                      independent fonts and colours switch cleanly.
-*   TextLUT  BROKEN  - the text LUT does NOT read back.  This is the one that
-*                      blacked the screen: PushBuf captured a dead palette and
-*                      PullBuf programmed it, black on black, in both
-*                      directions.  Leave it OFF.  Getting per-terminal
-*                      palettes back does not need it - see the note below.
-*   Sprite0  under test
-*   CLUT     under test
-TermSaveFont0       equ       1         font bank 0    - CONFIRMED works
-TermSaveTextLUT     equ       0         text LUT fg/bg - CONFIRMED BROKEN, do not enable
-TermSaveSprite0     equ       1         sprite bank 0  - under test
-TermSaveCLUT        equ       1         graphics LUT0-3 - under test
+*   TextLUT  BROKEN  - the text LUT does NOT read back on the current FPGA.
+*                      This is the one that blacked the screen: PushBuf
+*                      captured a dead palette and PullBuf programmed it,
+*                      black on black, in BOTH directions - which is why
+*                      Alt-arrow could never recover.  128 bytes, and it cost
+*                      the whole investigation.
+*   Sprite0  WORKS   - no breakage in text mode (see the caveat below).
+*   CLUT     WORKS   - likewise.
+*
+* CAVEAT on the last two: sprite records only matter with sprites enabled and
+* the graphics CLUTs only in bitmap/tile mode, so a clean console switch shows
+* they do not BREAK anything, not that they read back correctly.  Confirming
+* those needs a graphics test rather than a console one.
+*
+* TermSaveTextLUT: a future FPGA release will support reading the text LUT, at
+* which point setting this to 1 works - but only on that FPGA and later.  The
+* mirror approach described below works on every version, so prefer it unless
+* you control which bitstream the board is running.
+TermSaveFont0       equ       1         font bank 0     - CONFIRMED works
+TermSaveTextLUT     equ       0         text LUT fg/bg  - BROKEN before the FPGA fix
+TermSaveSprite0     equ       1         sprite bank 0   - CONFIRMED, text mode
+TermSaveCLUT        equ       1         graphics LUT0-3 - CONFIRMED, text mode
                     org       0
 T.TXT               rmb       4800      ; 80x60 text screen
 T.TXTCOLOR          rmb       4800      ; 80x60 color matrix
