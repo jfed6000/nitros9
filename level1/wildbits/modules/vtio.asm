@@ -454,7 +454,7 @@ ex@                 ldd       #0                  set D to 0
 *
 Init                stu       D.KbdSta
                     leax      DefaultHandler,pcr  get the default character processing routine
-                    stx       V.EscVect,u         store it in the vector
+                    stx       V.EscHandler,u         store it in the vector
                     ldb       #$10                assume this foreground/background
                     stb       V.FBCol,u           store it in our foreground/background color variable
                     clra                          set D..
@@ -578,7 +578,7 @@ ex@                 rts                           return
 *    B  = error code
 *
 Write
-                    ldx       V.EscVect,u         get the escape vector address
+                    ldx       V.EscHandler,u         get the escape vector address
                     jsr       ,x                  branch to it
                     pshs      d                   save D since we modify it here
                     lda       V.CurCol,u          get the current row in A
@@ -851,7 +851,7 @@ ex@                 rts                           return
 ;;; LCX is the desired column position + 32.
 ;;; LCY is the desired row position + 32.
 CurXY               leax      CurXYChar1,pcr
-c@                  stx       V.EscVect,u
+c@                  stx       V.EscHandler,u
                     rts
 CurXYChar1          suba      #$20
                     cmpa      V.WWidth,u
@@ -870,7 +870,7 @@ s2@                 sta       V.CurRow,u
                     lbra      ResetHandler
 
 CurOnOff            leax      Do05XX,pcr
-c@                  stx       V.EscVect,u
+c@                  stx       V.EscHandler,u
                     rts
 Do05XX              cmpa      #$20
                     beq       hide@
@@ -966,7 +966,7 @@ Retrn               clr       V.CurCol,u          clear the current column
 
 * We don't do anything with $1F codes currently.
 OneEffHandler       leax      OneEffHandler2,pcr  point to the 1F handler to the 2nd character
-                    stx       V.EscVect,u         store it in the vector
+                    stx       V.EscHandler,u         store it in the vector
                     rts                           return
 
 * 1F 20 Turns on reverse video
@@ -1011,7 +1011,7 @@ DoReverse
                     bra       ResetHandler
 
 EscHandler          leax      Do1B,pcr            point to the handler to the 2nd character
-SetHandler          stx       V.EscVect,u         store it in the vector
+SetHandler          stx       V.EscHandler,u         store it in the vector
                     rts                           return
 
 * Window mode handler

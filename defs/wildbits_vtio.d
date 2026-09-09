@@ -231,7 +231,9 @@ V.LY                RMB       1         line coordinate for Y
 V.GCADDR            RMB       3         address of cursor on screen
 V.GCAD8K            RMB       2         address in 8K window
 V.GMAPBLK           RMB       2         mapped in logical address of block
-
+		  ELSE
+* L1 vtio needs this		  
+V.MapSav            RMB       1                   saved MMU map-window slot value (vtio: no stack use inside a mapped window)		  
                   ENDC
 
 V.InBuf             RMB       KBufSz    the input buffer

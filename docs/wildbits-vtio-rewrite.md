@@ -1287,10 +1287,21 @@ no grfdrv and no terminal table there, and `$114B` is ordinary system RAM.
 same driver, so `keydrv_k2` now reproduces that rather than diverging.  If it
 should be `IFGT Level-1`, it belongs in both drivers in one change.
 
-> Unrelated, found while checking: **the L1 recipe does not build at all.**
-> `level1/wildbits/modules/vtio.asm:2226` references `V.MapSav`, which is
-> defined nowhere; it came in with `01013877` and predates this work.  The
-> keydrv modules themselves assemble fine there.
+> Unrelated, found while checking: the L1 recipe did not build at all.
+> **Fixed the same day.**  `level1/wildbits/modules/vtio.asm` had drifted two
+> symbols out of sync with `defs/wildbits_vtio.d`: `V.MapSav`, which the L2
+> statics do not need and which is now declared in an `ELSE` leg of the
+> `IFGT Level-1` block so it exists only at Level 1; and `V.EscVect`, the
+> pre-rewrite name for what is now `V.EscHandler` — same 2-byte field, same
+> `stx`/`ldx` use, renamed at its six sites in the L1 driver rather than
+> aliased in the shared defs, so one field keeps one name.
+>
+> All four targets build again — `l1`/`l2` × `jr2`/`k2` — and the L1 `jr2`
+> disk boots in MAME to an `OS9:` prompt.  L2 is provably untouched by the
+> defs change: `vtio` stays 4474 and `Krn` 4096, which is what the `ELSE`
+> placement buys.  **Anything added to that block in future must go in the
+> `ELSE` leg for the same reason** — a byte on the L2 side shifts every `V.*`
+> offset after it, including the ones `wildbits_jr2.cpp`'s dump reads.
 
 ---
 
