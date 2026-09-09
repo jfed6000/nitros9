@@ -929,8 +929,37 @@ Revision E.  Whatever is switched off stays global, shared by every terminal.
   three terminals with independent fonts *and* colours switch between each other
   cleanly.  So the black screen is not the font, and per-terminal font sets are
   a real feature now.
-- `TermSaveTextLUT` — under test next.
-- `TermSaveSprite0`, `TermSaveCLUT` — still off.
+- **`TermSaveTextLUT` — this was the culprit.**  The text LUT does not read
+  back.  `PushBuf` captured a dead palette and `PullBuf` programmed it — black
+  on black, in both directions, which is exactly why Alt-arrow never recovered.
+  128 bytes at `$C0+$1700`, and it cost the whole investigation.  **Left off.**
+- `TermSaveSprite0`, `TermSaveCLUT` — on together for the next round.
+
+> **Reading a "pass" on the last two carefully.**  Sprite records only matter
+> with sprites enabled and the graphics CLUTs only in bitmap/tile mode, so a
+> clean text-mode switch shows they do not *break* anything — not that they read
+> back correctly.  Confirming those needs a graphics test, not a console one.
+
+### Getting per-terminal palettes back without the read-back
+
+`TermSaveTextLUT` is not the way, but the feature is still reachable, because
+**only the capture is broken — writing the LUT works fine.**  So the same
+asymmetry the display registers now use applies: `PushBuf` skips the region,
+`PullBuf` still programs it, and the buffer copy becomes a write-only mirror
+that vtio maintains.
+
+For the text LUT most of that already exists: `GFPal` writes `T.FLUT`/`T.BLUT`
+directly for a shadow terminal (that is what `SetWDest`'s `WD.Buf` leg is).
+Two pieces are missing:
+
+1. `GFPal` writes the hardware *or* the buffer, never both, so a live
+   terminal's `1B 60`/`1B 61` never reaches its own buffer copy and is lost at
+   the next switch-out.  It needs to write both.
+2. `T.FLUT`/`T.BLUT` need seeding for a new terminal — from the live console's
+   buffer copy, the way `InitTermStatic` seeds the `$FFC0-$FFCF` mirror.
+
+Then `PullBuf` can restore the palette from the buffer with `PushBuf` never
+reading Vicky, and `1B 60`/`1B 61` become per-terminal for real.
 
 Three live terminals also supersedes the prior tree's *"One extra VT is enough.
 Do not restore two shell i=/vtN& + proc."*  Two and three both work, on hardware

@@ -459,18 +459,33 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 * 6784 bytes per routine, 13568 per switch, against 9600/19200 for the
 * two planes that are always carried.
 *
-* Whatever stays off is global, shared by every terminal - so 1B 60 /
-* 1B 61 per-terminal palettes need TermSaveTextLUT, and a per-terminal
-* font set needs TermSaveFont0.  If a region turns out not to read back,
-* the way to get its feature anyway is the write-only mirror discipline
-* the $FFC0-$FFCF registers now have: vtio owns the value, writes it to
-* both the buffer and the hardware, and never reads Vicky.  GFPal
-* already does the buffer half for the text LUT.
+* Whatever stays off is global, shared by every terminal.
+*
+* A region that does not read back can still be made per-terminal: only
+* the CAPTURE is broken, writing is fine.  So PushBuf skips it while
+* PullBuf still programs it, and the buffer copy becomes a write-only
+* mirror that vtio maintains - exactly what was done for the
+* $FFC0-$FFCF registers.  For the text LUT that is nearly in place
+* already: GFPal writes T.FLUT/T.BLUT for a shadow terminal.  What is
+* missing is writing the buffer copy for a LIVE terminal too (it
+* currently writes hardware or buffer, not both) and seeding T.FLUT/
+* T.BLUT for a new terminal.  That, not TermSaveTextLUT, is how 1B 60 /
+* 1B 61 per-terminal palettes come back.
 *******************************************************************
-TermSaveFont0       equ       1         font bank 0    - CONFIRMED works on hardware
-TermSaveTextLUT     equ       1         text LUT fg/bg - under test
-TermSaveSprite0     equ       0         sprite bank 0
-TermSaveCLUT        equ       0         graphics LUT0-3
+* Bisected on real hardware:
+*   Font0    WORKS   - font memory bank 0 reads back; three terminals with
+*                      independent fonts and colours switch cleanly.
+*   TextLUT  BROKEN  - the text LUT does NOT read back.  This is the one that
+*                      blacked the screen: PushBuf captured a dead palette and
+*                      PullBuf programmed it, black on black, in both
+*                      directions.  Leave it OFF.  Getting per-terminal
+*                      palettes back does not need it - see the note below.
+*   Sprite0  under test
+*   CLUT     under test
+TermSaveFont0       equ       1         font bank 0    - CONFIRMED works
+TermSaveTextLUT     equ       0         text LUT fg/bg - CONFIRMED BROKEN, do not enable
+TermSaveSprite0     equ       1         sprite bank 0  - under test
+TermSaveCLUT        equ       1         graphics LUT0-3 - under test
                     org       0
 T.TXT               rmb       4800      ; 80x60 text screen
 T.TXTCOLOR          rmb       4800      ; 80x60 color matrix
