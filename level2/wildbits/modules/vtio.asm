@@ -1728,14 +1728,20 @@ CurCharX            rts
 ***   XXXXX001 = .5 second flash interval
 ***   XXXXX010 = .25 second flash interval
 ***   XXXXX011 = .2 second flash interval
-CurRate             ldx       #TXT.Base
+* Guarded like CurChar/CurOff/CurOn: the cursor registers start at $FFD0,
+* past the 16 bytes PushBuf/PullBuf carry, so there is no per-terminal
+* mirror to defer into - a shadow terminal can only be stopped from
+* changing the live cursor's flash rate.
+CurRate             tst       V.TermLive,u
+                    beq       CurRateX
+                    ldx       #TXT.Base
                     ldb       VKY_TXT_CURSOR_CTRL_REG,x
                     andb      #$01                preserve the cursor enable bit
                     lsla                          shift bits to the left
                     pshs      a                   save the value to OR in on the stack
                     orb       ,s+                 OR it in with the contents of the register
                     stb       VKY_TXT_CURSOR_CTRL_REG,x save it to the hardware
-                    rts
+CurRateX            rts
 
 **********************************************************************
 * 06 - Cursor Right
@@ -2752,10 +2758,18 @@ GetMem@             os9       F$AlHRAM            allocate ram, put starting blo
                     ldb       #E$MFull            set error code to Memory Full error and return
                     bra       error@
 *                   **** Store starting block# for bitmap in V.BMXBlk
+* The mirror is a PAIR per bitmap - V.BMxCl_En then V.BMxBlk - and PullBuf
+* programs both halves of $C0+$1000+8*x from it on every terminal switch.
+* Storing only the block left the control byte at zero, so the first
+* Alt-arrow back into this terminal disabled the bitmap it had just
+* enabled.  Write the same byte here that the register gets.
 map@                lda       R$Y+1,x             load bitmap@
-                    lsla                          multiply by 2 to get correct index    
-                    leay      V.BM0Blk,u          calc address for block storage BM0,BM1 or BM2
-                    stb       a,y                 store block # in V.[BMX]Block where [BMX] is BM00, BM11 or BM2w
+                    lsla                          multiply by 2 to get correct index
+                    leay      V.BM0Cl_En,u        calc address for the BM0/BM1/BM2 mirror pair
+                    leay      a,y
+                    stb       1,y                 V.BMxBlk = the allocated block
+                    lda       #%00000001
+                    sta       ,y                  V.BMxCl_En = enable, CLUT 0
                     clra
                     std       R$X,x               store block # in X for return value
 * -> b2 bitmap #, b3 control byte, d1 physical address.
@@ -2765,13 +2779,18 @@ map@                lda       R$Y+1,x             load bitmap@
                     std       >gr.d1              physical address
                     lda       #%00000001
                     sta       >gr.b3              control byte (enable)
+* A shadow terminal owns its mirror but not the registers; PullBuf will
+* program them when it comes on screen.  Without this, SS.AScrn from a
+* background terminal points the LIVE display at the new bitmap.
+                    tst       V.TermLive,u
+                    beq       ok@
                     ldb       #GF.BmEnable
                     lbsr      CallGrfDrvNoPD
-                    clrb
+ok@                 clrb
                     andcc     #^Carry
                     rts
 error@              coma                          set carry bit on error
-end@                rts             
+end@                rts
 
 
 ;;;  GS.DScrn
@@ -2806,17 +2825,26 @@ end@                clrb
 ;;;
 ;;; Exit:  Nothing. This just sets the register and updates driver variables
 ;;;
+* Same split as SetWin and ChgFont: the mirror is always updated, the
+* registers only for the terminal that is on screen.  PullBuf programs
+* $FFC0-$FFCF from V.V_MCR when a shadow terminal comes up, so turning
+* graphics on from a background terminal takes effect when you switch to
+* it rather than under whatever is displayed now.
 SSDScrn             lda       R$X+1,x               load MCR low byte
                     ldb       R$Y+1,x               load MCR high byte
                     ldy       #TXT.Base
 mcrlbit@            cmpa      #FX_OMIT              If omit, don't change
                     beq       mcrhbit@
-                    sta       MASTER_CTRL_REG_L,y   store new MCR low byte
                     sta       V.V_MCR,u             store copy in driver variables
+                    tst       V.TermLive,u
+                    beq       mcrhbit@
+                    sta       MASTER_CTRL_REG_L,y   store new MCR low byte
 mcrhbit@            cmpb      #FT_OMIT              if omit, don't change
                     beq       end@
-                    stb       MASTER_CTRL_REG_H,y   store new MCR High byte     
                     stb       V.V_MCR+1,u           store copy in driver variables
+                    tst       V.TermLive,u
+                    beq       end@
+                    stb       MASTER_CTRL_REG_H,y   store new MCR High byte
 end@                clrb
                     rts
 
@@ -2832,43 +2860,43 @@ end@                clrb
 ;;; Exit:  B = A non-zero error code.
 ;;;       CC = Carry flag clear to indicate success
 ;;;
-* Every write to VKY_LAYER_CTRL_0/1 is mirrored into V.V_LayerCTL, which
-* is what PullBuf programs on a switch.  Without this the layer setup
-* would be lost the moment you switched terminals, now that PushBuf no
-* longer reads the registers back.
-* Still unguarded for a shadow terminal: it reads and writes the live
-* registers, so SS.PScrn from a terminal that is not on screen affects
-* the one that is.  Same gap CurRate has; nothing on the boot path calls
-* either.
+* V.V_LayerCTL is both the source and the destination here.  It used to
+* read VKY_LAYER_CTRL_0 back to merge the other layer's nibble - twice, in
+* the layer-1 leg - and that is the one thing this driver may not do: a
+* Vicky register is not guaranteed to read back, and it holds the LIVE
+* terminal's layers, not this caller's.  The mirror is authoritative; the
+* register is written only for the terminal that is on screen, and PullBuf
+* programs it for the rest when they come up.
 SSPScrn             ldy       R$X,x                 x=layer
-                    lda       VKY_LAYER_CTRL_0
+                    lda       V.V_LayerCTL,u        the mirror, never the register
 sl0@                cmpy      #$00                  test for Screen layer 0
                     bne       sl1@                  if not, go to layer 1
                     anda      #%11110000            this is L0, clear L0 values
                     adda      R$Y+1,x
-                    sta       VKY_LAYER_CTRL_0      store them
-                    sta       V.V_LayerCTL,u        keep the mirror in step
-                    bra       end@
+                    bra       store0@
 sl1@                cmpy      #$01                  test for layer 1
                     bne       sl2@                  if not, go to layer 2
-                    anda      #%00001111            clear the Layer1 bits
-                    sta       VKY_LAYER_CTRL_0
-                    ldb       R$Y+1,x
-                    lslb                            shift bitmap# 4 bits for layer 1
-                    lslb
-                    lslb
-                    lslb
-                    addb      VKY_LAYER_CTRL_0      add it
-                    stb       VKY_LAYER_CTRL_0      store it
-                    stb       V.V_LayerCTL,u        keep the mirror in step
-                    rts
+                    anda      #%00001111            keep layer 0, clear the Layer1 bits
+                    pshs      a
+                    lda       R$Y+1,x               bitmap# into the high nibble
+                    ldb       #16
+                    mul
+                    addb      ,s+                   merge, no register read-back
+                    tfr       b,a
+store0@             sta       V.V_LayerCTL,u        keep the mirror in step
+                    tst       V.TermLive,u          only the live terminal owns
+                    beq       end@                  the register
+                    sta       VKY_LAYER_CTRL_0      store them
+                    bra       end@
 sl2@                cmpy      #$02                  test for Layer2
                     bne       end@
                     ldb       R$Y+1,x
-                    stb       VKY_LAYER_CTRL_1      store BM# or TM# in L2
                     stb       V.V_LayerCTL+1,u      keep the mirror in step
-                    clrb
-end@                rts
+                    tst       V.TermLive,u
+                    beq       end@
+                    stb       VKY_LAYER_CTRL_1      store BM# or TM# in L2
+end@                clrb
+                    rts
 
 ;;; SS.FScrn
 ;;;
@@ -2889,9 +2917,14 @@ SSFScrn             lda       R$Y+1,x              get the bitmap#
                     puls      x,pc
 deallocate@         clra
                     tfr       d,x
-                    ldy       #TXT.Base
-                    lda       MASTER_CTRL_REG_H,y  load in Vicky_MCR
-                    bita      #%00000001           Test for CLK_70
+* From V.V_MCR, not MASTER_CTRL_REG_H: the register is write-only as far
+* as this driver is concerned, and reading it wrong here frees the wrong
+* number of blocks.  (SS.AScrn still sizes the allocation from its
+* screentype parameter rather than from CLK_70, so a caller that passes a
+* screentype disagreeing with the clock allocates and frees different
+* counts.  Nothing does today; noted in docs/wildbits-vtio-rewrite.md.)
+                    lda       V.V_MCR+1,u          this terminal's MCR high byte
+                    bita      #CLK_70              Test for CLK_70
                     beq       CLK_60@
 CLK_70@             ldb       #$08                 clk_70 only has 8 blocks
                     bra       cont@
@@ -2900,15 +2933,17 @@ cont@               os9       F$DelRAM             Free RAM from starting at blo
                     puls      x                    recover x
                     lda       R$Y+1,x              get the bitmap#
                     lsla                           multiply by 2
-clr_bmvar@          leay      V.BM0Blk,u           clear the bitmap storage
-                    leay      a,y
-                    clra
-                    sta       ,y
+clr_bmvar@          leay      V.BM0Cl_En,u         clear BOTH bytes of the mirror
+                    leay      a,y                  pair - control byte and block,
+                    clr       ,y                   or PullBuf re-enables a bitmap
+                    clr       1,y                  that has just been freed
                     lda       R$Y+1,x
                     sta       >gr.b2              bitmap # 0-2
+                    tst       V.TermLive,u
+                    beq       ok@
                     ldb       #GF.BmFree
                     lbsr      CallGrfDrvNoPD
-                    clrb
+ok@                 clrb
                     andcc     #^Carry
                     rts
 
@@ -2929,9 +2964,18 @@ SSPalet             lda       R$Y+1,x
                     orcc      #Carry              set carry bit
                     rolb                          shift B, and rotate in enable it
                     stb       >gr.b3              CLUT# | enable
+* GF.BmPalet rewrites the whole control byte, so the mirror has to take
+* the same value or the next PullBuf undoes the CLUT assignment (and,
+* since the enable bit rides in that byte, turns the bitmap off).
+                    lda       R$Y+1,x
+                    lsla                          two mirror bytes per bitmap
+                    leay      V.BM0Cl_En,u
+                    stb       a,y                 V.BMxCl_En = CLUT# | enable
+                    tst       V.TermLive,u
+                    beq       ok@
                     ldb       #GF.BmPalet
                     lbsr      CallGrfDrvNoPD
-                    clrb
+ok@                 clrb
                     andcc     #^Carry
                     rts
 
@@ -2946,41 +2990,72 @@ SSPalet             lda       R$Y+1,x
 ;;;
 ;;; Exit:  B = A non-zero error code.
 ;;;       CC = Carry flag clear to indicate success
+* The same 1K goes to two places: this terminal's copy in its own 16K
+* switch buffer, and - only if this terminal is on screen - the live CLUT
+* in $C1.  Writing the buffer copy is what makes SS.DfPal from a
+* background terminal stop repainting the palette of the one you are
+* looking at, and it is also the half that survives if the graphics CLUTs
+* turn out not to read back: with the mirror maintained here, PushBuf's
+* capture (TermSaveCLUT) becomes redundant rather than load-bearing.
+*
+* T.CLUT0-3 sit at buffer offset $3000-$3FFF, which is offset
+* $1000-$1FFF of the SECOND block of the 16K pair - exactly the offsets
+* they have inside $C1, so clutlookup addresses both.
 SSDfPal             pshs      a,x,y,u
-*                   **** Map in $C1 for CLUT Registers
-                    pshs      x
-                    ldx       #$C1              
-                    lbsr      mapblock
-                    puls      x
-                    bcs       end@                if error, end and return error code
-*                   **** Calculate CLUT offset              
-                    pshs      u                   push map logical addr
-                    lda       R$X+1,x
-                    lsla                          multiply by 2 so index works
-                    pshs      x                   push pointer to caller Regs
+                    tfr       x,y                 Y = caller register stack
+                    ldb       V.TermBufBlk,u
+                    beq       live@               no buffer yet: live CLUT only
+                    incb                          second block of the 16K pair
+                    clra
+                    tfr       d,x
+                    lbsr      DfPalMv             this terminal's copy
+                    bcs       end@
+                    ldu       5,s                 recover the driver static
+                    ldy       1,s                 and the caller register stack
+                    tst       V.TermLive,u        shadow terminal?
+                    beq       ok@                 yes - PullBuf will program it
+live@               ldx       #$C1                CLUT registers live in $C1
+                    lbsr      DfPalMv
+                    bcs       end@
+ok@                 clrb                          no error code
+end@                puls      u,y,x,a,pc
+
+* DfPalMv - move the caller's 1K palette into CLUT R$X of one block.
+*
+* Entry: X = block number to map ($C1, or the terminal's buffer block)
+*        Y = caller register stack (R$X = CLUT# 0-3, R$Y = source addr)
+* Exit:  carry clear, or carry set with B = error code.
+*        Clobbers A, B, X, Y, U.
+*
+* Dead-zone safe by construction: F$MapBlk hands back a logical address
+* that may be in slot 7, where $1D00-$1FFF is shadowed by the I/O
+* overlays and CLUT3 ($1C00) would straddle it - but F$Move resolves the
+* destination through the DAT image into the kernel's own window and
+* F$ClrBlk only edits the map, so neither ever dereferences it here.
+DfPalMv             pshs      y                   keep the caller register stack
+                    lbsr      mapblock            U = logical address of the block
+                    bcs       mverr@
+                    pshs      u                   keep the base for clearblock
+                    ldy       2,s
+                    lda       R$X+1,y             CLUT # 0-3
+                    lsla                          two bytes per lookup entry
                     leax      clutlookup,pcr
                     ldd       a,x
-                    leau      d,u                 ldu with offset for CLUT
-*                   **** Start F$Move (with U from above)
-                    ldx       ,s                  load pointer to caller Regs
-                    ldx       R$Y,x               x=Get pointer to caller data
+                    leau      d,u                 U = this CLUT within the block
+                    ldx       R$Y,y               X = source in the caller's map
                     ldy       <D.Proc             Get caller process
                     lda       P$Task,y            a=source Task# (Caller)
                     ldb       <D.SysTsk           b=dest Task# (System)
                     ldy       #$400               moving 1K
                     os9       F$Move              copy data
-                    bcs       errormove@          return if error
-*                   **** Exit Move
-                    puls      x
-noerror@            puls      u
-                    bsr       clearblock
-                    clrb                          no error code
-                    bra       end@
-errormove@          puls      x
-                    puls      u                   come here on F$Move error
-                    bsr       clearblock
-                    coma                          set carry bit on error
-end@                puls      u,y,x,a,pc
+                    pshs      cc,b                hold the result across clearblock
+                    ldu       2,s                 the block base, not the CLUT address
+                    lbsr      clearblock
+                    puls      cc,b
+                    leas      4,s                 drop base + caller register stack
+                    rts
+mverr@              leas      2,s
+                    rts
 
 clutlookup          fdb       $1000,$1400,$1800,$1C00
 

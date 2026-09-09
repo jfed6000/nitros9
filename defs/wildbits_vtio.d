@@ -498,6 +498,18 @@ TermSaveFont0       equ       1         font bank 0     - CONFIRMED works
 TermSaveTextLUT     equ       0         text LUT fg/bg  - BROKEN before the FPGA fix
 TermSaveSprite0     equ       1         sprite bank 0   - CONFIRMED, text mode
 TermSaveCLUT        equ       1         graphics LUT0-3 - CONFIRMED, text mode
+* PullBuf's graphics-CLUT restore, split out from PushBuf's capture so the
+* two can disagree.  They only need to disagree if the board says the
+* graphics CLUTs are write-only, and the test for that is now runnable:
+* see "Bitmaps" in docs/wildbits-vtio-rewrite.md.  Setting
+*   TermSaveCLUT 0 / TermRestCLUT 1
+* makes T.CLUT0-3 a pure write-only mirror - SS.DfPal writes both the
+* buffer copy and the live CLUT, PushBuf never reads Vicky back, PullBuf
+* programs the hardware from the buffer.  The cost of that setting is
+* that fadein/fadeout map $C1 into their own process and write the CLUT
+* behind the driver's back, so their fades would become global rather
+* than per terminal until they are moved onto SS.DfPal.
+TermRestCLUT        equ       1         PullBuf restores graphics LUT0-3
                     org       0
 T.TXT               rmb       4800      ; 80x60 text screen
 T.TXTCOLOR          rmb       4800      ; 80x60 color matrix

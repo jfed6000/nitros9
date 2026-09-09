@@ -439,8 +439,9 @@ still 4096, boot and cursor unchanged.
   the scan can never match there — but it is an asymmetry to keep in mind if
   `F$Link` is called from a process that already has such a block mapped.
 - `SS.DfPal` (`SSDfPal`) still maps `$C1` with the raw
-  `F$MapBlk`-into-`D.SysPrc` helper rather than `CallGrfDrv`.  Note it does
-  **no** file I/O — the caller loads the data module and the driver just
+  `F$MapBlk`-into-`D.SysPrc` helper rather than `CallGrfDrv`.  (It now does the
+  same for the terminal's `T.CLUT0-3` buffer copy — see the 2026-09-09 bitmap
+  section.)  Note it does **no** file I/O — the caller loads the data module and the driver just
   `F$Move`s 1K from the caller's task, which is the right shape.  The mapping
   is dead-zone-safe by construction: `F$Move` resolves the destination through
   the DAT *image* and maps the block into the kernel's slot-5/6 window, so it
@@ -769,6 +770,7 @@ are byte-identical across a switch out and back.
   `VKY_TXT_CURSOR_CTRL_REG` without the `V.TermLive` guard its neighbours
   `CurOff`/`CurOn`/`CurChar` have, so `05 23` from a shadow terminal changes the
   live cursor's flash rate.  Same two-line fix as `CurChar`.
+  **Closed 2026-09-09** — see the bitmap section.
 - `InitTermStatic` does not inherit `V.CapsLck`, so caps-lock state is per
   terminal while the keyboard LED is global.
 - `InitTerm`'s `cmpx #DAT.BlMx+1 / bhs AlHramD / tfr x,d` around `F$AlHRAM` is
@@ -1007,6 +1009,137 @@ write-only mirror discipline the display registers now have — vtio owns the
 value, writes it to both the buffer and the hardware, and never reads Vicky
 back.  `GFPal` already writes the buffer copy for a shadow terminal, so that
 half exists.
+
+### Bitmaps: the background image, and five ways the driver lost it  (2026-09-09)
+
+Reported from the board with `shellbg` running: the top ~40% of the background
+image was noise, switching terminals corrupted the text screen, and switching
+back left the graphics screen completely corrupt.  All three are one bug, and
+it is not in the driver.
+
+**`shellbg` hardcoded the bitmap's block number.**  It calls `SS.AScrn`, stores
+the block the driver returns — and then, thirty lines later, overwrites it:
+
+```
+                    lda       #$36                First BMBlock
+                    sta       <bmblock
+```
+
+`$36` is where `F$AlHRAM` used to land 10 blocks, *before* multiterminal.  Every
+open terminal now takes a 16K switch buffer off the top of RAM first, so the
+bitmap starts lower.  Measured in MAME with `/term` and `/vt1` open:
+
+| | blocks |
+|---|---|
+| `/term` switch buffer | `$3E-$3F` |
+| `/vt1` switch buffer | `$3C-$3D` |
+| bitmap (`SS.AScrn`, 10 blocks) | `$32-$3B` |
+| where `shellbg` wrote the pixmap | `$36-$3F` |
+
+So the bitmap registers pointed at `$32` while the image went to `$36` — four
+blocks of ten, 40% of the screen, showing whatever was in `$32-$35`.  That is
+the noise band.  And the last four blocks of the write, `$3C-$3F`, went
+straight through **both terminals' switch buffers**.  The `device_stop()` dump
+showed it plainly: `T0.TXT` rendered as pixmap bytes instead of text.  From
+there the other two symptoms follow mechanically — `PullBuf` restored `/vt1`'s
+text and colour planes from image data (the unreadable text screen), and
+restored `/term`'s `T.CLUT0-3` from image data (the corrupt graphics screen).
+
+Fixed by deleting the two lines; `<bmblock` already held the right value.
+`pixview.asm` had the identical hardcode and is fixed the same way.
+`drawtest.asm` was already correct.
+
+**Four driver bugs behind it, all in the same family as the display-register
+work above.**  None of them could show while the block collision was
+destroying the buffers, and every one of them would have bitten the moment it
+was fixed:
+
+- **`V.BMxCl_En` was never written.**  `SS.AScrn` and `SS.Palet` sent the
+  control byte to `GF.BmEnable`/`GF.BmPalet` — which is to say to the
+  hardware — and stored only the *block* in the mirror.  `PullBuf` programs
+  `$C0+$1000+8x` from the pair, so the first Alt-arrow back into the terminal
+  wrote a zero control byte and turned the bitmap off.  The dump made it
+  visible: `HW BM2 ctrl=$05` against `V: BM2 ctl=$00`.  Both setters now write
+  the same byte to the mirror that the register gets, and `SS.FScrn` clears
+  both bytes of the pair rather than just the block.
+- **`SS.FScrn` read `MASTER_CTRL_REG_H` back** to decide whether to free 8
+  blocks or 10.  Reads `V.V_MCR+1` now.  (`SS.AScrn` sizes the *allocation*
+  from its screentype parameter instead, so a caller that passes a screentype
+  disagreeing with `CLK_70` allocates and frees different counts.  Nothing
+  does today.)
+- **`SS.PScrn` read `VKY_LAYER_CTRL_0` back** — twice in the layer-1 leg, once
+  to merge the other layer's nibble and once again after storing it.  It now
+  merges out of `V.V_LayerCTL` with a `mul`, and writes the register only for
+  the live terminal.
+- **`SS.DScrn`, `SS.PScrn`, `SS.AScrn`, `SS.FScrn`, `SS.Palet` and `CurRate`
+  were unguarded.**  A shadow terminal could repoint the live bitmap
+  registers, layer control and MCR.  All six now take the `SetWin` shape:
+  the mirror is always updated, the hardware only when `V.TermLive`.
+
+**`SS.DfPal` now writes the buffer copy as well as the live CLUT.**  It was the
+one graphics setter with nowhere to defer to — guarding it would have made
+`SS.DfPal` from a background terminal silently do nothing.  `T.CLUT0-3` sit at
+buffer offset `$3000-$3FFF`, which is offset `$1000-$1FFF` of the *second*
+block of the 16K pair — exactly the offsets they have inside `$C1`, so the same
+`clutlookup` table addresses both, and the new `DfPalMv` helper does one
+`F$MapBlk`/`F$Move`/`F$ClrBlk` per destination.  Dead-zone safe by construction
+for the same reason the original `$C1` copy was: `F$Move` resolves the
+destination through the DAT image and `F$ClrBlk` only edits the map, so neither
+dereferences a slot-7 address where CLUT3 would straddle `$1D00-$1FFF`.
+
+Verified in MAME, `/term` and `/vt1` both running `shellbg`, with an
+Alt-Right/Alt-Left round trip in between:
+
+| | `/term` | `/vt1` (shadow) |
+|---|---|---|
+| bitmap blocks | `$32-$3B` | `$28-$31` |
+| `V.BM2Cl_En` / `V.BM2Blk` | `$05` / `$32` | `$05` / `$28` |
+| `V.V_MCR` | `$0F04` | `$0F04` |
+| `T.CLUT2` sum | `$003651` | `$003651` |
+| live `BM2` register | `ctrl $05 → block $32` | untouched by the shadow |
+| live `HW MCR` | `$0F04` | untouched by the shadow |
+
+Switch buffers `$3C-$3F` stay intact, checksums identical across the round
+trip, grfdrv re-entry counter 0.  Before the fix `shellbg >/vt1` repointed the
+live bitmap register at the shadow terminal's block.
+
+### Still open: does the graphics CLUT read back?
+
+The caveat above — *"the graphics CLUTs only matter in bitmap/tile mode, so a
+clean console switch shows they do not break anything, not that they read back
+correctly"* — is now testable, because `shellbg` works.  MAME cannot answer it;
+it models `$C1` as plain RAM.
+
+**The board test.**  Boot with one extra terminal, run `shellbg`, Alt-arrow
+away and back, and look at the image:
+
+```
+iniz /vt1
+shell i=/vt1&
+shellbg
+```
+
+- Colours survive the round trip → `$C1+$1000` reads back, `TermSaveCLUT 1` is
+  correct, nothing to do.
+- Colours come back wrong or black → the graphics CLUTs are write-only, the
+  same story as the text LUT.  The remedy is already staged: set
+
+  ```
+  TermSaveCLUT        equ       0     PushBuf stops reading Vicky back
+  TermRestCLUT        equ       1     PullBuf still programs from the buffer
+  ```
+
+  `PullBuf`'s restore was split out from `PushBuf`'s capture for exactly this,
+  and `SS.DfPal` already maintains `T.CLUT0-3`, so the mirror is complete.
+
+The cost of that setting, and the reason it is not the default already:
+**`fadein` and `fadeout` map `$C1` into their own process and write the CLUT
+directly**, bypassing the driver entirely (`fadein.asm:97`).  With the capture
+off their fades would become global instead of per terminal until they are
+moved onto `SS.DfPal`.
+
+Sprite bank 0 (`$C0+$1300`, `TermSaveSprite0`) is still unconfirmed the same
+way; `sprtest2` is the equivalent test for it.
 
 ---
 

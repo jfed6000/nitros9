@@ -385,8 +385,10 @@ pixmapload          pshs      a,u
                     os9       I$Open
                     lbcs      loaderror
                     sta       <currPath
-                    lda       #$36                First BMBlock for Bitmap 0
-                    sta       <bmblock
+* Same trap shellbg had: <bmblock already holds the block SS.AScrn
+* allocated, and hardcoding $36 only worked while F$AlHRAM happened to
+* land the bitmap there.  Terminal switch buffers now sit at the top of
+* RAM, so $36 is both the wrong bitmap block and someone else's memory.
                     ldb       <bmblock
                     clra
                     std       <currBlk

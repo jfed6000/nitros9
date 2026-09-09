@@ -115,8 +115,15 @@ setlayer
                     ldb       #SS.PScrn           Position Bitmap # on Layer #
                     os9       I$SetStt
 
-                    lda       #$36                First BMBlock
-                    sta       <bmblock
+* <bmblock still holds the block SS.AScrn actually allocated (stored
+* right after the I$SetStt above).  It used to be overwritten with a
+* hardcoded $36 here, which is where F$AlHRAM happened to land the 10
+* bitmap blocks before multiterminal existed.  Every open terminal now
+* takes a 16K switch buffer off the top of RAM first, so the bitmap
+* starts lower - $32 with two terminals open - and loading the pixmap to
+* $36 both showed the wrong RAM in the top blocks of the screen AND wrote
+* the image straight through the terminal buffers at $3C-$3F.  Never
+* assume a block number; use the one SS.AScrn returned.
                     ldb       <notheme
                     beq       ldtheme@
                     leax      pixmap4,pcr         no theme load default bg
@@ -513,7 +520,7 @@ next2@              cmpa      #3
 next3@              cmpa      #4
                     bne       next4@
                     leax      pixmap4,pcr
-                    bne       done@
+                    bra       done@
 next4@              cmpa      #5
                     bne       next5@
                     leax      pixmap5,pcr

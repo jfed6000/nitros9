@@ -577,7 +577,10 @@ PullBuf             lbsr      SetBlkC2C3
                     ldd       #$800
                     lbsr      CpyBlk
                     endc
-                    ifne      TermSaveCLUT
+* Restore is gated separately from PushBuf's capture: with TermSaveCLUT 0
+* and TermRestCLUT 1, T.CLUT0-3 is a write-only mirror that vtio's
+* SS.DfPal maintains and nothing ever reads out of Vicky.
+                    ifne      TermRestCLUT
                     ldu       #$6000+T.CLUT0  graphics LUT0-3
                     ldy       #$4000+GRPH_LUT0_OFF   $C1+$1000, not $2800
                     ldd       #$1000
