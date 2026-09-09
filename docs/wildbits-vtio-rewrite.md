@@ -438,13 +438,203 @@ still 4096, boot and cursor unchanged.
   with the fix no process ever has an oversized module's block at slot 7, so
   the scan can never match there — but it is an asymmetry to keep in mind if
   `F$Link` is called from a process that already has such a block mapped.
-- `SS.DfPal` (`SSDfPal`) and `SS.FntLoadF` (`SSFntLoadF`) still use the
-  original raw `F$MapBlk`-into-`D.SysPrc` mechanism instead of `CallGrfDrv`.
-  Real, unfixed, not currently reachable on the boot path.
+- `SS.DfPal` (`SSDfPal`) still maps `$C1` with the raw
+  `F$MapBlk`-into-`D.SysPrc` helper rather than `CallGrfDrv`.  Note it does
+  **no** file I/O — the caller loads the data module and the driver just
+  `F$Move`s 1K from the caller's task, which is the right shape.  The mapping
+  is dead-zone-safe by construction: `F$Move` resolves the destination through
+  the DAT *image* and maps the block into the kernel's slot-5/6 window, so it
+  never dereferences the returned address itself.  That matters because
+  `F$MapBlk` uses `F$FreeHB` (highest free block), which on the system map
+  tends to return slot 7 — and CLUT 3 at offset `$1C00` would then straddle
+  the `$1D00-$1FFF` dead zone if anything ever did dereference it directly.
+- `SS.FntLoadF` (`SSFntLoadF`) keeps its in-driver `I$Open`/`I$Read`.  See the
+  asset-loading section above for why it was left that way and what is wrong
+  with it.
 - `InsLine` / `DelLine` are still `rts` stubs.
 - `SS.DevNm` is unimplemented in vtio; Shell+ calls it and handles the error
   gracefully.
 - The known-latent scroll item above (the colour-plane last row).
+
+## Asset loading: `assetload`, and why it is not a driver job  (2026-09-08)
+
+Commits `518b182a` (new module) and `0c097832` (grfdrv cleanup).
+
+The question was where `SS.FntLoadF`'s file I/O belongs.  It runs entirely
+inside the driver today — `F$MapBlk` `$C1` into the **calling** process, then
+`I$Open`/`I$Seek`/`I$Read`/`I$Close`.  The answer turned out to depend on a
+requirement fonts do not expose: the same mechanism has to load 80K bitmaps,
+plus sprites and tilemaps, as fast as the disk allows.
+
+### The constraint that decides it: address space, not I/O semantics
+
+Something has to map the destination blocks, and there are only three places
+to do it:
+
+- **The system map** is not available.  Device static storage can overflow
+  into slot 2, and kernel blocks cannot be unmapped for the duration of an 80K
+  load while the rest of the system runs.
+- **The caller's map** may be full, and a driver scribbling blocks into a
+  caller's address space is a poor contract.
+- **A private address space** costs neither.  A forked child gets its own
+  8-slot DAT image (`DAT.BlCt = 8`, `coco.d:198`); with its code and a small
+  data area it has ~6 slots free, so it can map six blocks and issue one
+  `I$Read` across the lot.
+
+That is what `level2/wildbits/cmds/assetload.asm` is:
+
+```
+assetload <path> <startblock> [<blockcount> [<offset>]]
+```
+
+An application `F$Fork`s it and `F$Wait`s, so only that application blocks.
+It handles OS-9 data modules (seeking to `M$Exec`, which is how
+`sys/fonts/*` are built) and raw files alike, so a 2K font and a 76800-byte
+pixmap go through the same path.
+
+`<blockcount>` is a hard limit rather than "read to EOF", and that matters:
+block `$C1` with a count of 6 would walk straight through the text screen at
+`$C2`/`$C3`.  `<offset>` reaches sub-block assets — font set 1 at `$C1+$0800`,
+the CLUTs at `$C1+$1000/$1400/$1800/$1C00`.
+
+### Ported from vtio's `FileGetAllData`, with one trap
+
+The module is derived from that routine.  Three things changed on the way out
+of the driver, and the first is a trap worth remembering:
+
+- **`Rd2B2Mem` had to go.**  Its `D.Proc`→`D.SysPrc` swap only made sense in
+  the driver, where the stack is in the system map, so redirecting `I$Read`
+  there landed the bytes on the driver's own stack.  In a user-state process
+  the stack is in *that process's* map, so keeping the swap would have aimed
+  the header read into the **system** map at the same logical address.  It
+  also held `IntMasks` across a blocking disk read.
+- Parameters arrive in the fork parameter area, not a caller register stack;
+  status goes back through `F$Exit` for the parent's `F$Wait`.
+- It maps up to six blocks per pass instead of one, so 76800 bytes is two
+  passes rather than ten map/read/clear cycles.
+
+Two bugs inherited from the original are fixed.  A file whose length is an
+exact multiple of the window reported `E$EOF` as failure; `E$EOF` is now
+success only if something actually landed — which also stops a seek past EOF
+reporting success having transferred nothing.  And `U` is preserved across the
+`I$Seek` calls: `I$Seek` takes the low half of the position in `U`, but `U` is
+also the data area base that the header read addresses through, so clobbering
+it left `hdrbuf` stale and sent the seek to offset `$87CD`.
+
+> **`F$Chain` carves the register stack and the parameter area out of the
+> module's own `M$Mem`** (`fchain.asm:95-97` subtracts `R$Size` and the
+> parameter size and fails the fork with `E$IForkP` if it underflows).  A
+> forked module must reserve both on top of its working stack, the way
+> `merge.asm` does.
+
+### Verified in MAME against known file contents
+
+Not "no error reported" — actual bytes, via a `device_stop()` dump of the
+`$C1` font blocks and of physical blocks `$20-$29`:
+
+| case | expected | result |
+|---|---|---|
+| `boldfont` → `$C1+$0000` | sum `$0241FF`, `00×8 C0×8` | match |
+| `cbmfont` → `$C1+$0800` via `<offset>` | sum `$022B5B` | match |
+| `testpixmapbm0`, 76800 B → blocks `$20-$29` | all ten block sums | all match, incl. the partial 3072-byte tail |
+| 76800 B file with a 1-block allowance | text screen intact | intact |
+| `chd /dd/sys/fonts` then a bare filename | relative path resolves | resolves |
+
+The last one confirms a forked child inherits the parent's CWD — `F$Fork`
+copies `P$DIO` at `ffork.asm:186-190`.
+
+### `GF.SSFntLoadF` deleted from grfdrv
+
+`GF.SSFntLoadF` (5) was a live `FuncTbl` entry vtio never dispatched to, and
+its body was already dead-ended by a `bra errorclose@` sitting before the
+`I$Open`.  Deleted the same way `GF.InitDisp` was, with the ops above
+renumbering down one: **`GF.SSFntChar` 6→5, `GF.SSDScrn` 7→6, `GF.PushBuf`
+8→7, `GF.PullBuf` 9→8, `GF.EraseLine` 10→9, `GF.ErEOLine` 11→10,
+`GF.ErEOScrn` 12→11, `GF.PSGInit` 13→12, `GF.PSGBell` 14→13, `GF.PSGOff`
+15→14, `GF.Cell` 16→15, `GF.ClrScrn` 17→16, `GF.Blank` 18→17, `GF.Pal` 19→18,
+`GF.BmEnable` 20→19, `GF.BmFree` 21→20, `GF.BmPalet` 22→21.**  grfdrv's own
+`Rd2B2Mem` went with it — both callers were inside the deleted block.
+`.mods/grfdrv256` 1920 → 1718; `.mods/vtio` unchanged at 4298.
+
+### Retracted from earlier in this document and from this session
+
+Three claims that were made and are **wrong**:
+
+1. **"grfdrv runs with interrupts masked."**  It does not.  `CallGrfDrvGo`
+   captures `CC` into `gr.Temp` *before* its `orcc #IntMasks` and plants that
+   pre-mask value as `R$CC` in the RTI frame (`vtio.asm:537-549`), so grfdrv
+   resumes with the caller's original mask state.  The `orcc` only covers the
+   stack swap.  The AltISR's `gr.Busy` tests only make sense because
+   interrupts are live in there.
+2. **"grfdrv cannot make `os9` calls."**  It can, and stock grfdrv does
+   (`F$AlHRAM`, `F$AllRAM`, `F$DelRAM`).  The kernel has explicit machinery
+   for it: `D.SSTskN` is "0 = system, 1 = GrfDrv" (`krn.asm:1022`), `SysCall`
+   saves it and forces 0 for the duration, and `KrnSysProcDesc` restores it
+   and ORs task 1 back into `DAT.Task` (`krn.asm:1200-1210`).  The real limit
+   is *blocking* calls, for the re-entrancy reason below.
+3. **"`F$Wait` from a driver breaks because `F$Exit` delivers status through
+   the parent's `P$SP`."**  It does not break.  `FSleepTarget4` lays down
+   exactly the `R$Size` frame shape (`pshs dp,x,y,u,pc` … `pshs cc,d` …
+   `sts P$SP,x`, `fsleep.asm:203-215`), and the `R$U` in it is the register
+   stack pointer `SysCall` set up with `leau ,s`, which stays valid because
+   the caller's system-state stack survives the sleep.  So `F$Exit` would
+   write into the driver's own SWI2 frame and `os9 F$Wait` would return with
+   the PID and status in `A`/`B` — correct behaviour.
+
+### Why grfdrv is still the wrong home for a blocking read
+
+Not the reasons above.  The real one: **there is no lock.**  grfdrv's whole
+context is single-instance — `gr.Stack` holds one caller's `S`, `D.CCStk` is
+one stack that `lds <D.CCStk` resets to the top of on every entry, and
+`SysCall` pushes the `D.SSTskN` byte onto that same stack.  Nothing gates the
+foreground path: `gbusy` is defined at `vtio.asm:555` and **never branched
+to**, as the comment at `vtio.asm:988` admits.  If a read slept there, a
+second process writing to any terminal would walk straight in and overwrite
+the sleeper's frames.  Gate it and you get a stall instead — and because
+`gr.Busy` is what the AltISR checks before `SwitchTerm` (`vtio.asm:105`) and
+`PSGOff` (`vtio.asm:126`), that stall would freeze Alt-arrow terminal
+switching for the duration.
+
+### Options priced and rejected
+
+- **Stock's write-stream approach.**  CoCo3 has no font SetStat at all:
+  `merge /dd/sys/stdfonts` (a plain user program, `level1/cmds/merge.asm:112-132`)
+  reads the file and `I$Write`s it, and CoWin absorbs the payload in 72-byte
+  chunks through a continuation state machine (`V.ParmCnt`/`V.ParmVct`,
+  `cowin.asm:747`).  wildbits vtio already has the same machinery under
+  different names (`V.EscNeed`/`V.EscHandler`/`V.EscParms`, and `vtio.asm:1400`
+  already re-arms it).  Rejected on cost: 2048 driver entries and ~4096 Vicky
+  I/O register writes to move a 2K font, against four sector reads.
+- **`F$Load`'s fake-process pattern** (`ioman.asm:1694-1760`) — `F$AllPrc` a
+  throw-away descriptor, `I$Open` while `D.Proc` is still the caller so
+  relative paths resolve, `F$AllTsk`, `stx <D.Proc`, then read into blocks
+  mapped in its private DAT image, growing to all eight slots.  This is the
+  same idea as the forked module, done inside the kernel, and is the template
+  if this ever becomes a kernel service.  Not used: a module is easier to
+  build and test, and it costs no permanent kernel space (and no `Krn` `$1000`
+  compensation).
+- **DMA** would beat all of it, but DriveWire boots cannot use it, so it
+  cannot be the only path.
+
+### Deliberately deferred
+
+`SS.FntLoadF` keeps its current in-driver implementation.  Forking `assetload`
+from it is the better shape eventually, but it needs the caller-map parameter
+marshalling (`F$Fork` reads the parameter area through `P$Task` of `D.Proc`,
+`ffork.asm:228-236`, so the string must be assembled in the caller's space —
+the `F$PErr` pattern of scratch below the caller's `P$SP`, `krnp3_perr.asm:124-126`)
+and it inherits `F$Wait`'s reap-any-child behaviour.  Not worth it for a 2K
+font while multiterminal is unfinished.
+
+Its known defects, for whenever it is revisited: the module check is
+`cmpx #$87CD / bcc`, so anything ≥ `$87CD` passes; the failure paths return
+`ldb #3` and `ldb #4`, which are not OS-9 error codes; short reads are not
+detected; and `Rd2B2Mem` holds `IntMasks` across a blocking disk read.
+
+An unrelated one found alongside: vtio's armed escape-collector path calls
+`UpdateLiveCursor` on **every** gathered parameter byte (`vtio.asm:1181`),
+writing two Vicky cursor registers each time to no effect.  Stock returns
+immediately (`Do1E: clrb / rts`).
 
 ---
 
