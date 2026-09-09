@@ -909,7 +909,16 @@ shell sleeping normally in `Read`.
 `TermVRAMSave` (`defs/wildbits_vtio.d`) now gates all four copies in both
 routines, default **0**: a switch carries the character and colour planes and the
 `$FFC0-$FFCF` mirror, and nothing else.  The palette, font, sprites and CLUTs
-stay global.  `grfdrv256` 1703 → 1599, and 6.8K of copying leaves every switch.
+stay global.
+
+What each routine stops copying: `T.FLUT`+`T.BLUT` 128 bytes (text FG/BG
+palettes, `$C0+$1700`), `T.SPRITE0` 512 (`$C0+$1300`), `T.FONT0` 2048
+(`$C1+$0000`) and `T.CLUT0`-`T.CLUT3` 4096 (`$C1+$1000`) — **6784 bytes**.  A
+switch runs `PushBuf` on the terminal it leaves and `PullBuf` on the one it
+enters, so **13568 bytes** leave every switch, against 19200 still copied for
+the two 4800-byte planes.  At `CpyBlk`'s ~8.5 cycles/byte that is ~18ms less
+time with interrupts masked inside `SwitchTerm` — about a frame.  `grfdrv256`
+1703 → 1599, the 104 bytes being eight copy setups at 13 bytes each.
 
 The cost is real: `1B 60`/`1B 61` per-terminal palettes and a per-terminal font
 set no longer survive a switch.  Setting `TermVRAMSave` to 1 restores the old

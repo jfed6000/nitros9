@@ -448,8 +448,9 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 * which blacks the screen on the first Alt-arrow switch - and blacks it
 * in BOTH directions, since coming back restores the other terminal's
 * equally-garbage capture.  MAME models these as plain RAM, so it never
-* showed it.  Dropping the four copies also takes 6.8K of copying out of
-* every switch.
+* showed it.  Dropping the four copies also takes 6784 bytes out of each
+* of PushBuf and PullBuf - 13568 bytes per switch, since a switch runs
+* both - leaving only the 4800-byte character and colour planes.
 *
 * The cost is that 1B 60 / 1B 61 (per-terminal text palette) and a
 * per-terminal font set no longer survive a switch.  Restoring that
