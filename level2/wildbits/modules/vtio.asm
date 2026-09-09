@@ -276,18 +276,35 @@ InitBELL            leax      Bell,pcr point to the bell emission code
                     rts
                     
 * Initialize the display I/O registers. No MAPSLOT.
-InitDisplay         pshs      u
-                    ldx       #TXT.Base
+*
+* V.V_MCR / V.V_LayerCTL / V.BordBack are a 16-byte mirror of $FFC0-$FFCF
+* that PullBuf programs on a terminal switch.  They are SEEDED here and
+* the hardware is programmed FROM them, so mirror and registers agree by
+* construction and nothing ever has to read a Vicky register back to
+* learn the current state.  That matters: those registers are not
+* guaranteed readable, and this routine used to leave 6 of the 16
+* untouched ($FFC2/$FFC3 layer, $FFC8/$FFC9 border size, $FFCD-$FFCF
+* background) - so the mirror held whatever read-back produced, and
+* PullBuf then programmed it.  Every writer must keep the mirror in step;
+* every reader must use the mirror, not the register.
+InitDisplay         pshs      u,y
                     ldd       #80*256+60
                     std       V.WWidth,u
                     lbsr      SetScreenSize
-                    lda       #Mstr_Ctrl_Text_Mode_En
-                    sta       MASTER_CTRL_REG_L,x
-                    clr       MASTER_CTRL_REG_H,x
-                    clr       BORDER_CTRL_REG,x
-                    clr       BORDER_COLOR_R,x
-                    clr       BORDER_COLOR_G,x
-                    clr       BORDER_COLOR_B,x
+                    leax      DispRegs,pcr
+                    leay      V.V_MCR,u
+                    ldb       #16
+IDseed              lda       ,x+
+                    sta       ,y+
+                    decb
+                    bne       IDseed
+                    leay      V.V_MCR,u
+                    ldx       #TXT.Base
+                    ldb       #16
+IDprog              lda       ,y+
+                    sta       ,x+
+                    decb
+                    bne       IDprog
                     lda       #Vky_Cursor_Enable|Vky_Cursor_Flash_Rate0|Vky_Cursor_Flash_Rate1
                     sta       VKY_TXT_CURSOR_CTRL_REG,x
                     clra
@@ -296,7 +313,19 @@ InitDisplay         pshs      u
                     std       VKY_TXT_CURSOR_X_REG_H,x
                     lda       #'_
                     sta       VKY_TXT_CURSOR_CHAR_REG,x
-                    puls      u,pc
+                    puls      u,y,pc
+
+* The 16 bytes of $FFC0-$FFCF, in register order: MASTER_CTRL_REG_L/H,
+* VKY_LAYER_CTRL_L/H, BORDER_CTRL_REG, BORDER_COLOR_B/G/R,
+* BORDER_X_SIZE, BORDER_Y_SIZE, VKY_RESERVED_02/03/04,
+* BACKGROUND_COLOR_B/G/R.  Text mode on, 80x60 (no DBL_X/DBL_Y), no
+* layers, border off and sized 0, black background.
+DispRegs            fcb       Mstr_Ctrl_Text_Mode_En,$00
+                    fcb       $00,$00
+                    fcb       $00,$00,$00,$00
+                    fcb       $00,$00
+                    fcb       $00,$00,$00
+                    fcb       $00,$00,$00
 
 
 
@@ -910,6 +939,19 @@ CopyKS              ldb       ,x+
                     stb       ,y+
                     deca
                     bne       CopyKS
+                    puls      x
+* The 16-byte $FFC0-$FFCF mirror (V.V_MCR / V.V_LayerCTL / V.BordBack).
+* PullBuf programs the hardware from it, so a new terminal has to start
+* from the live console's values.  It used to start from whatever
+* PushBuf's read-back of the registers produced.
+                    pshs      x
+                    leax      V.V_MCR,x
+                    leay      V.V_MCR,u
+                    lda       #16
+CopyVR              ldb       ,x+
+                    stb       ,y+
+                    deca
+                    bne       CopyVR
                     puls      x
                     ldd       V.MSDrvMPtr,x
                     std       V.MSDrvMPtr,u
@@ -1848,23 +1890,23 @@ SetWin40x30         ldb       #DBL_Y|DBL_X
 * DBL_Y/X belong to THIS term. Do not poke live Vicky when inactive
 * (that made /term 80x60, and the next PushBuf saved it into the
 * active term's V.V_MCR). PullBuf restores V.V_MCR.
+* Both legs now read the MIRROR - never MASTER_CTRL_REG_H - so the only
+* difference is whether the hardware is touched.  For the live terminal
+* the mirror and the register are the same value by construction; for a
+* shadow terminal the register belongs to somebody else, and reading a
+* Vicky register back is not something to rely on in any case.
 SetWin              stx       V.WWidth,u
                     lbsr      SetScreenSize
                     pshs      b
-                    ldx       #TXT.Base
-                    lda       V.TermLive,u
+                    ldb       V.V_MCR+1,u
+                    andb      #~(DBL_Y|DBL_X|CLK_70)
+                    orb       ,s
+                    stb       V.V_MCR+1,u
+                    tst       V.TermLive,u
                     beq       SetWinSt
-                    ldb       MASTER_CTRL_REG_H,x
-                    andb      #~(DBL_Y|DBL_X|CLK_70)
-                    orb       ,s
+                    ldx       #TXT.Base
                     stb       MASTER_CTRL_REG_H,x
-                    stb       V.V_MCR+1,u
-                    puls      b,pc
-SetWinSt            ldb       V.V_MCR+1,u
-                    andb      #~(DBL_Y|DBL_X|CLK_70)
-                    orb       ,s
-                    stb       V.V_MCR+1,u
-                    puls      b,pc
+SetWinSt            puls      b,pc
 
 SetWin40x60         ldb       #DBL_X
                     ldx       #40*256+60
@@ -1973,20 +2015,15 @@ ChgFont1            ldb       #FT_FSET            FT_FSET set = font set 1
 * updates only the mirror, and the change lands when the terminal is
 * switched in.  tst (not lda) so A survives for the escape dispatcher.
 ChgFont             pshs      b                   requested font-set bit
-                    ldx       #TXT.Base
+                    ldb       V.V_MCR+1,u         the mirror, never the register
+                    andb      #~(FT_FSET)
+                    orb       ,s
+                    stb       V.V_MCR+1,u
                     tst       V.TermLive,u
                     beq       ChgFontSt
-                    ldb       MASTER_CTRL_REG_H,x
-                    andb      #~(FT_FSET)
-                    orb       ,s
+                    ldx       #TXT.Base
                     stb       MASTER_CTRL_REG_H,x
-                    stb       V.V_MCR+1,u
-                    puls      b,pc
-ChgFontSt           ldb       V.V_MCR+1,u
-                    andb      #~(FT_FSET)
-                    orb       ,s
-                    stb       V.V_MCR+1,u
-                    puls      b,pc
+ChgFontSt           puls      b,pc
 
 **********************************************************************
 * 1F - Misc Font and Line Controls
@@ -2736,13 +2773,15 @@ end@                rts
 ;;; Exit:  R$X = Vicky_MCR Low Byte
 ;;;        R$Y = Vicky_MCR High Byte
 ;;;
+* Reported from the mirror, not the registers: the registers hold the LIVE
+* terminal's state, which is not this caller's if it is on a shadow
+* terminal, and they are not guaranteed readable.
 GSDScrn             clr       R$X,x               load MCR low byte
                     clr       R$Y,x               load MCR high byte
-                    ldy       #TXT.Base
-mcrlbit@            lda       MASTER_CTRL_REG_L,y   store new MCR low byte
-                    sta       R$X+1,x                 store copy in driver variables
-mcrhbit@            ldb       MASTER_CTRL_REG_H,y   store new MCR High byte     
-                    stb       R$Y+1,x           store copy in driver variables
+                    lda       V.V_MCR,u             this terminal's MCR low byte
+                    sta       R$X+1,x
+                    ldb       V.V_MCR+1,u           this terminal's MCR high byte
+                    stb       R$Y+1,x
 end@                clrb
                     rts
 
@@ -2782,6 +2821,14 @@ end@                clrb
 ;;; Exit:  B = A non-zero error code.
 ;;;       CC = Carry flag clear to indicate success
 ;;;
+* Every write to VKY_LAYER_CTRL_0/1 is mirrored into V.V_LayerCTL, which
+* is what PullBuf programs on a switch.  Without this the layer setup
+* would be lost the moment you switched terminals, now that PushBuf no
+* longer reads the registers back.
+* Still unguarded for a shadow terminal: it reads and writes the live
+* registers, so SS.PScrn from a terminal that is not on screen affects
+* the one that is.  Same gap CurRate has; nothing on the boot path calls
+* either.
 SSPScrn             ldy       R$X,x                 x=layer
                     lda       VKY_LAYER_CTRL_0
 sl0@                cmpy      #$00                  test for Screen layer 0
@@ -2789,6 +2836,7 @@ sl0@                cmpy      #$00                  test for Screen layer 0
                     anda      #%11110000            this is L0, clear L0 values
                     adda      R$Y+1,x
                     sta       VKY_LAYER_CTRL_0      store them
+                    sta       V.V_LayerCTL,u        keep the mirror in step
                     bra       end@
 sl1@                cmpy      #$01                  test for layer 1
                     bne       sl2@                  if not, go to layer 2
@@ -2801,11 +2849,13 @@ sl1@                cmpy      #$01                  test for layer 1
                     lslb
                     addb      VKY_LAYER_CTRL_0      add it
                     stb       VKY_LAYER_CTRL_0      store it
+                    stb       V.V_LayerCTL,u        keep the mirror in step
                     rts
 sl2@                cmpy      #$02                  test for Layer2
                     bne       end@
                     ldb       R$Y+1,x
                     stb       VKY_LAYER_CTRL_1      store BM# or TM# in L2
+                    stb       V.V_LayerCTL+1,u      keep the mirror in step
                     clrb
 end@                rts
 

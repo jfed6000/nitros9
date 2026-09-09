@@ -820,6 +820,73 @@ the MAME dump reads).  Not done.
 `Krn` still 4096, `vtio` 4331 → 4356, and the two-live-terminal sequence is
 unchanged with the re-entry counter still 0.
 
+### Real hardware: Alt-arrow flashed the new window then went black
+
+Reported from a real Jr2 after the above: the system boots, Alt+Right shows the
+next window *for a split second*, then everything goes black and the machine
+looks unresponsive.  MAME never reproduced it.
+
+That is the signature `InitTerm`'s own comment predicts — *"PullBuf restores
+uninitialized MCR and the display goes black after a one-frame flash"* — and the
+ordering inside `PullBuf` matches it exactly: text, colour, LUTs, sprites, font
+and CLUTs are restored first (so the new window appears), and the 16 bytes of
+`$FFC0-$FFCF` are programmed **last**, so a bad `MASTER_CTRL_REG_L` turns the
+display off a frame or two later.  A blank display also explains
+"unresponsive": the machine is blind, not wedged.
+
+**Root cause: `V.V_MCR` was only ever populated by reading the registers back.**
+`PushBuf` captured `$FFC0-$FFCF` with a `CpyBlk`, and nothing else ever wrote
+the mirror except `SetWin`, `ChgFont` and `SSDScrn` (high byte / both bytes of
+the MCR only).  `InitDisplay` seeded none of it, and did not even program 6 of
+those 16 registers — `$FFC2`/`$FFC3` (layer control), `$FFC8`/`$FFC9` (border
+size) and `$FFCD-$FFCF` (background colour) were left at whatever the FPGA came
+up with.  So the mirror's contents were whatever read-back produced, and
+`PullBuf` then programmed that.  MAME's `vky_r` returns the last value written
+for offsets `$00-$09` and `$0D-$0F`, so the round trip worked there; a Vicky
+register is under no obligation to read back, and on the real FPGA it evidently
+does not.
+
+**Fix: the mirror is the source of truth, not the hardware.**
+
+- `InitDisplay` now seeds `V.V_MCR`/`V.V_LayerCTL`/`V.BordBack` from a 16-byte
+  `DispRegs` table and programs `$FFC0-$FFCF` *from the mirror*, so the two
+  agree by construction and all 16 registers have a known value.
+- `InitTermStatic` inherits those 16 bytes from the live console, alongside the
+  width/height/colour it already copied.
+- `PushBuf` no longer reads `$FFC0-$FFCF` at all.  `PullBuf` still programs them
+  from the mirror; only the capture is gone.
+- Every remaining reader now reads the mirror instead of the register:
+  `SetWin` and `ChgFont0`/`ChgFont1` (both legs read `V.V_MCR+1`, and only the
+  hardware store is conditional on `V.TermLive`), and `GSDScrn` reports from the
+  mirror — which also fixes `SS.DScrn` reporting the *live* terminal's mode to a
+  caller on a shadow terminal.
+- `SSPScrn` mirrors its `VKY_LAYER_CTRL_0/1` writes into `V.V_LayerCTL`;
+  without that, layer setup would be lost on the next switch now that `PushBuf`
+  does not recapture it.
+
+The invariant this establishes: **`$FFC0-$FFCF` is write-only as far as this
+driver is concerned.**  Every writer updates the mirror; every reader uses the
+mirror; the hardware is touched only for the live terminal.
+
+Verified in MAME, where the change must be behaviour-neutral and is.  The
+visible confirmation is `/term`'s mirror in a plain single-terminal boot: it
+used to read `$0004` (the MCR low byte had never been written to it, because no
+`PushBuf` had run) and now reads `$0104`, matching the live `HW MCR` exactly.
+The two-live-terminal sequence still passes with **Alt+Right as the first
+switch** this time, as does the font-set deferral table above.  `vtio` 4356 →
+4389, `grfdrv256` 1718 → 1703, `Krn` still 4096, re-entry counter still 0.
+
+**If a real board still flashes and blanks**, the registers are exonerated and
+the next suspects are the two other things `PullBuf` writes that can blacken
+text, in the order they land: `T.FLUT` → `$C0+$1700` (a zeroed text palette
+gives black on black) and `T.FONT0` → `$C1+$0000` (a zeroed font gives blank
+glyphs).  Both are captured by reading VRAM back, which cannot be avoided the
+way the registers could — per-terminal palettes and fonts have no other source.
+Comment out one `CpyBlk` at a time in `PullBuf` to bisect.  A useful eyes-only
+test first: from the black screen, press Alt+Right again to cycle back to
+`/term`.  If `/term` reappears, the machine was alive the whole time and the
+registers are now being restored correctly.
+
 ---
 
 ## SUPERSEDED — see 2026-09-08 above.

@@ -473,12 +473,13 @@ PushBuf             lbsr      SetBlkC2C3
                     ldu       #$5000
                     ldd       #$1000
                     lbsr      CpyBlk
-* copy main display registers
-                    ldu       >gr.U5
-                    leay      V.V_MCR,u  copy VICKY_MCR Regs, Layer, Backgroun
-                    ldu       #$FFC0
-                    ldd       #16
-                    lbsr      CpyBlk
+* The 16 main display registers ($FFC0-$FFCF) are NOT read back here any
+* more.  V.V_MCR / V.V_LayerCTL / V.BordBack are seeded by vtio's
+* InitDisplay, inherited by InitTermStatic and updated by every writer
+* (SetWin, ChgFont, SSDScrn, SSPScrn), so the mirror is already correct
+* and authoritative - while reading a Vicky register back is not
+* something the hardware owes us.  PullBuf still programs them from the
+* mirror; it is only the capture that is gone.
                     ldu       >gr.U5
                     lda       $3000
                     sta       V.BM0Cl_En,u
