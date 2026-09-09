@@ -917,6 +917,19 @@ InitTermStatic      pshs      d,x,y
                     clr       V.LastCh,u
                     clr       V.Reverse,u
                     clr       V.ST,u
+* The bitmap / CLUT-block / tile mirror starts as a defined "everything
+* off" for a new terminal.  It used to be seeded by InitTerm's PushBuf
+* reading the live registers back; PushBuf does not read them any more,
+* so without this PullBuf would program uninitialized static into the
+* bitmap and tile registers the first time this terminal came up.
+* Deliberately NOT inherited from the live console below: a new terminal
+* has no bitmaps of its own, and pointing it at another terminal's is
+* exactly the bug this whole mirror exists to prevent.
+                    leax      V.BM0Cl_En,u
+                    ldb       #V.GCX-V.BM0Cl_En
+ClrBMTile           clr       ,x+
+                    decb
+                    bne       ClrBMTile
                     ldx       >D.KbdSta        first term statics?
                     beq       InitTSDone
                     pshs      u

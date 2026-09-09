@@ -1103,6 +1103,69 @@ Switch buffers `$3C-$3F` stay intact, checksums identical across the round
 trip, grfdrv re-entry counter 0.  Before the fix `shellbg >/vt1` repointed the
 live bitmap register at the shadow terminal's block.
 
+### …and the bitmap registers do not read back either  (2026-09-09, same day)
+
+Reported from the board with the above in: `/vt1` came up, `shellbg` ran on it
+and the background image displayed correctly.  Alt to `/term` — fine.  Alt back
+to `/vt1` — **pure static**, full-spectrum noise with horizontal black bands,
+text overlay still perfectly readable.  `/term` unaffected, switching still
+worked.
+
+Static rather than wrong colours is the tell.  A bad CLUT turns a picture into
+flat blocks of the wrong colour, because the flat areas of the image share one
+index; only wrong *pixel data* gives fine-grained noise.  So the display was
+pointed at the wrong address, and the only thing that touches the bitmap
+address across a switch is `PushBuf`:
+
+```
+                    lda       $3010
+                    sta       V.BM2Cl_En,u
+                    ldd       $3011
+                    lbsr      Addr2Blk
+                    sta       V.BM2Blk,u
+```
+
+`$C0+$1000` is the bitmap register block, and `PushBuf` was reading it back and
+overwriting the mirror with the result — the same mistake as `$FFC0-$FFCF` and
+the text LUT, in the one place the earlier round had not looked, because the
+`TermSave*` bisect only ever covered the four Vicky *memory* regions.  The
+sequence:
+
+1. `shellbg` on live `/vt1` → `SS.AScrn` writes `V.BM2Blk`, hardware programmed,
+   image correct.
+2. Alt away → `PushBuf` on `/vt1` reads `$3010-$3013` back and clobbers
+   `V.BM2Cl_En`/`V.BM2Blk` with garbage.
+3. Alt back → `PullBuf` programs the garbage.  Static.
+
+`/term` looked fine throughout only because it had no bitmap of its own.  It was
+in fact being corrupted the other way: `PushBuf` scraped **`/vt1`'s** live
+bitmap registers into **`/term`'s** mirror, so `/term` was one `PullBuf` away
+from displaying another terminal's image.
+
+The bitmap and tile-map/tile-set capture is deleted; `Addr2Blk` went with it.
+vtio owns these values now — `SS.AScrn`/`SS.Palet` write the mirror,
+`SS.FScrn` clears it, and `InitTermStatic` zeroes `V.BM0Cl_En` through
+`V.TS7Blk` for a new terminal (that range used to be seeded by `InitTerm`'s
+`PushBuf`, which no longer reads anything).  `PullBuf` also clears each
+bitmap's address low byte, because `GFBmEnable` — previously the only writer of
+it — no longer runs for a terminal that sets its bitmap up while it is a
+shadow.  `grfdrv256` 1677 → 1598.
+
+Verified in MAME by replaying the exact report — `WB_KEYS` Alt-Right onto
+`/vt1`, type `shellbg`, Alt-Left, Alt-Right — and in the mirror image of it
+with the bitmap on `/term`.  Both round trip with the live `BM2` register
+matching the terminal's own mirror and `/term`'s mirror staying all zeros.  As
+always MAME passed before the fix too; it models the whole `$C0` page as plain
+RAM.
+
+> **Running total of what is write-only on this FPGA.**  `$FFC0-$FFCF`
+> (display registers), `$C0+$1700` (text LUT), `$C0+$1000` (bitmap registers),
+> and by association `$C0+$1100`/`$1180` (tile registers).  What *does* read
+> back: `$C1+$0000` (font bank 0), `$C2`/`$C3` (the text planes).  The pattern
+> that fits: Vicky **registers** never read back, Vicky **memory** does — which
+> would make the text LUT at `$C0+$1700` the odd one out, and is why the two
+> remaining questions below are still worth answering rather than guessing.
+
 ### Still open: does the graphics CLUT read back?
 
 The caveat above — *"the graphics CLUTs only matter in bitmap/tile mode, so a
@@ -1119,10 +1182,16 @@ shell i=/vt1&
 shellbg
 ```
 
+This test was confounded until the bitmap-register fix above: the address was
+being corrupted on every switch, so the image came back as noise no matter what
+the CLUT did.  It is clean now — the image structure returning correctly is
+what makes the colours meaningful.
+
 - Colours survive the round trip → `$C1+$1000` reads back, `TermSaveCLUT 1` is
   correct, nothing to do.
-- Colours come back wrong or black → the graphics CLUTs are write-only, the
-  same story as the text LUT.  The remedy is already staged: set
+- Image comes back with the right structure but wrong colours, or black → the
+  graphics CLUTs are write-only, the same story as the text LUT.  The remedy is
+  already staged: set
 
   ```
   TermSaveCLUT        equ       0     PushBuf stops reading Vicky back

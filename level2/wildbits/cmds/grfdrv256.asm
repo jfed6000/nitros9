@@ -493,44 +493,30 @@ PushBuf             lbsr      SetBlkC2C3
 * and authoritative - while reading a Vicky register back is not
 * something the hardware owes us.  PullBuf still programs them from the
 * mirror; it is only the capture that is gone.
-                    ldu       >gr.U5
-                    lda       $3000
-                    sta       V.BM0Cl_En,u
-                    ldd       $3001
-                    lbsr      Addr2Blk
-                    sta       V.BM0Blk,u
-                    lda       $3008
-                    sta       V.BM1Cl_En,u
-                    ldd       $3009
-                    lbsr      Addr2Blk
-                    sta       V.BM1Blk,u
-                    lda       $3010
-                    sta       V.BM2Cl_En,u
-                    ldd       $3011
-                    lbsr      Addr2Blk
-                    sta       V.BM2Blk,u
-                    leay      V.TM0,u   Copy Tile Map Regs
-                    ldu       #$3100
-                    ldd       #36
-                    lbsr      CpyBlk
-                    ldu       >gr.U5
-                    leay      V.TS0AddrH,u
-                    ldu       #$3180
-                    ldd       #32
-                    lbsr      CpyBlk
+* The bitmap registers ($C0+$1000) and the tile map / tile set registers
+* ($1100 / $1180) are NOT read back here any more either, for the same
+* reason $FFC0-$FFCF no longer are.  This block used to capture all three
+* bitmaps' control byte and physical address and hand them to PullBuf,
+* and on real hardware it came back wrong: a background image loaded on
+* /vt1 displayed correctly, survived being switched away from, and came
+* back as pure static - PushBuf had overwritten V.BM2Blk with whatever
+* reading $3011 produced and PullBuf pointed the display at it.  MAME
+* models the whole $C0 page as plain RAM, so the round trip is perfect
+* there and the failure never appears.
+*
+* vtio owns these values now: SS.AScrn and SS.Palet write V.BMxCl_En /
+* V.BMxBlk, SS.FScrn clears them, InitTermStatic zeroes the whole
+* bitmap+tile mirror for a new terminal, and PullBuf below programs the
+* registers from it.  A program that poked $C0+$1000 behind the driver's
+* back would no longer have its bitmap carried per terminal - nothing
+* does; SS.AScrn is the only way in.
                     puls      y,u
 end@                clrb
                     jmp       >GrfMod+SysRet
 
-; Take high and middle address byte in d and return block number in a
-Addr2Blk            lslb
-                    rola
-                    lslb
-                    rola
-                    lslb
-                    rola
-                    rts
-
+; Take a block number in a (b = 0) and return the high and middle bytes of
+; its physical address in d.  Addr2Blk, the inverse, went with PushBuf's
+; register capture - nothing reads a bitmap address back any more.
 Blk2Addr            lsra
                     rorb
                     lsra
@@ -599,18 +585,24 @@ PullBuf             lbsr      SetBlkC2C3
                     clrb
                     lbsr      Blk2Addr
                     std       $3001
+                    clr       $3003               address low byte
                     lda       V.BM1Cl_En,u
                     sta       $3008
                     lda       V.BM1Blk,u
                     clrb
                     lbsr      Blk2Addr
                     std       $3009
+                    clr       $300B               address low byte
                     lda       V.BM2Cl_En,u
                     sta       $3010
                     lda       V.BM2Blk,u
                     clrb
                     lbsr      Blk2Addr
                     std       $3011
+* GFBmEnable is the only other writer of the low byte, and it no longer
+* runs for a terminal that sets its bitmap up while it is a shadow, so
+* PullBuf has to clear it here.
+                    clr       $3013               address low byte
                     ldy       #$3100
                     leau      V.TM0,u   Copy Tile Map Regs
                     ldd       #36
