@@ -1255,6 +1255,21 @@ SetShadowBlk        pshs      a
 SSBlkX              puls      a,pc
 
 *******************************************************************
+* DoScroll - move rows up one: gr.d1 = start offset (first cell of the
+* row that goes away), gr.d2 = end offset (V.ScreenSize), A = width.
+* Picks ScrollLive or ScrollShadow for THIS terminal.  Used by the
+* line-feed scroll (gr.d1 = 0) and 1F 31 Delete Line.
+* CallScroll* preserve U.
+*******************************************************************
+DoScroll            tst       V.TermLive,u
+                    bne       dslive@
+                    lbsr      SetShadowBlk        aim at THIS term's 16K buffer (keeps A)
+                    beq       dsx@                no buffer: nothing to scroll
+                    lbra      CallScrollShadow
+dslive@             lbra      CallScrollLive
+dsx@                rts
+
+*******************************************************************
 * PutCell - A = glyph, X = cell offset.  Snapshot + GF.Cell.
 * Colour = V.FBCol; dest via SetWDest.  Used by EraseChar.
 *   -> b2 glyph, b3 colour attr, d1 cell offset, b4 dest
@@ -1330,7 +1345,6 @@ incrow              inca                          and we increment the row
                     lbeq      CurHome
                     deca
                     pshs      d                   last row, column from B
-* A = width (unused here - the Scroll* direct calls take it in A below),
 * B = height, which the two guards that follow need.  There used to be a
 * 'sta >gr.b5' here feeding the old GF.Write WO.Scroll op; ScrollLive/
 * ScrollShadow never read it, so it is gone.
@@ -1339,15 +1353,13 @@ incrow              inca                          and we increment the row
                     beq       noscroll
                     decb
                     beq       noscroll
-		    ldd	      V.WWidth,u
-		    ldy	      V.ScreenSize,u
- 		    tst	      V.TermLive,u
-		    bne	      scrolllive
-		    lbsr      SetShadowBlk          aim at THIS term's 16K buffer
-		    beq	      noscroll              no buffer: do not scroll it
-		    lbsr      CallScrollShadow
-		    bra	      noscroll
-scrolllive	    lbsr      CallScrollLive
+                    clra
+                    clrb
+                    std       >gr.d1              start: row 0
+                    ldd       V.ScreenSize,u
+                    std       >gr.d2              end: bottom of screen
+                    lda       V.WWidth,u          A = width
+                    lbsr      DoScroll
 noscroll            puls      d
 
 * clear line
@@ -1470,7 +1482,7 @@ Esc1FTbl            fcb       $20,0
                     fcb       $30,0
                     fdb       InsLine-Esc1FTbl    insert line (stub)
                     fcb       $31,0
-                    fdb       DelLine-Esc1FTbl    delete line (stub)
+                    fdb       DelLine-Esc1FTbl    delete line
                     fcb       $00
 
 
@@ -2116,8 +2128,24 @@ InsLine             rts
 
 ************************************************************************
 *** 1F 31 - Delete Line
+*** Removes the cursor's row; the rows below move up one and the last
+*** row's glyphs are blanked (its colours are left for the program to
+*** rewrite).  The cursor does not move.
 ***
-DelLine             rts
+DelLine             lda       V.WHeight,u
+                    beq       dlx@                no rows
+                    ldb       V.WWidth,u
+                    beq       dlx@                no columns (blank loop would run 256)
+                    lbsr      CalcCurPos          clamps V.CurRow below V.WHeight
+                    lda       V.CurRow,u
+                    ldb       V.WWidth,u
+                    mul
+                    std       >gr.d1              start: CurRow,0
+                    ldd       V.ScreenSize,u
+                    std       >gr.d2              end: bottom of screen
+                    lda       V.WWidth,u          A = width
+                    lbsr      DoScroll
+dlx@                rts
 
 **********************************************************************
 ****************** End Code Handling Routines ************************

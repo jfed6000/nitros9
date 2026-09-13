@@ -114,13 +114,20 @@ WriteCharShadow	    pshs      cc,a,b,y
 * ScrollLive/Shadow - Scroll Live or Shadow Text Map
 * THESE ARE DIRECT CALLS  and *NOI* in the function table
 *
-*	a:   width
-*	b:   height
-*	y:   screen size in bytes  (V.ScreenSize = V.WWidth * V.WHeight)
+*	a:      width
+*	gr.d1:  start offset - first cell of the row that goes away
+*	gr.d2:  end offset   - V.ScreenSize (V.WWidth * V.WHeight)
+*
+* Every row from gr.d1+width up to gr.d2 moves up one row, on both
+* planes, and the last row's glyphs are blanked (its colours are not).
+* Scroll passes gr.d1 = 0; 1F 31 Delete Line passes CurRow * WWidth.
+* B and Y are not inputs.  Count = d2 - d1 - width; gr.d1 must be at
+* most the start of the last row, or the count goes negative.
 *
 * Writing text is so common, calls are direct for extra speed
-* and to reduce overhead.  Being direct, they take their arguments in
-* CPU registers and use none of the gr.b*/gr.d* parameter block.
+* and to reduce overhead.  They skip the GF.* dispatch, but they do
+* read gr.d1/gr.d2 - vtio calls them only from DoScroll, and both of
+* DoScroll's callers load gr.d1 and gr.d2 immediately before.
 *
 *******************************************************************
 ScrollLive	    pshs      a
@@ -141,29 +148,23 @@ ScrollLive	    pshs      a
                     stb       MMU_SLOT_2 $4000
                     std       ,x++
 		    puls      cc,a,b,y
-goodmmu@	    pshs      d,y
-		    ldx	      #$2000
-		    leau      a,x	          source is start + 1 row
-		    tfr	      y,d	          move size of copy to d
-		    subb      ,s		  subtract 1 row from y
-		    sbca      #0
-		    ldy	      #$2000		  destination is start of screen
-		    lbsr      CpyBlk
-		    lda	      ,s
-		    ldb	      #$20
-loop@		    stb	      ,y+
-		    deca
-		    bne	      loop@
-		    ldx	      #$4000
-		    lda	      ,s
-		    leau      a,x	          source is start + 1 row
-		    ldd	      2,s		  move size of copy to d
-		    subb      ,s
-		    sbca      #0
-		    ldy	      #$4000		  destination is start of screen
-		    lbsr      CpyBlk
-		    puls      d,y
-         	    clrb
+goodmmu@            pshs      a                   ,s = width
+                    ldd       >gr.d2              end offset
+                    subd      >gr.d1              - start offset
+                    subb      ,s                  - one row
+                    sbca      #0
+                    pshs      d                   ,s = count, 2,s = width
+                    ldy       #$2000              text plane
+                    bsr       ScrollPlane
+                    lda       2,s                 Y = start of last row
+                    ldb       #$20
+loop@               stb       ,y+                 blank the last row's glyphs
+                    deca
+                    bne       loop@
+                    ldy       #$4000              colour plane
+                    bsr       ScrollPlane
+                    leas      3,s
+                    clrb
                     jmp       >GrfMod+SysRet
 
 
@@ -182,29 +183,36 @@ ScrollShadow	    pshs      cc,a,b,y
                     stb       MMU_SLOT_4 $8000
                     std       ,x++
 		    puls      cc,a,b,y
-		    pshs      d,y
-		    ldx       #$6000		
-		    leau      a,x		   source is start + 1 row
-		    tfr	      y,d		   move size of copy to d
-		    subb      ,s
-		    sbca      #0
-		    ldy	      #$6000		   destination is start of screen
-		    lbsr      CpyBlk
-		    lda	      ,s
-		    ldb	      #$20
-loop@		    stb	      ,y+
-		    deca
-		    bne	      loop@
-		    ldy       #$6000+T.TXTCOLOR
-		    lda	      ,s
-		    leau      a,y		   source is start + 1 row
-		    ldd	      2,s		   move size of copy to d
-		    subb      ,s
-		    sbca      #0
-		    lbsr      CpyBlk
-		    puls      d,y
-         	    clrb
+                    pshs      a                   ,s = width
+                    ldd       >gr.d2              end offset
+                    subd      >gr.d1              - start offset
+                    subb      ,s                  - one row
+                    sbca      #0
+                    pshs      d                   ,s = count, 2,s = width
+                    ldy       #$6000              text plane
+                    bsr       ScrollPlane
+                    lda       2,s                 Y = start of last row
+                    ldb       #$20
+loop@               stb       ,y+                 blank the last row's glyphs
+                    deca
+                    bne       loop@
+                    ldy       #$6000+T.TXTCOLOR   colour plane
+                    bsr       ScrollPlane
+                    leas      3,s
+                    clrb
                     jmp       >GrfMod+SysRet
+
+* ScrollPlane - move one plane up a row, starting at gr.d1.
+* Entry: Y = plane base.  2,s = count, 4,s = width (the caller's frame)
+* Exit:  Y = base + d1 + count = start of the last row
+ScrollPlane         tfr       y,d
+                    addd      >gr.d1              dest = base + start
+                    tfr       d,y
+                    ldb       4,s                 width
+                    clra
+                    leau      d,y                 source = dest + one row
+                    ldd       2,s                 count
+                    lbra      CpyBlk              CpyBlk returns to our caller
 
 *******************************************************************
 * Function Dispatch Table

@@ -339,14 +339,16 @@ gr.TermTbl          RMB       72        ; Screen table base
 *   GF.BmEnable (20)     bitmap #    ctrl byte    -      -      phys addr  -
 *   GF.BmFree   (21)     bitmap #    -            -      -      -          -
 *   GF.BmPalet  (22)     bitmap #    CLUT#|enable -      -      -          -
+*   ScrollLive/Shadow    -           -            -      -      start off  end off
+*     (direct calls, A = width; start = CurRow*WWidth or 0, end = V.ScreenSize)
 *
 * b1 is unassigned - a free parameter byte.  (It was the GF.Write
 *   sub-op selector before that dispatch layer was removed.)
 * b4 "dest" is set by vtio's SetWDest: WD.Buf = the 16K terminal backup
 *   buffer at LUT1 $6000, WD.Vicky = the live $C2/$C3 planes.
 * d1/d2 halves are addressed gr.d1 / gr.d1+1 the way D splits into A/B.
-* The direct-call entries (WriteCharLive/Shadow, ScrollLive/Shadow)
-*   bypass this block entirely - they take everything in A/B/Y.
+* WriteCharLive/Shadow bypass this block entirely - A/B/Y only.
+*   ScrollLive/Shadow take width in A but start/end in d1/d2.
 *
 * HAZARD: GF.ClrScrn (17) and the erase family (GF.EraseLine 10 /
 *   GF.ErEOLine 11 / GF.ErEOScrn 12) take no parameters here, but both
@@ -359,7 +361,7 @@ gr.TermTbl          RMB       72        ; Screen table base
 gr.b1               rmb       1         ; unassigned - free parameter byte
 gr.b2               rmb       1         ; glyph / palette reg # / bitmap #
 gr.d1               rmb       2         ; cell offset / PSG freq / BM addr / LUT b0-1
-gr.d2               rmb       2         ; GF.Pal LUT bytes 2-3 only
+gr.d2               rmb       2         ; GF.Pal LUT bytes 2-3 / scroll end offset
 gr.b3               rmb       1         ; colour attr / PSG volume / BM ctrl byte
 gr.b4               rmb       1         ; WD.Buf (16K backup) / WD.Vicky ($C2/$C3)
 gr.b5               rmb       1         ; GF.Pal 0=FG 1=BG LUT select
