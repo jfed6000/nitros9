@@ -433,6 +433,7 @@ GF.BmEnable         equ       19        ; bitmap: enable + phys addr
 GF.BmFree           equ       20        ; bitmap: zero the four registers
 GF.BmPalet          equ       21        ; bitmap: assign CLUT
 GF.InsLine          equ       22        ; 1F 30 insert line at V.CurRow (reads DSS)
+GF.Switch           equ       23        ; change live terminal per gr.SwitchReq (AltISR)
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 
@@ -460,7 +461,7 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 * copy is 256 bytes even though T.SPRITE0 reserves 512 in the buffer.
 * Banks 2 and 3 ($1500/$1600) are FUTURE on Revision E.
 *
-* Each byte here costs twice per switch: SwitchTerm runs PushBuf on the
+* Each byte here costs twice per switch: GF.Switch runs PushBuf on the
 * terminal it leaves and PullBuf on the one it enters.  All four on is
 * 6784 bytes per routine, 13568 per switch, against 9600/19200 for the
 * two planes that are always carried.

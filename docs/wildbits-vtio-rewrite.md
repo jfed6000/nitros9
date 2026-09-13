@@ -3,19 +3,33 @@
 Branch `wb/multiterm`. Rewrite of `level2/wildbits/modules/vtio.asm` +
 `level2/wildbits/cmds/grfdrv256.asm` (built into `grfdrv256`).
 
-## CURRENT STATUS  (2026-09-09)  — multiterminal and per-terminal bitmaps both
-## work on real hardware.
+## CURRENT STATUS  (2026-09-13)  — multiterminal and per-terminal bitmaps work
+## on real hardware; `1F 30` Insert Line, `1F 31` Delete Line and `1B 21`
+## Select work in MAME.
 
-Head `ab12cb35`.  Three terminals with independent fonts, colours **and
+Head `f18732e3`.  Three terminals with independent fonts, colours **and
 background images**; Alt+Right walks up the terminal ids, Alt+Left down.
 `keydrv_k2` has the same Alt+arrow switching as `keydrv_ps2`.  All four build
-targets (`l1`/`l2` × `jr2`/`k2`) build, and both disks boot in MAME.
+targets (`l1`/`l2` × `jr2`/`k2`) built as of 2026-09-09, and both disks boot in
+MAME.
 
-The sections below are in date order, oldest first; the newest work is the
-three 2026-09-09 sections near the bottom of this half of the document —
-**Bitmaps**, **…and the bitmap registers do not read back either**, and
-**Alt+arrow on the K2 keyboard**.  The running list of what is and is not
-readable on this FPGA is in the second of those.
+`1F 30` Insert Line and `1F 31` Delete Line are implemented and verified in MAME
+on the live terminal and on a non-live one; not yet on the board, and only the
+`l2`/`jr2` target was rebuilt for them.  `ScrollLive`/`ScrollShadow` changed
+their inputs to carry Delete Line.  `1B 21` Select switches the display to the
+terminal it is written to, and terminal switching itself now runs in grfdrv as
+`GF.Switch` to free bootfile space (both 2026-09-13, MAME only).  The working
+tree also carries a deliberately
+**uncommitted** more-memory change in `level2/modules/kernel/krnp2.asm` — do not
+commit it along with other work.
+
+The sections below are in date order, oldest first; the newest is **Switching
+moved into grfdrv: `GF.Switch`** (2026-09-13), after **`1B 21` Select** (same
+day) and **Insert Line and Delete Line** (2026-09-12),
+which follow the three 2026-09-09 sections near the
+bottom of this half of the document — **Bitmaps**, **…and the bitmap registers
+do not read back either**, and **Alt+arrow on the K2 keyboard**.  The running
+list of what is and is not readable on this FPGA is in the second of those.
 
 Still open, in the order I would take them:
 
@@ -27,6 +41,8 @@ Still open, in the order I would take them:
    palettes back without the read-back".  Do **not** do this with
    `TermSaveTextLUT`.
 3. The known-latent list under "Gaps found and deliberately left".
+4. Try `1F 30` / `1F 31`, `1B 21` and Alt+arrow under `GF.Switch` on the
+   board, and rebuild the other three targets.
 
 ## STATUS  (2026-09-08)  — **RESOLVED.**  Boots the full `sysgo` → `Shell
 ## "startup -p"` → nested-fork chain to an interactive prompt.  The cause was
@@ -455,6 +471,8 @@ still 4096, boot and cursor unchanged.
   plane only; the colour plane keeps the old bottom row's attributes.
   Masked on every current path because the caller reaches `clrline` →
   `EraseLine` immediately after and `EraseLineCore` fills both planes.
+  `1F 31` Delete Line (2026-09-12) leaves it stale too, by decision: a program
+  that deletes a line rewrites the bottom row itself.
 
 ### Still open / worth doing
 
@@ -477,7 +495,8 @@ still 4096, boot and cursor unchanged.
 - `SS.FntLoadF` (`SSFntLoadF`) keeps its in-driver `I$Open`/`I$Read`.  See the
   asset-loading section above for why it was left that way and what is wrong
   with it.
-- `InsLine` / `DelLine` are still `rts` stubs.
+- ~~`InsLine` / `DelLine` are still `rts` stubs.~~  Done 2026-09-12 — see
+  **Insert Line and Delete Line**.
 - `SS.DevNm` is unimplemented in vtio; Shell+ calls it and handles the error
   gracefully.
 - The known-latent scroll item above (the colour-plane last row).
@@ -1330,6 +1349,222 @@ should be `IFGT Level-1`, it belongs in both drivers in one change.
 
 ---
 
+### Insert Line and Delete Line  (2026-09-12)
+
+Commits `d1e019f1` (`1F 31`) and `f18732e3` (`1F 30`).  Verified in MAME
+`wbjr2` on the live terminal and on a non-live `/vt1`; not yet on the board.
+
+**Delete Line rides the scroll routines.**  Deleting row R is scrolling rows
+R+1 onward up one row, so `ScrollLive`/`ScrollShadow` now take the region
+instead of assuming row 0:
+
+| input | meaning |
+|---|---|
+| `A` | width |
+| `gr.d1` | start offset: first cell of the row that goes away — `0` for a scroll, `V.CurRow * V.WWidth` for `1F 31` |
+| `gr.d2` | end offset: `V.ScreenSize` |
+
+`B` and `Y` are no longer inputs (`B` was documented as "height" but never
+read).  grfdrv computes the count as `d2 − d1 − width`, and the four plane
+copies share a `ScrollPlane` helper.  After the copy `Y` is
+`base + ScreenSize − width` whatever the start, so the existing blank loop still
+hits the last row.  vtio's new `DoScroll` picks live or shadow (with
+`SetShadowBlk`) for both callers, the line-feed scroll and `DelLine`, and is
+the only caller of the two direct entries — so loading `gr.d1`/`gr.d2`
+immediately before every call is guaranteed in one place.  `DelLine` refuses a
+zero width or height, clamps `V.CurRow` through `CalcCurPos`, and does not move
+the cursor.  The bottom row's colour plane is left stale by decision (see
+"Known-latent" above).
+
+**Insert Line is a `GF.*` op, not a direct call.**  Moving rows *down* needs an
+end-to-start copy: `CpyBlk` copies upward and would smear row R down the whole
+screen.  `GF.InsLine` is op 22.  On the `GF.*` path grfdrv's `SetBlkC2C3` maps
+the terminal's static storage (from `gr.VBlk`/`gr.U5`, which vtio sets with
+`SetThisTermGrfPtrs`) and loads `U`, so `GFInsLine` reads `V.CurRow`,
+`V.WWidth`, `V.WHeight`, `V.ScreenSize` and `V.TermLive` itself — no parameters
+and no GrfMem change.  A new direct entry would have needed a `gr.*` pointer
+field, moving every later GrfMem offset and the MAME dump's addresses with
+them; the direct entries cannot read `V.*` at all, because they never map the
+DSS.  `InsPlane` is a byte loop (`lda ,-u` / `sta ,-y`) per plane, skipped when
+the count is 0 (inserting at the last row); then `EraseLineCore` blanks row R
+in `V.FBCol`.  vtio's `InsLine` guards, clamps, calls `SetThisTermGrfPtrs` and
+issues `GF.InsLine`.
+
+**Build trap:** `ErEOLine` and `ErEOScrn` reach `EraseLineCore` with a short
+`bsr`.  New code placed between them and `EraseLineCore` pushes those out of
+range (`Byte overflow`), so `GFInsLine`/`InsPlane` live after `ErEOScrn`.
+grfdrv grew from `$636` to `$692` bytes.
+
+**Verification.**  Each pair of runs typed identical keys except the two escape
+bytes — a `07 07` control against `1F 31` or `1F 30` — and the exit dumps were
+compared row by row:
+
+| test | result |
+|---|---|
+| Delete, live, row 5 | rows 5–28 = control rows 6–29; only two timestamps and the typed command differ |
+| Delete, `/vt1` non-live, row 5 (`display … >/vt1`) | same shift in the buffer, bottom row blank; cursor and `V.*` identical to control |
+| Insert, live, row 5 | row 5 blank, rows 6–29 = control rows 5–28 |
+| Insert, `/vt1`, row 5 | same shift in the buffer |
+| Insert, `/vt1`, last row (`ABC` written on row 29 first) | only row 29 blanked |
+| Scroll regression | live scroll, and `mdir >/vt1` ×3 scrolling the shadow buffer, both clean |
+
+**`WB_KEYS` traps found doing this** (driver in the untracked `mame/` tree):
+items split on `;`, so a literal cannot contain one; only about 7 characters
+per frame survive, so literals go in 4–6 character items a few frames apart;
+type-ahead while a command runs is cut the same way.  Shifted `> < & | !` were
+added (`s_shift_chars`), so `display … >/vt1` drives a non-live terminal with no
+Alt-switch timing race.
+
+**Not a bug: `booberry` recolouring "sometimes a line, sometimes the screen".**
+The script is `1B 32 0 1B 33 1` then `1B 60`/`1B 61` palette changes.
+`1B 32`/`1B 33` only set `V.FBCol`, which affects later glyphs, erases, the
+scroll's new bottom row and `ClrScrn` — never cells already on screen.
+`1B 60`/`1B 61` rewrite a text-LUT entry, which recolours every cell already
+using it.  On a first run the screen's cells are `$7A`, so nothing existing
+uses entries 0/1 and only new lines change; once the cells are `$01`, the next
+run recolours everything at once.  `1B 20` `DWSet` always recolours the whole
+screen because it ends in `ClrScrn`.  Left as is; add `0c` to the script if a
+whole-screen change is wanted.
+
+**Noticed, not fixed:** the parameter-table comment in `defs/wildbits_vtio.d`
+numbers the `GF.*` ops one higher than their `equ`s (`GF.Cell` is 15; the table
+says 16).
+
+### `1B 21` Select  (2026-09-13)
+
+Verified in MAME `wbjr2`; not yet on the board, and only `l2`/`jr2` rebuilt.
+
+**There is no "select a terminal that is not open" case.**  `1B 21` is written
+to a path, so the target's path is already open, and opening is what creates a
+terminal: a named `/vtN` has its own port and static, and its INIZ runs
+`InitTerm`; the `/vt` factory runs `InitTerm` from SS.Open.  By the time
+`DWSelect` runs, `U` is the target's static and its `gr.TermTbl` entry has
+`T.Init`.  CoWin's equivalent failure, `E$WUndef`, is for a window that was
+opened but never `DWSet` (`cowin.asm:1085-1105`); a Wildbits terminal has no
+such state.
+
+**What it does.**  `DWSelect` stores the caller's path number in the process's
+`P$SelP` (CoWin-compatible, not acted on yet).  If the terminal is already live
+it returns.  Otherwise it puts `V.TermID` in `gr.SwitchTerm` and then `SW.Goto`
+(`$02`) in `gr.SwitchReq`, and the AltISR does the switch on its next tick
+exactly as for Alt+arrow — so it waits out `gr.Busy` the same way.
+`gr.SwitchTerm` (`$114A`) was already declared and unused, so no GrfMem offset
+moved and the key drivers need no rebuild.  `SwitchTerm` tests for `SW.Goto`
+before its relative search, then refuses an id out of range, the live terminal,
+and an entry without `T.Init` — the terminal can have been closed between the
+write and the tick.
+
+**`Y` and `R$A` checked, not assumed.**  SCF saves `Y` = path descriptor around
+both `jsr D$WRIT` (`level1/modules/scf.asm:1197,1215`); nothing on
+`Write` → collector → `EscCodeComplete` → `Disp1B` → `EscScan` → handler loads
+`Y`; and IOMan's `S2UPath` translates `R$A` into `A` without writing it back, so
+`PD.RGS,y` → `R$A` is the caller's local path, as CoWin reads it.
+`P$SelP` is already in `defs/os9.d`'s Level-2 process descriptor with no
+platform conditional; `AllPrc` zeroes it and nothing inherits it.
+
+**Deliberately not done: the CoWin "Nobel rule"** (2018, `cowin.asm:33-36`) —
+change the display only if the caller's *previously* selected window is on
+screen, so a background job cannot steal it.  It would not block an app showing
+help on `/vt1` and selecting back, since each select starts from the window on
+screen.  It would block a job on a hidden terminal, and a switch back after the
+user Alt+arrowed elsewhere.  Left out to see whether that is ever a problem;
+`P$SelP` is recorded so it can be added later without changing what programs
+see.
+
+**Usage notes for programs:**
+- The keyboard follows the display (`D.KbdSta`), so an app that selects `/vt1`
+  must read its input from the `/vt1` path, not stdin.
+- Something must hold the terminal open.  `display 1b 21 >/vt2` with nothing
+  else on `/vt2` creates it, selects it and frees it on close (`TermTerm`), ending
+  where it started.  Standard OS-9; CoCo users run `shell i=/w1&` first.
+
+**Verification:**
+
+| test | result |
+|---|---|
+| `shell i=/vt1&`, then `display 1b 21 >/vt1` on `/term` | `LiveTerm=$01`, `D.KbdSta` = `/vt1`'s static |
+| then `display 1b 21 >/term` typed on `/vt1` | `LiveTerm=$00`; the command is in `/vt1`'s buffer, so keys had followed the switch |
+| `display 1b 21` on the live `/term` | no change, no error |
+| `display 1b 21 >/vt2`, nothing holding `/vt2` | `/vt2` created and freed (`TermCnt` back to 1), ends on `/term`, no error |
+
+The end state of the last test does not show whether the switch or the free came
+first; both orders end in the same place.
+
+**Noticed, not chased:** after that last test `gr.VStaStorU` still points at the
+freed `/vt2` static (`$7200`) while `D.KbdSta` is right.  Any background
+`InitTerm` leaves it that way, so it predates `1B 21`; whether anything reads it
+before the next write reloads it is unchecked.
+
+### Switching moved into grfdrv: `GF.Switch`  (2026-09-13, same day)
+
+Verified in MAME `wbjr2`; not yet on the board, and only `l2`/`jr2` rebuilt.
+
+**Why: the bootfile ceiling, not system RAM.**  `recipes/wildbits/wildbits.mak`
+fails the build when the bootfile passes 32,256 bytes (`$7E00`, the `$8000-$FDFF`
+window).  With `1B 21` in, its modules came to 31,997 bytes — 259 bytes of
+margin.  vtio is in the bootfile; grfdrv256 is not.  vtio loads it from CMDS
+with `F$NMLoad` and finds it by its own blocks (`MD$MPDAT`), so grfdrv code
+costs neither bootfile nor system-map space.  Its only limit is the 8K cliff
+where slot 7 stops being the kernel (roadmap).  Whether a smaller bootfile also
+returns RAM to the system pool was not checked.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 4,613 | 4,339 |
+| `grfdrv256` | 1,682 | 1,976 |
+| bootfile modules / padded | 31,997 / 32,000 | 31,723 / 31,744 |
+| margin to 32,256 | 259 | 533 |
+
+**What moved.**  vtio's `SwitchTerm` (276 bytes) is gone.  The AltISR still
+tests `gr.SwitchReq` and `gr.Busy` and keeps the `$12E4-$12E7` breadcrumbs, then
+issues `GF.Switch` (op 23) through `CallGrfDrvNoPD`, which preserves `U`.
+grfdrv's `GFSwitch` carries the same logic — the `SW.Next`/`SW.Prev` search and
+the `SW.Goto` range / live / `T.Init` checks — and does the whole switch in one
+flip instead of two:
+
+- `PushBuf`/`PullBuf`'s bodies are now `PushCore`/`PullCore`, ending in `rts`,
+  behind two-line op entries: `InitTerm` and `TermTerm` still issue
+  `GF.PushBuf`/`GF.PullBuf`.  Both cores exit with `U` = `gr.U5`, the slot-5 view
+  of the terminal just handled, which is how `GFSwitch` clears the old
+  terminal's `V.TermLive` and sets the new one's.
+- `GSTermPtrs` and `GSCalcPos` are copies of vtio's `SetTermGrfPtrs` and
+  `CalcCurPos`, which stay in vtio for their other callers.
+- Everything touched is reachable from grfdrv's map: `gr.*` and `D.KbdSta` are
+  in block 0, the cursor registers are in the `$FFxx` I/O page (`PullBuf`
+  already wrote `$FFC0`), and each terminal's statics come in through
+  `SetBlkC2C3`.
+- No GrfMem offset moved.  `GF.Switch` sits with the other `GF.*` equates;
+  an equate reserves nothing, so Level 1 is unaffected.
+
+**Two things the port had to get right:**
+
+- `D.KbdSta` takes `T.StatPtr`, the system address — never `U`, which inside
+  grfdrv is the slot-5 alias.  Stored there, keystrokes go nowhere.
+- `GFSwitch` saves and restores CC around its `orcc #IntMasks`.  `SysRet` does
+  `tfr cc,a` and the flip back loads CC from `A`, so whatever CC grfdrv exits
+  with is what the caller gets.  The AltISR is masked anyway; a caller outside
+  an IRQ would otherwise come back masked.
+
+The cursor fix-up now recomputes `V.CurPos` (which clamps `V.CurRow`) before
+writing the cursor registers, where `SwitchTerm` clamped, wrote, then called
+`CalcCurPos`.  Same result: `CalcCurPos`'s zero-height branch leaves `V.CurRow`
+alone.
+
+**Verification:**
+
+| test | result |
+|---|---|
+| `/term`, `/vt1`, `/vt2` with shells; Alt+Right once | `LiveTerm=$01`, `D.KbdSta` = `/vt1`'s static |
+| Alt+Right twice | `$02` |
+| Alt+Left once from `/term` | `$02` — wraps down past the unused ids |
+| Alt+Right three times | `$00`; `/term`'s screen text unchanged, each terminal's prompt in its own buffer |
+| `1B 21` runs A / B / C from the section above | `$01` / `$00` / `$00` with `TermCnt=1`, as before |
+| `shell i=/vt1&`, `display 1b 21 >/vt1`, `ex` on `/vt1` | `TermTerm` falls back through the `GF.PullBuf` wrapper: `LiveTerm=$00`, `TermCnt=1`, `/term` intact |
+
+grfdrv's re-entry counter stayed 0 in every run.  The round trip was checked by
+text, not buffer checksums: Shell+'s sign-on timestamp differs run to run, so a
+no-switch control run cannot match byte for byte.
+
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and
 ## verified in MAME; boot still doesn't reach a shell; root cause of the
@@ -1703,7 +1938,7 @@ Replaced the old `V.EscVect` chained-vector parser with
   `CurXY`, `FColor/BColor/Border` (`FGCUpdate` shared tail), `ChgForePal/
   ChgBackPal` (merged: `clrb`/`ldb #1` + shared `ChgPal`), `DWSelect/DWEnd/
   DefColr/BoldSw` (`rts` stubs), `$1F` attr stubs `ULOn/ULOff/BlkOn/BlkOff`,
-  `InsLine/DelLine` (`rts` stubs — real behaviour still TODO, see §5).
+  `InsLine/DelLine` (`rts` stubs at the time — implemented 2026-09-12).
 
 ### 2. Cursor position tracking — `CalcCurPos`
 `V.CurPos` (linear text-map cell) is what `PutGlyph` writes at. New helper
@@ -1754,8 +1989,8 @@ assert in `wildbits_vtio.d` guards `V.Last > 256`.
 ## 5. Still TODO (functional, not blocking assembly)
 
 - **The boot hang** (see below).
-- `InsLine` / `DelLine` ($1F 30/31) are `rts` stubs — real row-memmove
-  grfdrv ops still to write (model on `ScrollLive`/`GWScroll`).
+- ~~`InsLine` / `DelLine` ($1F 30/31) are `rts` stubs~~ — done 2026-09-12
+  (Delete Line through `ScrollLive`/`ScrollShadow`, Insert Line as `GF.InsLine`).
 - `ScrollShadow` `gr.DATImg+4` → `+6`.
 - Stale comments mentioning "GF.Write" / "WO.*" (cosmetic).
 - `ChgForePal` byte order assumed BGRA (`gr.WOff`=B/G, `gr.WCount`=R/A) —

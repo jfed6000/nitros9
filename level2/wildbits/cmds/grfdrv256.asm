@@ -241,6 +241,7 @@ FuncTbl
 		    fdb	      GrfMod+GFBmFree	  ; b=20
 		    fdb	      GrfMod+GFBmPalet	  ; b=21
                     fdb       GrfMod+GFInsLine    ; b=22
+                    fdb       GrfMod+GFSwitch     ; b=23
 
 
 *******************************************************************
@@ -448,7 +449,10 @@ end@                clrb
 ;;;
 ;;; Exit:  Nothing. This just copies values
 ;;;
-PushBuf             lbsr      SetBlkC2C3
+PushBuf             lbsr      PushCore
+                    jmp       >GrfMod+SysRet
+* PushCore - GF.PushBuf's body, also called by GFSwitch.  Exit U = gr.U5.
+PushCore            lbsr      SetBlkC2C3
                     pshs      y,u
                     ldy       #$6000+T.TXT copy text from $C2
                     ldu       #$2000
@@ -521,7 +525,7 @@ PushBuf             lbsr      SetBlkC2C3
 * does; SS.AScrn is the only way in.
                     puls      y,u
 end@                clrb
-                    jmp       >GrfMod+SysRet
+                    rts
 
 ; Take a block number in a (b = 0) and return the high and middle bytes of
 ; its physical address in d.  Addr2Blk, the inverse, went with PushBuf's
@@ -538,7 +542,10 @@ Blk2Addr            lsra
 ;;;
 ;;; Exit:  Nothing. This just copies values
 ;;;
-PullBuf             lbsr      SetBlkC2C3
+PullBuf             lbsr      PullCore
+                    jmp       >GrfMod+SysRet
+* PullCore - GF.PullBuf's body, also called by GFSwitch.  Exit U = gr.U5.
+PullCore            lbsr      SetBlkC2C3
                     pshs      y,u
                     ldu       #$6000+T.TXT restore text to $C2
                     ldy       #$2000
@@ -623,7 +630,7 @@ PullBuf             lbsr      SetBlkC2C3
                     lbsr      CpyBlk
                     puls      y,u
 end@                clrb
-                    jmp       >GrfMod+SysRet
+                    rts
 
 
 EraseLine	    lbsr      SetBlkC2C3
@@ -741,6 +748,155 @@ iplp@               lda       ,-u
                     leax      -1,x
                     bne       iplp@
                     puls      x,pc
+
+*******************************************************************
+* GFSwitch - GF.Switch (op 23): change the live terminal.
+* Moved here from vtio's SwitchTerm to take it out of the bootfile;
+* vtio's AltISR only checks gr.Busy and issues the op.
+* gr.SwitchReq: SW.Next / SW.Prev walk the ids to the next T.Init
+* entry, SW.Goto (1B 21) takes the id in gr.SwitchTerm.  The request is
+* always cleared.  Everything touched is reachable from this map: gr.*
+* and D.KbdSta in block 0, the cursor registers in the $FFxx I/O page,
+* each terminal's statics through slot 5 (SetBlkC2C3).
+* CC is saved and restored: SysRet hands grfdrv's CC back to the caller.
+*******************************************************************
+GFSwitch            pshs      cc
+                    orcc      #IntMasks
+                    lda       >gr.SwitchReq
+                    lbeq      GSDone
+                    lda       >gr.LiveTerm
+                    cmpa      #$FF
+                    lbeq      GSDone
+                    ldb       >gr.SwitchReq
+                    cmpb      #SW.Goto
+                    beq       GSGoto
+                    tfr       a,b
+                    lslb
+                    lslb
+                    lslb                          B = ID * gr.TermSz
+                    tst       >gr.SwitchReq
+                    bmi       GSPrev
+                    bra       GSNext
+* SW.Goto: re-check T.Init - the terminal can have closed since DWSelect.
+GSGoto              lda       >gr.SwitchTerm
+                    cmpa      #G.TermMax
+                    lbhs      GSDone
+                    cmpa      >gr.LiveTerm
+                    lbeq      GSDone
+                    tfr       a,b
+                    lslb
+                    lslb
+                    lslb
+                    ldx       #gr.TermTbl
+                    abx
+                    pshs      a
+                    lda       T.Flags,x
+                    bita      #T.Init
+                    puls      a
+                    lbeq      GSDone
+                    bra       GSFound
+GSPrev              deca
+                    subb      #gr.TermSz
+                    bpl       GSChkPrev
+                    lda       #G.TermMax-1
+                    ldb       #(G.TermMax-1)*gr.TermSz
+GSChkPrev           cmpa      >gr.LiveTerm
+                    lbeq      GSDone
+                    ldx       #gr.TermTbl
+                    abx
+                    pshs      a
+                    lda       T.Flags,x
+                    bita      #T.Init
+                    puls      a
+                    beq       GSPrev
+                    bra       GSFound
+GSNext              inca
+                    addb      #gr.TermSz
+                    cmpa      #G.TermMax
+                    blo       GSChkNext
+                    clra
+                    clrb
+GSChkNext           cmpa      >gr.LiveTerm
+                    lbeq      GSDone
+                    ldx       #gr.TermTbl
+                    abx
+                    pshs      a
+                    lda       T.Flags,x
+                    bita      #T.Init
+                    puls      a
+                    beq       GSNext
+* A = new id, B = its table offset.  Save the live terminal first.
+GSFound             pshs      d                   0,s = new id, 1,s = new offset
+                    ldb       >gr.LiveTerm
+                    lslb
+                    lslb
+                    lslb
+                    ldx       #gr.TermTbl
+                    abx                           X = old entry
+                    lda       T.Flags,x
+                    anda      #^T.Live
+                    sta       T.Flags,x
+                    lbsr      GSTermPtrs
+                    lbsr      PushCore            exits U = old statics (slot 5)
+                    clr       V.TermLive,u
+* Then bring in the new one.  D.KbdSta takes T.StatPtr, the system
+* address - never U, which is this map's slot-5 alias (keys go nowhere).
+                    ldb       1,s
+                    ldx       #gr.TermTbl
+                    abx                           X = new entry
+                    lda       T.Flags,x
+                    ora       #T.Live
+                    sta       T.Flags,x
+                    lbsr      GSTermPtrs
+                    ldd       T.StatPtr,x
+                    std       >D.KbdSta
+                    lbsr      PullCore            exits U = new statics (slot 5)
+                    lda       #1
+                    sta       V.TermLive,u
+                    puls      d
+                    sta       >gr.LiveTerm
+* Clamp V.CurRow and resync V.CurPos (a DWSet can leave the row past the
+* window), then put the hardware cursor there.
+                    lbsr      GSCalcPos
+                    ldx       #TXT.Base
+                    lda       V.CurCol,u
+                    sta       VKY_TXT_CURSOR_X_REG_L,x
+                    lda       V.CurRow,u
+                    sta       VKY_TXT_CURSOR_Y_REG_L,x
+GSDone              clr       >gr.SwitchReq
+                    puls      cc
+                    clrb
+                    jmp       >GrfMod+SysRet
+* GSTermPtrs - vtio's SetTermGrfPtrs: aim gr.TermBlk/VStaStorU/VBlk/U5
+* at one terminal.  Entry X = its gr.TermTbl entry.  Clobbers D.
+GSTermPtrs          ldb       T.Block,x
+                    stb       >gr.TermBlk
+                    ldd       T.StatPtr,x
+                    std       >gr.VStaStorU
+                    lda       T.VBlk,x
+                    sta       >gr.VBlk
+                    ldd       T.grU5,x
+                    std       >gr.U5
+                    rts
+* GSCalcPos - vtio's CalcCurPos: clamp V.CurRow to V.WHeight-1, then
+* V.CurPos = V.CurRow * V.WWidth + V.CurCol.  Entry U = statics.
+GSCalcPos           lda       V.WHeight,u
+                    beq       GSCPZero            degenerate window - cell 0
+                    cmpa      V.CurRow,u
+                    bhi       GSCPRow
+                    deca
+                    sta       V.CurRow,u
+GSCPRow             lda       V.CurRow,u
+                    ldb       V.WWidth,u
+                    mul
+                    addb      V.CurCol,u
+                    adca      #0
+                    std       V.CurPos,u
+                    rts
+GSCPZero            clra
+                    clrb
+                    std       V.CurPos,u
+                    rts
 
 
 PSGInit             lbsr      SetBlkC4

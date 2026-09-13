@@ -105,10 +105,12 @@ HandleKeySwtchTrm   lda       >gr.SwitchReq
                     tst       >gr.Busy
                     bne       AltISRCont
                     lda       #$AA
-                    sta       $12E5              about to SwitchTerm
-                    lbsr      SwitchTerm
+                    sta       $12E5              about to GF.Switch
+* The switch itself lives in grfdrv (GF.Switch); CallGrfDrv2 keeps U.
+                    ldb       #GF.Switch
+                    lbsr      CallGrfDrvNoPD
                     lda       #$55
-                    sta       $12E6              SwitchTerm returned
+                    sta       $12E6              GF.Switch returned
                     lda       >gr.LiveTerm
                     sta       $12E7
 AltISRCont
@@ -584,7 +586,7 @@ CallGrfDrvGo        orcc      #Entire
 * shared stack, so a second entrant silently overwrites the first.  The
 * gbusy path below is deliberately still unused - gating here would turn
 * silent corruption into a stall, and because gr.Busy is what the AltISR
-* tests before SwitchTerm (line 105) and PSGOff (line 126), that stall
+* tests before GF.Switch (line 105) and PSGOff (line 126), that stall
 * would freeze Alt-arrow switching for its duration.
 *
 * It should be unreachable: a driver cannot be preempted mid-call (slice
@@ -635,153 +637,6 @@ SetTermGrfPtrs      pshs      d,x,y,u
 		    ldd	      T.grU5,x
 		    std	      >gr.U5
                     puls      d,x,y,u,pc
-
-*******************************************************************
-* SwitchTerm — copied from wildbits vtio (unique labels: lwasm @
-* locals die across a blank line; distant targets use lbeq/lbra).
-* Called from AltISR via CallGrfDrvNoPD. GF.PushBuf=8 GF.PullBuf=9.
-* SetTermGrfPtrs before each Push/Pull.
-*******************************************************************
-SwitchTerm
-                    pshs      cc,d,x,y,u
-                    orcc      #IntMasks
-                    lda       >gr.SwitchReq
-                    lbeq      SwDone
-                    lda       >gr.LiveTerm
-                    cmpa      #$FF
-                    lbeq      SwDone
-                    ldb       >gr.SwitchReq
-                    cmpb      #SW.Goto
-                    beq       SwGoto
-                    tfr       a,b
-                    lslb
-                    lslb                    B = ID * gr.TermSz
-		    lslb
-                    tst       >gr.SwitchReq
-                    bmi       SwFindPrev
-                    bra       SwFindNext
-* SW.Goto (1B 21): switch straight to the id DWSelect left in
-* gr.SwitchTerm.  Re-check T.Init - the terminal can have been closed
-* between the write and this tick.
-SwGoto
-                    lda       >gr.SwitchTerm
-                    cmpa      #G.TermMax
-                    lbhs      SwDone
-                    cmpa      >gr.LiveTerm
-                    lbeq      SwDone
-                    tfr       a,b
-                    lslb
-                    lslb                    B = ID * gr.TermSz
-		    lslb
-                    ldx       #gr.TermTbl
-                    abx
-                    pshs      a
-                    lda       T.Flags,x
-                    bita      #T.Init
-                    puls      a
-                    lbeq      SwDone
-                    bra       SwFound
-SwFindPrev
-                    deca
-                    subb      #gr.TermSz
-                    bpl       SwChkPrev
-                    lda       #G.TermMax-1
-                    ldb       #(G.TermMax-1)*gr.TermSz
-SwChkPrev
-                    cmpa      >gr.LiveTerm
-                    lbeq      SwDone
-                    ldx       #gr.TermTbl
-                    abx
-                    pshs      a
-                    lda       T.Flags,x
-                    bita      #T.Init
-                    puls      a
-                    beq       SwFindPrev
-                    bra       SwFound
-SwFindNext
-                    inca
-                    addb      #gr.TermSz
-                    cmpa      #G.TermMax
-                    blo       SwChkNext
-                    clra
-                    clrb
-SwChkNext
-                    cmpa      >gr.LiveTerm
-                    lbeq      SwDone
-                    ldx       #gr.TermTbl
-                    abx
-                    pshs      a
-                    lda       T.Flags,x
-                    bita      #T.Init
-                    puls      a
-                    beq       SwFindNext
-SwFound
-                    pshs      d               A=new ID, B=new offset
-                    lda       >gr.LiveTerm
-                    tfr       a,b
-                    lslb
-                    lslb
-		    lslb
-                    ldx       #gr.TermTbl
-                    abx
-                    lbsr      SetTermGrfPtrs
-                    ldb       #GF.PushBuf
-                    lbsr      CallGrfDrvNoPD
-                    bcs       SwFail
-* Flip0 leaves U = LUT-1 VSta alias ($6000 -> $A000). Recompute
-* table ptrs; never stu D.KbdSta from that alias (keys go nowhere).
-                    ldb       >gr.LiveTerm     use terminal number to get TermTbl idx
-                    lslb      		       each row is 8 bytes	         
-                    lslb		       multiply by 8 to get term row offset
-		    lslb
-                    ldx       #gr.TermTbl
-                    abx
-                    lda       T.Flags,x
-                    anda      #^T.Live
-                    sta       T.Flags,x
-                    ldu       T.StatPtr,x
-                    clr       V.TermLive,u
-                    ldd       ,s              A=new ID, B=new offset
-                    ldx       #gr.TermTbl
-                    abx
-                    lbsr      SetTermGrfPtrs
-                    ldb       #GF.PullBuf
-                    lbsr      CallGrfDrvNoPD
-                    bcs       SwFail
-                    ldd       ,s
-                    ldx       #gr.TermTbl
-                    abx
-                    lda       T.Flags,x
-                    ora       #T.Live
-                    sta       T.Flags,x
-                    ldd       T.StatPtr,x
-                    std       >D.KbdSta
-                    std       >gr.VStaStorU
-                    ldu       >D.KbdSta
-                    lda       #1
-                    sta       V.TermLive,u
-                    puls      d
-                    sta       >gr.LiveTerm
-                    lda       V.CurCol,u
-                    ldx       #TXT.Base
-                    sta       VKY_TXT_CURSOR_X_REG_L,x
-                    lda       V.CurRow,u
-                    cmpa      V.WHeight,u
-                    blo       SwCurY
-                    lda       V.WHeight,u
-                    beq       SwCurY
-                    deca
-                    sta       V.CurRow,u
-SwCurY              sta       VKY_TXT_CURSOR_Y_REG_L,x
-* The clamp above can have moved V.CurRow; resync the cached cell offset
-* so the new live term's first PutGlyph paints where the cursor now is.
-                    lbsr      CalcCurPos
-                    lbra      SwDone
-SwFail
-                    puls      d
-SwDone
-                    clr       >gr.SwitchReq
-                    puls      cc,d,x,y,u,pc
 
 *******************************************************************
 * TermTerm — copied from wildbits vtio. PullBuf uses CallGrfDrvNoPD
