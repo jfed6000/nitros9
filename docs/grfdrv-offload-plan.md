@@ -1,5 +1,11 @@
 # Moving vtio work into grfdrv256 — implementation plan
 
+> **DONE 2026-09-13.**  All five items are implemented and committed:
+> `7155730f` (1), `d387d235` (2), `e1f2627c` (4), `07a6f4a4` (3 + 5).  The user
+> board-tested the K2 build; jr2 is tested in MAME.  vtio 4,229 → 3,795 bytes,
+> margin 643 → 1,077.  The follow-on plan is `docs/vtio-shrink-plan.md`.  This
+> file is kept as the record of how the work was specified.
+
 Written 2026-09-13 for a fresh session.  Branch `wb/multiterm`, baseline commit
 `735713c7` (switching and `TermTerm`'s fall-back already moved: `GF.Switch`,
 `GF.TermGone`; K2 build tested on the board by the user, "looks good").
