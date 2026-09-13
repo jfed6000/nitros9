@@ -32,11 +32,13 @@ MAME for all five items: dead code and probes, sound chip setup into
 good"); the Jr2 build is MAME only.  **Next work:** `docs/vtio-shrink-plan.md` —
 SetStat/GetStat forwarding, the escape parser into grfdrv (`GF.Ctrl`), terminal
 setup, `InitDisplay`, and a final squeeze, aiming at roughly 1,950 bytes of
-vtio.
+vtio.  Its item 1, deleting `SSDMAFill`, is done in MAME (vtio 3,750, margin
+1,122).
 
 The sections below are in date order, oldest first; the newest is
-**`SS.AScrn` moved into grfdrv: `GF.AScrn`, and `CallGrfDrvRet`** (2026-09-13),
-after **`SS.DfPal` moved into grfdrv: `GF.DfPal`**, after
+**`SSDMAFill` deleted** (2026-09-13), after
+**`SS.AScrn` moved into grfdrv: `GF.AScrn`, and `CallGrfDrvRet`**, after
+**`SS.DfPal` moved into grfdrv: `GF.DfPal`**, after
 **Sound chip setup moved into `GF.PSGInit`**,
 **Dead code and unread probes removed from vtio** and
 **`TermTerm`'s fall-back moved too: `GF.TermGone`** (same day), after
@@ -1831,6 +1833,43 @@ the block number as its status; `ascarg` asks for bitmap 3.
 Remaining dump differences: the statics block (`gr.VBlk` `$02` → `$01`, vtio
 is smaller), banner timestamps in buffer sums, and stale RAM in buffer blocks
 and never-loaded `T.CLUTn`.
+
+### `SSDMAFill` deleted  (2026-09-13, same day)
+
+Item 1 of `docs/vtio-shrink-plan.md`.  Verified in MAME `wbjr2`; only
+`l2`/`jr2` rebuilt.
+
+`SS.DMAFill` (`$B0`) had no callers anywhere in the tree, and the handler could
+not have worked:
+- it read the caller's control block at `R$X` through the system map;
+- `lda DMF$DstAddrLow,x` was followed by `stb DMA_DEST_ADDR_L,y`, so the low
+  address byte got `B`;
+- `stb DMA_DATA_2_WRITE` had no `,y`, so it wrote system address `$0001`;
+- it started the transfer before loading the parameters.
+
+Deleted from `level2/wildbits/modules/vtio.asm`: the `SS.DMAFill equ $B0`, the
+SetStat compare/branch, the `DMF$*` equates and the routine.  `SS.DMAFill` now
+falls through to `E$UnkSvc`.  `level1/wildbits/modules/vtio.asm` has the same
+broken code and is left alone; the Level 2 vtio is never assembled for Level 1.
+If a DMA fill is ever wanted, write it as a grfdrv SetStat handler that reads
+the control block through `gr.PDAT`.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 3,795 | 3,750 |
+| `grfdrv256` | 2,408 | 2,408 |
+| bootfile modules | 31,179 | 31,134 |
+| margin to 32,256 | 1,077 | 1,122 |
+
+**Verification:** the regression set on a baseline disk built from the
+unchanged source and on the new disk, side by side.  Both give `LiveTerm`
+`$01`/`$02`/`$00`/`$02` for Alt+Right ×1/×2/×3 and Alt+Left, `TermCnt=3`;
+`ex` `$00`, `TermCnt=2` with `/vt2`'s prompt intact; `1b 21` to `/vt1` `$01`,
+back to `/term` `$00`; `1b 21` then `>/vt2` `$00`, `TermCnt=1`, no error;
+`shell i=/vt&` then Alt+Right `$01`, `TermCnt=2`; `display 07` then `echo ok`
+prints `ok`; re-entry count 0 in every run.  The only dump differences are
+banner timestamps in buffer blocks `$3A-$3E`, and stale RAM in block `$3F` and
+in the never-loaded `T0.CLUT1/2`.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and

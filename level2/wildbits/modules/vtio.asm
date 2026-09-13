@@ -2201,7 +2201,6 @@ GSDfPal
 *    CC = carry set on error
 *    B  = error code
 *
-SS.DMAFill          equ       $B0
 SetStat             ldx       PD.RGS,y            get caller's registers in X
                   IFGT    Level-1
                     cmpa      #SS.Open            path open (SCF); /vt factory here
@@ -2211,8 +2210,6 @@ SetStat             ldx       PD.RGS,y            get caller's registers in X
                     lbeq      SSSig               yes, go process
                     cmpa      #SS.Relea           release signal on data ready?
                     lbeq      SSRelea             yes, go process
-                    cmpa      #SS.DMAFill         DMA Fill?
-                    lbeq      SSDMAFill
                     cmpa      #SS.Tone
                     lbeq      SSTone
                     ifgt Level-1                                            
@@ -2324,36 +2321,6 @@ SSTone              ldy       R$Y,x               check for 0-1023 range
  
 BadArgs             comb                          Exit with Illegal Argument error
                     ldb       #E$IllArg
-                    rts
-
-* SS.DMAFill - fill memory
-DMF$DstAddrHi       equ       0
-DMF$DstAddrMid      equ       1
-DMF$DstAddrLow      equ       2
-DMF$DstSizeHi       equ       3
-DMF$DstSizeMid      equ       4
-DMF$DstSizeLow      equ       5
-DMF$FillValue       equ       6
-
-SSDMAFill           ldy       #DMA.Base
-                    lda       #DMA_CTRL_Fill|DMA_CTRL_Start_Trf
-                    sta       DMA_CTRL_REG,y
-                    ldx       R$X,x               get pointer to the DMA control block
-                    ldd       DMF$DstAddrHi,x
-                    sta       DMA_DEST_ADDR_H,y
-                    stb       DMA_DEST_ADDR_M,y
-                    lda       DMF$DstAddrLow,x
-                    stb       DMA_DEST_ADDR_L,y
-                    ldd       DMF$DstSizeHi,x
-                    sta       DMA_SIZE_1D_H,y
-                    stb       DMA_SIZE_1D_M,y
-                    ldd       DMF$DstSizeLow,x
-                    sta       DMA_SIZE_1D_L,y
-                    stb       DMA_DATA_2_WRITE
-                    lda       DMA_CTRL_REG,y
-                    ora       #DMA_CTRL_Start_Trf
-                    sta       DMA_CTRL_REG,y
-* The CPU halts here until the transfer is complete.
                     rts
 
 * SS.SSig - send signal on data ready

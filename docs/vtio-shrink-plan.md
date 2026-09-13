@@ -5,6 +5,8 @@ Written 2026-09-13 for a fresh session.  Branch `wb/multiterm`, baseline commit
 `docs/grfdrv-offload-plan.md`, is finished: all five items are done in MAME, and
 the user tested the K2 build on the board ("K2 looks good").
 
+**Progress:** item 1 done in MAME 2026-09-13 (vtio 3,750, jr2 margin 1,122).
+
 **Find code by label, not by line number.**  Line numbers go stale after the first edit.
 
 History for everything referenced here is in `docs/wildbits-vtio-rewrite.md`.
@@ -284,10 +286,9 @@ else goes the same way to `GF.SetStt`.  Pass the code in `gr.b1`, not
 put the code in the caller's `R$B` the way `I$GetStt`/`I$SetStt` do.  Store
 `gr.b1` **before** `SetThisTermGrfPtrs`, which clobbers `A`.
 
-Check whether `level2/wildbits/modules/vtio.asm` is ever assembled at Level 1
-(`recipes/wildbits/wildbits.mak`, the `AFLAGS` include lines).  If it isn't,
-the `IFGT Level-1` blocks in GetStat/SetStat are dead; otherwise keep the new
-code inside them.
+`level2/wildbits/modules/vtio.asm` is never assembled for Level 1 (confirmed
+by the user), so the `IFGT Level-1` conditionals in GetStat/SetStat are always
+true.  The new code does not need them.
 
 **grfdrv `GFGetStt` (27) and `GFSetStt` (28):** `lbsr SetBlkC2C3` (U = statics),
 `ldx #gr.PDRGS`, scan a table of `fcb code / fdb handler-table` entries, then
