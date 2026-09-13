@@ -243,6 +243,7 @@ FuncTbl
                     fdb       GrfMod+GFInsLine    ; b=22
                     fdb       GrfMod+GFSwitch     ; b=23
                     fdb       GrfMod+GFTermGone   ; b=24
+                    fdb       GrfMod+GFDfPal      ; b=25
 
 
 *******************************************************************
@@ -954,6 +955,97 @@ GSCPZero            clra
                     clrb
                     std       V.CurPos,u
                     rts
+
+
+*******************************************************************
+* GF.DfPal (b25) - SS.DfPal for this terminal.  vtio aims gr.TermBlk,
+*   gr.VBlk and gr.U5 first and calls through CallGrfDrv, so gr.PDRGS
+*   holds the caller's R$X = CLUT # 0-3 and R$Y = 1K of palette data,
+*   and gr.PDAT the caller's DAT image.
+* The 1K goes to T.CLUTn in the terminal's 16K switch buffer - offset
+* $1000+n*$400 of the SECOND block of the pair, the same offsets the
+* CLUTs have in $C1 - and, when the terminal is live or has no buffer
+* yet, to the live CLUT in $C1.
+*   slot 1  the caller's block holding R$Y (source $2000 + R$Y&$1FFF)
+*   slot 2  the caller's next block, only when the 1K crosses into it
+*   slot 3  $C1              slot 4  second buffer block (SetBlkC2C3)
+* Exit: B = 0, or carry + E$IllArg (CLUT # above 3, or the 1K runs off
+*   the top of the caller's map).
+*******************************************************************
+GFDfPal             ldd       >gr.PDRGS+R$X       CLUT #
+                    cmpd      #3
+                    lbhi      DfPalBad
+                    lslb
+                    lslb                          B = high byte of n*$400
+                    pshs      b
+                    lbsr      SetBlkC2C3          U = this terminal's statics
+                    lda       V.TermLive,u
+                    ldb       V.TermBufBlk,u
+                    pshs      d                   ,s = live  1,s = buffer blk  2,s = n*4
+                    ldd       >gr.PDRGS+R$Y       source address in the caller
+                    anda      #$1F
+                    addd      #$2000
+                    tfr       d,u                 U = source as seen through slot 1
+                    ldb       >gr.PDRGS+R$Y
+                    lsrb
+                    lsrb
+                    lsrb
+                    lsrb
+                    lsrb                          B = caller slot 0-7
+                    lslb
+                    ldx       #gr.PDAT+1          low byte of each 2-byte entry
+                    abx                           X -> caller's block for that slot
+                    pshs      cc
+                    orcc      #IntMasks
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    clra
+                    ldb       ,x
+                    stb       MMU_SLOT_1 $2000
+                    std       >gr.DATImg+2
+                    cmpu      #$4000-$400         does the 1K end inside slot 1?
+                    bls       DfPalMapped
+                    cmpx      #gr.PDAT+15         slot 7 has no next block
+                    beq       DfPalOff
+                    ldb       2,x
+                    stb       MMU_SLOT_2 $4000
+                    std       >gr.DATImg+4
+DfPalMapped         puls      cc
+                    tst       1,s
+                    beq       DfPalLive           no buffer yet: live CLUT only
+                    lda       2,s
+                    adda      #$90                $8000 + $1000 + n*$400
+                    clrb
+                    tfr       d,y
+                    pshs      u
+                    ldd       #$400
+                    lbsr      CpyBlk
+                    puls      u
+                    tst       ,s                  live?
+                    beq       DfPalDone           no - PullBuf programs it on the switch
+DfPalLive           pshs      cc
+                    orcc      #IntMasks
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    clra
+                    ldb       #$C1
+                    stb       MMU_SLOT_3 $6000
+                    std       >gr.DATImg+6
+                    puls      cc
+                    lda       2,s
+                    adda      #$70                $6000 + $1000 + n*$400
+                    clrb
+                    tfr       d,y
+                    ldd       #$400
+                    lbsr      CpyBlk
+DfPalDone           leas      3,s
+                    clrb
+                    jmp       >GrfMod+SysRet
+DfPalOff            puls      cc
+                    leas      3,s
+DfPalBad            comb
+                    ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
 
 
 *******************************************************************

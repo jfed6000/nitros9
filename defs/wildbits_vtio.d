@@ -435,6 +435,7 @@ GF.BmPalet          equ       21        ; bitmap: assign CLUT
 GF.InsLine          equ       22        ; 1F 30 insert line at V.CurRow (reads DSS)
 GF.Switch           equ       23        ; change live terminal per gr.SwitchReq (AltISR)
 GF.TermGone         equ       24        ; terminal id gr.b1 is closing (vtio TermTerm)
+GF.DfPal            equ       25        ; SS.DfPal: 1K at caller R$Y -> CLUT R$X (buffer + live)
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 

@@ -25,11 +25,12 @@ tree also carries a deliberately
 commit it along with other work.
 
 Moving more vtio work into grfdrv follows `docs/grfdrv-offload-plan.md`; items 1
-(dead code and probes) and 2 (sound chip setup into `GF.PSGInit`) are done,
-margin 643 → 863.
+(dead code and probes), 2 (sound chip setup into `GF.PSGInit`) and 4
+(`SS.DfPal` into `GF.DfPal`) are done, margin 643 → 1,011.
 
 The sections below are in date order, oldest first; the newest is
-**Sound chip setup moved into `GF.PSGInit`** (2026-09-13), after
+**`SS.DfPal` moved into grfdrv: `GF.DfPal`** (2026-09-13), after
+**Sound chip setup moved into `GF.PSGInit`**,
 **Dead code and unread probes removed from vtio** and
 **`TermTerm`'s fall-back moved too: `GF.TermGone`** (same day), after
 **Switching moved into grfdrv: `GF.Switch`** and **`1B 21` Select** (same day) and **Insert Line and Delete Line** (2026-09-12),
@@ -1716,6 +1717,59 @@ low byte, go) in the same order, and `SYS1=$0C`; in the new build the Level 2
 `SYS1` write comes from grfdrv (PC `$C5CC`, `PSGInit`).  The earlier `SYS1` and
 codec writes at PC `$BCxx` in both logs are the FEU's Level 1 vtio before the
 handoff.
+
+### `SS.DfPal` moved into grfdrv: `GF.DfPal`  (2026-09-13, same day)
+
+Item 4 of `docs/grfdrv-offload-plan.md`.  Verified in MAME `wbjr2`; only
+`l2`/`jr2` rebuilt.
+
+**What moved.**  vtio's `SSDfPal` is now a three-instruction stub
+(`SetThisTermGrfPtrs`, `ldb #GF.DfPal`, `lbra CallGrfDrv`), and `DfPalMv`,
+`clutlookup`, `mapblock` and `clearblock` are gone.  grfdrv's `GFDfPal` (op 25)
+reads `R$X`/`R$Y` from `gr.PDRGS`, maps the caller's block holding `R$Y` at slot
+1 straight out of `gr.PDAT` - and the caller's next block at slot 2 when the 1K
+crosses its 8K boundary - and `CpyBlk`s the 1K to `T.CLUTn` in slot 4 (the
+second buffer block, from `SetBlkC2C3`) and, when the terminal is live or has no
+buffer yet, to `$C1` remapped at slot 3.  Same destinations and the same
+live/no-buffer rules as before; `F$MapBlk`/`F$Move`/`F$ClrBlk` and the
+`D.Proc` swap are no longer needed.  Every slot write is masked and mirrored
+into `gr.DATImg`.
+
+**New:** `R$X` above 3 is now `E$IllArg`; before, it indexed past `clutlookup`
+and moved 1K to an arbitrary offset.  A 1K that would run off the top of the
+caller's slot 7 is also `E$IllArg` (`F$Move` would have wrapped).
+
+| | before | after |
+|---|---|---|
+| `vtio` | 4,009 | 3,861 |
+| `grfdrv256` | 2,137 | 2,301 |
+| bootfile modules | 31,393 | 31,245 |
+| margin to 32,256 | 863 | 1,011 |
+
+**Verification**, on the `d387d235` disk and the new one side by side, with two
+throwaway commands copied onto both disks (not committed): `dftest` fills the
+same 1K pattern at data offset `$1E00` (crosses `$2000`) and `$0800`, then
+loads CLUT1 from the first and CLUT3 from the second; `dfarg` asks for CLUT 4.
+
+| test | both builds |
+|---|---|
+| `shellbg` on live `/term` | live CLUT2 and `T0.CLUT2` `$0044E9`; `BM2 ctl=$05 blk=$34` |
+| `shellbg` on `/vt1` after Alt+Right | live CLUT2 and `T1.CLUT2` `$004BCA` |
+| `shellbg >/vt1` from `/term` (background) | `T1.CLUT2` `$0044E9`; live CLUTs all still zero |
+| `dftest` on `/term` | live CLUT1 = CLUT3 = `T0.CLUT1` = `T0.CLUT3` = `$01FE00` |
+| `dftest >/vt1` (background, straddle) | `T1.CLUT1` = `T1.CLUT3` = `$01FE00`; live CLUTs zero |
+| `dfarg` (new build only) | `ERROR #187` (`E$IllArg`), CLUTs untouched |
+| regression set (new build) | all end states as expected, re-entry count 0 |
+
+`T.CLUTn` sums for CLUTs a run never loaded differ between the two disks: that
+is stale RAM in the buffer block (it starts `bootos9 `), not something either
+build wrote.  Not investigated, and identical in both builds: `shellbg` on
+`/vt1` lands a different CLUT2 sum (`$4BCA`) from `shellbg` on `/term`
+(`$44E9`).
+
+**Same limitation left elsewhere:** `GF.GSFntChar`/`GF.SSFntChar` map only the
+one caller block holding `R$X` (`GMapAddr2Blk`), so their 8 bytes still cannot
+cross an 8K boundary.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and

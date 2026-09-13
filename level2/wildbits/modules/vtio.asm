@@ -2789,131 +2789,13 @@ ok@                 clrb
 ;;;
 ;;; Exit:  B = A non-zero error code.
 ;;;       CC = Carry flag clear to indicate success
-* The same 1K goes to two places: this terminal's copy in its own 16K
-* switch buffer, and - only if this terminal is on screen - the live CLUT
-* in $C1.  Writing the buffer copy is what makes SS.DfPal from a
-* background terminal stop repainting the palette of the one you are
-* looking at, and it is also the half that survives if the graphics CLUTs
-* turn out not to read back: with the mirror maintained here, PushBuf's
-* capture (TermSaveCLUT) becomes redundant rather than load-bearing.
-*
-* T.CLUT0-3 sit at buffer offset $3000-$3FFF, which is offset
-* $1000-$1FFF of the SECOND block of the 16K pair - exactly the offsets
-* they have inside $C1, so clutlookup addresses both.
-SSDfPal             pshs      a,x,y,u
-                    tfr       x,y                 Y = caller register stack
-                    ldb       V.TermBufBlk,u
-                    beq       live@               no buffer yet: live CLUT only
-                    incb                          second block of the 16K pair
-                    clra
-                    tfr       d,x
-                    lbsr      DfPalMv             this terminal's copy
-                    bcs       end@
-                    ldu       5,s                 recover the driver static
-                    ldy       1,s                 and the caller register stack
-                    tst       V.TermLive,u        shadow terminal?
-                    beq       ok@                 yes - PullBuf will program it
-live@               ldx       #$C1                CLUT registers live in $C1
-                    lbsr      DfPalMv
-                    bcs       end@
-ok@                 clrb                          no error code
-end@                puls      u,y,x,a,pc
-
-* DfPalMv - move the caller's 1K palette into CLUT R$X of one block.
-*
-* Entry: X = block number to map ($C1, or the terminal's buffer block)
-*        Y = caller register stack (R$X = CLUT# 0-3, R$Y = source addr)
-* Exit:  carry clear, or carry set with B = error code.
-*        Clobbers A, B, X, Y, U.
-*
-* Dead-zone safe by construction: F$MapBlk hands back a logical address
-* that may be in slot 7, where $1D00-$1FFF is shadowed by the I/O
-* overlays and CLUT3 ($1C00) would straddle it - but F$Move resolves the
-* destination through the DAT image into the kernel's own window and
-* F$ClrBlk only edits the map, so neither ever dereferences it here.
-DfPalMv             pshs      y                   keep the caller register stack
-                    lbsr      mapblock            U = logical address of the block
-                    bcs       mverr@
-                    pshs      u                   keep the base for clearblock
-                    ldy       2,s
-                    lda       R$X+1,y             CLUT # 0-3
-                    lsla                          two bytes per lookup entry
-                    leax      clutlookup,pcr
-                    ldd       a,x
-                    leau      d,u                 U = this CLUT within the block
-                    ldx       R$Y,y               X = source in the caller's map
-                    ldy       <D.Proc             Get caller process
-                    lda       P$Task,y            a=source Task# (Caller)
-                    ldb       <D.SysTsk           b=dest Task# (System)
-                    ldy       #$400               moving 1K
-                    os9       F$Move              copy data
-                    pshs      cc,b                hold the result across clearblock
-                    ldu       2,s                 the block base, not the CLUT address
-                    lbsr      clearblock
-                    puls      cc,b
-                    leas      4,s                 drop base + caller register stack
-                    rts
-mverr@              leas      2,s
-                    rts
-
-clutlookup          fdb       $1000,$1400,$1800,$1C00
-
-
-;;; mapblock
-;;; Map a block into the system process map
-;;;
-;;; Entry:  X = block to map (like $C1)
-;;;
-;;; Exit:   U = address of first block
-;;;         B = a non-zero error code (F$MapBlk)
-;;;        CC = carry flag clear=success set=error
-;;;
-;;; F$MapBlk only works to map for the current processin D.Proc
-;;; To use F$MapBlk for the system, assign system to D.Proc
-;;; Call F$MapBlk, then change the processes back
-;;; Make sure to mask interrupts so processes don't switch while
-;;; the change is happening
-;;;
-;;; Does not preserve a,b,x,y,u
-mapblock            pshs      cc                  push cc and mask interrupts
-                    orcc      #IntMasks
-                    ldy       <D.Proc             ldy with current process descriptor
-                    pshs      y                   store current proc descriptor on stack
-                    ldy       <D.SysPrc           copy system proc descriptor to current
-                    sty       <D.Proc
-                    ldb       #$01                map 1 block at address x (x set on entry) 
-                    os9       F$MapBlk
-                    puls      y                   pull current proc descriptor from stack
-                    sty       <D.Proc             and save it back
-                    bcs       errnomap@           if F$MapBlok error, then handle error
-                    puls      cc,pc               if no error, pull cc and return
-errnomap@           puls      cc                  if error, pull cc
-                    coma                          set carry bit
-                    rts                           and return
-;;; clearblock
-;;; clear a mapped block from the system process map
-;;;
-;;; Entry:  U = address of first block to clear
-;;;
-;;; Exit:   Nothing
-;;;
-;;; F$ClrBlk only works with the current process, so assign
-;;; system process to current process, clear the block
-;;; then switch it back
-;;;
-;;; Does not preserve a,b
-
-clearblock          pshs      cc
-                    orcc      #IntMasks           u=logical address of block on entry
-                    ldd       <D.Proc
-                    pshs      d
-                    ldd       <D.SysPrc
-                    std       <D.Proc
-                    ldb       #$01                only clearing 1 block
-                    os9       F$ClrBlk            U=logical addr, B=# of blocks
-                    puls      d
-                    std       <D.Proc
-                    puls      cc,pc
+* grfdrv's GF.DfPal does the work: the 1K goes to T.CLUTn in this
+* terminal's 16K switch buffer and, when it is live (or has no buffer
+* yet), to the live CLUT in $C1.  CallGrfDrv hands grfdrv the caller's
+* registers and DAT image; B and carry come back.
+SSDfPal             lbsr      SetThisTermGrfPtrs
+                    ldb       #GF.DfPal
+                    lbra      CallGrfDrv
 
 * Block to Address: Convert block# to high 16 bits in D
 * b = block#, a = 0.  d = high 16 bits of address
