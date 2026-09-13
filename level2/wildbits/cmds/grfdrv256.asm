@@ -242,6 +242,7 @@ FuncTbl
 		    fdb	      GrfMod+GFBmPalet	  ; b=21
                     fdb       GrfMod+GFInsLine    ; b=22
                     fdb       GrfMod+GFSwitch     ; b=23
+                    fdb       GrfMod+GFTermGone   ; b=24
 
 
 *******************************************************************
@@ -839,21 +840,80 @@ GSFound             pshs      d                   0,s = new id, 1,s = new offset
                     lbsr      GSTermPtrs
                     lbsr      PushCore            exits U = old statics (slot 5)
                     clr       V.TermLive,u
-* Then bring in the new one.  D.KbdSta takes T.StatPtr, the system
-* address - never U, which is this map's slot-5 alias (keys go nowhere).
-                    ldb       1,s
+                    puls      d
+                    lbsr      GSEnter             then bring in the new one
+GSDone              clr       >gr.SwitchReq
+                    puls      cc
+                    clrb
+                    jmp       >GrfMod+SysRet
+*******************************************************************
+* GFTermGone - GF.TermGone (op 24): a terminal is closing (vtio TermTerm).
+* Entry gr.b1 = its id.  vtio has already checked T.Init and that the
+* entry belongs to the closing static; T.Init is checked again here so the
+* op is safe on its own.  The flags are read once, THEN cleared - so the
+* AltISR can no longer switch to this terminal - and the live decision
+* uses the copy.  vtio still frees T.Block and clears the rest of the
+* entry.  If it was live, the lowest open id takes over (the cleared entry
+* fails the T.Init test, so the search skips it), else no terminal is live.
+* gr.SwitchReq is left alone: a pending Alt+arrow still runs next tick.
+*******************************************************************
+GFTermGone          pshs      cc
+                    orcc      #IntMasks
+                    lda       >gr.b1
+                    cmpa      #G.TermMax
+                    bhs       GTDone
+                    ldb       #gr.TermSz
+                    mul
+                    ldx       #gr.TermTbl
+                    abx                           X = closing entry
+                    ldb       T.Flags,x           B = its flags, read once
+                    bitb      #T.Init
+                    beq       GTDone              not open - nothing to do
+                    clr       T.Flags,x           no switch can pick it now
+                    bitb      #T.Live
+                    beq       GTDone              was not on screen
+                    clra                          A = id, B = offset, from 0
+                    clrb
+GTFind              ldx       #gr.TermTbl
+                    abx
+                    pshs      a
+                    lda       T.Flags,x
+                    bita      #T.Init
+                    puls      a
+                    beq       GTSkip
+                    lbsr      GSEnter
+                    bra       GTDone
+GTSkip              inca
+                    addb      #gr.TermSz
+                    cmpa      #G.TermMax
+                    blo       GTFind
+                    lda       #$FF                none left open
+                    sta       >gr.LiveTerm
+                    clra
+                    clrb
+                    std       >D.KbdSta
+GTDone              puls      cc
+                    clrb
+                    jmp       >GrfMod+SysRet
+* GSEnter - make a terminal live: pull its buffer, point the keyboard and
+* gr.* at it, put the hardware cursor where it was.  Shared by GFSwitch
+* and GFTermGone.  Entry A = id, B = its table offset.  Exit U = its
+* statics (slot 5).
+GSEnter             pshs      a
                     ldx       #gr.TermTbl
                     abx                           X = new entry
                     lda       T.Flags,x
                     ora       #T.Live
                     sta       T.Flags,x
                     lbsr      GSTermPtrs
+* D.KbdSta takes T.StatPtr, the system address - never U, which is this
+* map's slot-5 alias (keys go nowhere).
                     ldd       T.StatPtr,x
                     std       >D.KbdSta
                     lbsr      PullCore            exits U = new statics (slot 5)
                     lda       #1
                     sta       V.TermLive,u
-                    puls      d
+                    puls      a
                     sta       >gr.LiveTerm
 * Clamp V.CurRow and resync V.CurPos (a DWSet can leave the row past the
 * window), then put the hardware cursor there.
@@ -863,10 +923,7 @@ GSFound             pshs      d                   0,s = new id, 1,s = new offset
                     sta       VKY_TXT_CURSOR_X_REG_L,x
                     lda       V.CurRow,u
                     sta       VKY_TXT_CURSOR_Y_REG_L,x
-GSDone              clr       >gr.SwitchReq
-                    puls      cc
-                    clrb
-                    jmp       >GrfMod+SysRet
+                    rts
 * GSTermPtrs - vtio's SetTermGrfPtrs: aim gr.TermBlk/VStaStorU/VBlk/U5
 * at one terminal.  Entry X = its gr.TermTbl entry.  Clobbers D.
 GSTermPtrs          ldb       T.Block,x

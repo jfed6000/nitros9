@@ -359,7 +359,7 @@ gr.TermTbl          RMB       72        ; Screen table base
 * The physical order below (b1 b2 d1 d2 b3 b4 b5) is historical, not
 * meaningful; it is kept so GrfMem offsets did not move in the rename.
 *******************************************************************
-gr.b1               rmb       1         ; unassigned - free parameter byte
+gr.b1               rmb       1         ; GF.TermGone: id of the closing terminal
 gr.b2               rmb       1         ; glyph / palette reg # / bitmap #
 gr.d1               rmb       2         ; cell offset / PSG freq / BM addr / LUT b0-1
 gr.d2               rmb       2         ; GF.Pal LUT bytes 2-3 / scroll end offset
@@ -434,6 +434,7 @@ GF.BmFree           equ       20        ; bitmap: zero the four registers
 GF.BmPalet          equ       21        ; bitmap: assign CLUT
 GF.InsLine          equ       22        ; 1F 30 insert line at V.CurRow (reads DSS)
 GF.Switch           equ       23        ; change live terminal per gr.SwitchReq (AltISR)
+GF.TermGone         equ       24        ; terminal id gr.b1 is closing (vtio TermTerm)
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 

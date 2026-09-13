@@ -639,8 +639,11 @@ SetTermGrfPtrs      pshs      d,x,y,u
                     puls      d,x,y,u,pc
 
 *******************************************************************
-* TermTerm — copied from wildbits vtio. PullBuf uses CallGrfDrvNoPD
-* (Term's Y is the device descriptor, not a path descriptor).
+* TermTerm - release this device's terminal.  The screen side - taking it
+* off the switch list and, if it was live, bringing in another terminal -
+* is grfdrv's GF.TermGone.  vtio frees the 16K buffer and clears the
+* table entry.  CallGrfDrv2 keeps U, so Term's later V.KeyDrvEPtr,u is
+* still this static.
 *******************************************************************
 TermTerm
                     pshs      x,y,u
@@ -652,68 +655,16 @@ TermTerm
                     lda       T.Flags,x
                     bita      #T.Init
                     lbeq      TermNotInit
-                    lda       T.Flags,x
-                    bita      #T.Live
-                    lbeq      TrmNotAct
+* V.TermID is written before InitTerm knows the id is free, and IOMan calls
+* Term after a failed Init - so make sure the entry really is ours.
+                    cmpu      T.StatPtr,x
+                    lbne      TermNotInit
                     ldb       V.TermID,u
-                    pshs      b,x
-                    clrb
-FindNextTerm
-                    cmpb      ,s
-                    beq       SkipSelf
-                    pshs      b
-                    lda       #gr.TermSz
-                    mul
-                    ldx       #gr.TermTbl
-                    leax      d,x
-                    lda       T.Flags,x
-                    bita      #T.Init
-                    puls      b
-                    bne       FoundNextTerm
-SkipSelf
-                    incb
-                    cmpb      #G.TermMax
-                    blo       FindNextTerm
-                    lda       #$FF
-                    sta       >gr.LiveTerm
-                    ldd       #0
-                    std       >D.KbdSta
-                    puls      b,x
-                    bra       FreeBuf
-FoundNextTerm
-                    pshs      b
-                    lda       #gr.TermSz
-                    mul
-                    ldx       #gr.TermTbl
-                    leax      d,x
-                    lbsr      SetTermGrfPtrs
-                    ldb       #GF.PullBuf
+                    stb       >gr.b1              closing id for GF.TermGone
+                    pshs      x
+                    ldb       #GF.TermGone
                     lbsr      CallGrfDrvNoPD
-                    puls      b
-                    pshs      b
-                    lda       #gr.TermSz
-                    mul
-                    ldx       #gr.TermTbl
-                    leax      d,x
-                    lda       T.Flags,x
-                    ora       #T.Live
-                    sta       T.Flags,x
-                    ldd       T.StatPtr,x
-                    std       >D.KbdSta
-                    std       >gr.VStaStorU
-                    ldu       >D.KbdSta
-                    lda       #1
-                    sta       V.TermLive,u
-                    puls      b
-                    stb       >gr.LiveTerm
-                    lda       V.CurCol,u
-                    ldx       #TXT.Base
-                    sta       VKY_TXT_CURSOR_X_REG_L,x
-                    lda       V.CurRow,u
-                    sta       VKY_TXT_CURSOR_Y_REG_L,x
-                    puls      b,x
-                    ldu       4,s
-TrmNotAct
+                    puls      x
 FreeBuf
                     ldb       T.Block,x
                     beq       ClearEntry

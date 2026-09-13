@@ -18,14 +18,15 @@ on the live terminal and on a non-live one; not yet on the board, and only the
 `l2`/`jr2` target was rebuilt for them.  `ScrollLive`/`ScrollShadow` changed
 their inputs to carry Delete Line.  `1B 21` Select switches the display to the
 terminal it is written to, and terminal switching itself now runs in grfdrv as
-`GF.Switch` to free bootfile space (both 2026-09-13, MAME only).  The working
+`GF.Switch`, with `TermTerm`'s fall-back as `GF.TermGone`, to free bootfile
+space (all 2026-09-13, MAME only).  The working
 tree also carries a deliberately
 **uncommitted** more-memory change in `level2/modules/kernel/krnp2.asm` — do not
 commit it along with other work.
 
-The sections below are in date order, oldest first; the newest is **Switching
-moved into grfdrv: `GF.Switch`** (2026-09-13), after **`1B 21` Select** (same
-day) and **Insert Line and Delete Line** (2026-09-12),
+The sections below are in date order, oldest first; the newest is
+**`TermTerm`'s fall-back moved too: `GF.TermGone`** (2026-09-13), after
+**Switching moved into grfdrv: `GF.Switch`** and **`1B 21` Select** (same day) and **Insert Line and Delete Line** (2026-09-12),
 which follow the three 2026-09-09 sections near the
 bottom of this half of the document — **Bitmaps**, **…and the bitmap registers
 do not read back either**, and **Alt+arrow on the K2 keyboard**.  The running
@@ -41,8 +42,9 @@ Still open, in the order I would take them:
    palettes back without the read-back".  Do **not** do this with
    `TermSaveTextLUT`.
 3. The known-latent list under "Gaps found and deliberately left".
-4. Try `1F 30` / `1F 31`, `1B 21` and Alt+arrow under `GF.Switch` on the
-   board, and rebuild the other three targets.
+4. Try `1F 30` / `1F 31`, `1B 21`, Alt+arrow under `GF.Switch` and closing
+   a live terminal under `GF.TermGone` on the board, and rebuild the other
+   three targets (clearing `.mods/krnp2` between platforms).
 
 ## STATUS  (2026-09-08)  — **RESOLVED.**  Boots the full `sysgo` → `Shell
 ## "startup -p"` → nested-fork chain to an interactive prompt.  The cause was
@@ -1564,6 +1566,80 @@ alone.
 grfdrv's re-entry counter stayed 0 in every run.  The round trip was checked by
 text, not buffer checksums: Shell+'s sign-on timestamp differs run to run, so a
 no-switch control run cannot match byte for byte.
+
+### `TermTerm`'s fall-back moved too: `GF.TermGone`  (2026-09-13, same day)
+
+Verified in MAME `wbjr2`; not yet on the board, and only `l2`/`jr2` rebuilt.
+
+**What moved.**  `TermTerm`'s "if the closing terminal is live, bring in
+another one" block (about 120 bytes) is grfdrv's `GFTermGone`, op 24, with the
+closing id in `gr.b1` (previously unassigned; neither op the AltISR issues
+touches `gr.b*`, and `Term` runs in system state).  vtio keeps the entry lookup,
+the `T.Init` test, `F$DelRAM`, the entry clear and `dec gr.TermCnt`.  The enter
+half of `GSFound` became `GSEnter`, shared by both ops.  `U` no longer changes
+inside `TermTerm` (`CallGrfDrv2` keeps it), so the old `ldu 4,s` is gone and
+`Term`'s later `V.KeyDrvEPtr,u` is still the closing static.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 4,339 | 4,229 |
+| `grfdrv256` | 1,976 | 2,058 |
+| bootfile modules | 31,723 | 31,613 |
+| margin to 32,256 | 533 | 643 |
+
+**`GFTermGone`'s order matters.**  Range-check the id, read the entry's
+`T.Flags` once into `B`, return unless `T.Init`, then clear `T.Flags`, then
+decide "was it live" from the copy in `B`.  Deciding from the entry after
+clearing it would always say "not live" and close a live terminal with no
+successor.  Clearing the flags with interrupts masked, before anything else,
+closes a race the old code had: `Term` runs with interrupts enabled, and between
+`TermTerm`'s decision and `ClearEntry` an Alt+arrow or a pending `1B 21` could
+still pick the closing terminal (it still had `T.Init`), pull a buffer about to
+be freed and make it live.  The successor search then needs no "skip myself"
+compare — the cleared entry fails `T.Init`.  The op re-checks `T.Init` itself so
+it is safe on its own, though only `TermTerm` ever clears it.
+
+**Behaviour kept:** the lowest open id takes over, as before — not the next id up
+that `SW.Next` would give.  With none left, `gr.LiveTerm=$FF` and `D.KbdSta=0`.
+A pending `gr.SwitchReq` is left alone.  New: the successor gets `GSEnter`'s
+cursor-row clamp and `V.CurPos` recompute, which the old fall-back skipped.
+
+**Ownership check added in vtio.**  `TermTerm` found its entry only through
+`V.TermID,u`.  `InitTerm` writes `V.TermID` before it knows the id is free, and
+IOMan does call `Term` after a failed `Init` — `AttachErrorDetach` issues
+`I$Detach`, and `IDetach2` calls `D$TERM` when nothing shares the static
+(`level1/modules/ioman.asm:569-571`, `:790-813`).  So `TermTerm` now also
+requires `T.StatPtr,x` to equal `U`.  No path to a mismatch is known today: the
+suspect, `iniz /vt1` after `/vt` took id 1, joins the factory's entry because
+`IAttach` matches the descriptor pointer first (`ioman.asm:586-589`) and the
+factory swapped in `/vt1`'s, so `Init` never runs.  The check is defensive; it
+matters more now that a wrong id would have its flags cleared under mask.
+
+**Verification:**
+
+| test | result |
+|---|---|
+| shells on `/vt1` and `/vt2` (no `iniz`); Alt+Right to `/vt1`; `ex` there | `LiveTerm=$00` — lowest id, not `/vt2`; `TermCnt=2`; `/vt2` open with its prompt; `/term` intact |
+| same, Alt+Right twice to `/vt2`; `ex` | `$00`, `TermCnt=2`, `/vt1` intact |
+| `1B 21` run C — a non-live terminal closes | `$00`, `TermCnt=1`, no error |
+| Alt+Right ×1 / ×2 / ×3, Alt+Left wrap | `$01` / `$02` / `$00` with `/term` unchanged / `$02` |
+| `1B 21` runs A, B | `$01`, `$00` |
+| `ex` on live `/vt1` with only `/term` left | `$00`, `TermCnt=1`, `/term` intact |
+
+Not reachable in MAME: the "no terminal left" branch (`sysgo`'s shell holds
+`/term`), and the race itself.
+
+**Build trap that cost a test round: `.mods` is shared between platforms.**
+A `PLATFORM=k2` build at 12:53 rebuilt every module with `-Dk2`; the next
+`PLATFORM=jr2` build rebuilt only what had changed source, so the jr2 disk
+carried the **K2** `krnp2` — the uncommitted more-memory map, which is
+`IFNE k2`.  `F$AlHRAM` then handed out `$EA-$EE`, which the 512K `wbjr2` machine
+does not have, and switch buffers came back aliased and garbled while
+`LiveTerm`/`TermCnt` still looked right.  The tells: `T.Block` above `$3F` in
+the dump, and `.mods/krnp2` at 3,290 bytes instead of 3,248.  Fix:
+`rm .mods/krnp2 bootfile` and rebuild.  `krnp2.asm` is the only source with a
+`k2`/`jr2` conditional today, but the next K2 build will pick up a jr2 `krnp2`
+the same way.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and
