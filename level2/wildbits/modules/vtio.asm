@@ -650,6 +650,9 @@ SwitchTerm
                     lda       >gr.LiveTerm
                     cmpa      #$FF
                     lbeq      SwDone
+                    ldb       >gr.SwitchReq
+                    cmpb      #SW.Goto
+                    beq       SwGoto
                     tfr       a,b
                     lslb
                     lslb                    B = ID * gr.TermSz
@@ -657,6 +660,27 @@ SwitchTerm
                     tst       >gr.SwitchReq
                     bmi       SwFindPrev
                     bra       SwFindNext
+* SW.Goto (1B 21): switch straight to the id DWSelect left in
+* gr.SwitchTerm.  Re-check T.Init - the terminal can have been closed
+* between the write and this tick.
+SwGoto
+                    lda       >gr.SwitchTerm
+                    cmpa      #G.TermMax
+                    lbhs      SwDone
+                    cmpa      >gr.LiveTerm
+                    lbeq      SwDone
+                    tfr       a,b
+                    lslb
+                    lslb                    B = ID * gr.TermSz
+		    lslb
+                    ldx       #gr.TermTbl
+                    abx
+                    pshs      a
+                    lda       T.Flags,x
+                    bita      #T.Init
+                    puls      a
+                    lbeq      SwDone
+                    bra       SwFound
 SwFindPrev
                     deca
                     subb      #gr.TermSz
@@ -1434,7 +1458,7 @@ DCodeTbl            fdb       NoOp-DCodeTbl       $00:no-op (null)
 Esc1BTbl            fcb       $20,8
                     fdb       DWSet-Esc1BTbl     DWSet STY CPX CPY SZX SZY FG BG BDR
                     fcb       $21,0
-                    fdb       DWSelect-Esc1BTbl  select window (no-op)
+                    fdb       DWSelect-Esc1BTbl  select this terminal
                     fcb       $24,0
                     fdb       DWEnd-Esc1BTbl     end device window (no-op)
                     fcb       $30,0
@@ -1965,7 +1989,25 @@ SetWin80x60         clrb
 ************************************************************************
 *** 1B 21 - DWSelect
 ***
-DWSelect            rts
+*** Select the terminal this path writes to.  U is already that
+*** terminal's static, and the open that produced the path ran InitTerm,
+*** so there is no "not open" case.  The switch itself is left to the
+*** AltISR (SW.Goto) like Alt+arrow, so it waits out gr.Busy.
+*** P$SelP is recorded as CoWin does, but not acted on (no Nobel rule).
+*** Y survives from SCF's D$WRIT to here, so PD.RGS,y is the caller's
+*** register stack; R$A is still the local path (S2UPath never writes it).
+DWSelect            ldx       PD.RGS,y            caller's registers
+                    lda       R$A,x               local path the 1B 21 came in on
+                    ldx       >D.Proc
+                    sta       P$SelP,x            this process's selected window
+                    tst       V.TermLive,u        already on screen?
+                    bne       selx@
+                    lda       V.TermID,u
+                    sta       >gr.SwitchTerm      target first, then the request
+                    lda       #SW.Goto
+                    sta       >gr.SwitchReq
+selx@               clrb
+                    rts
 ************************************************************************
 *** 1B 24 - DWEnd
 ***

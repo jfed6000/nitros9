@@ -307,11 +307,12 @@ gr.TermBlk          RMB       1         ; Current Terminal Block for Buffer Oper
 gr.VStaStorU        rmb       2         ; Static Storage
 gr.VBlk             rmb       1         ; block # containing static storage
 gr.U5		    rmb	      2		; Static storage in grfdrv for slot 5
-gr.SwitchTerm	    rmb	      1		; $00=None, $FE=pref, $FF=Next
+gr.SwitchTerm	    rmb	      1		; target terminal id for SW.Goto (1B 21)
 gr.SwitchReq	    rmb	      1
 SW.None		    equ	      $00
 SW.Prev		    equ	      $FF
 SW.Next		    equ	      $01
+SW.Goto		    equ	      $02       ; switch to the id in gr.SwitchTerm
 * Screen table (9 screens × 4 bytes = 36 bytes)
 gr.LiveTerm         rmb       1         ; this is the active terminal
 gr.TermSz           equ       8         ; Size per entry (8 bytes to make idx math easier)
