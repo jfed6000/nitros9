@@ -244,6 +244,7 @@ FuncTbl
                     fdb       GrfMod+GFSwitch     ; b=23
                     fdb       GrfMod+GFTermGone   ; b=24
                     fdb       GrfMod+GFDfPal      ; b=25
+                    fdb       GrfMod+GFAScrn      ; b=26
 
 
 *******************************************************************
@@ -1049,6 +1050,67 @@ DfPalBad            comb
 
 
 *******************************************************************
+* GF.AScrn (b26) - SS.AScrn for this terminal.  vtio aims gr.TermBlk,
+*   gr.VBlk and gr.U5 and calls through CallGrfDrvRet, which copies
+*   gr.PDRGS back to the caller's registers afterwards.
+*   gr.PDRGS R$Y = bitmap # 0-2, R$X = screen type (0 = 320x240 needs
+*   10 blocks, anything else 320x200, 8 blocks).
+* Allocates the bitmap with F$AlHRAM, records it in the V.BMxCl_En /
+* V.BMxBlk mirror pair PullBuf programs on every switch, and enables it
+* now only if this terminal is live - a shadow terminal owns its mirror
+* but not the registers.
+* Exit: gr.PDRGS R$X = the bitmap's first block, also on E$WADef (the
+*   bitmap already has one).  B = 0, or carry + E$IllArg / E$WADef /
+*   E$MFull.
+*******************************************************************
+GFAScrn             ldd       >gr.PDRGS+R$Y       bitmap #
+                    cmpd      #2
+                    bhi       AScrnBad
+                    lbsr      SetBlkC2C3          U = this terminal's statics
+                    lslb
+                    leax      V.BM0Cl_En,u
+                    abx                           X -> V.BMxCl_En, V.BMxBlk at 1,x
+                    ldb       1,x
+                    beq       AScrnNew
+                    clra
+                    std       >gr.PDRGS+R$X       return the existing block
+                    ldb       #E$WADef
+                    bra       AScrnErr
+AScrnNew            ldb       >gr.PDRGS+R$X+1     screen type
+                    beq       ten@
+                    ldb       #8
+                    bra       alloc@
+ten@                ldb       #10
+alloc@              pshs      x
+                    os9       F$AlHRAM            D = first block
+                    lbsr      SetBlkC2C3          remap slot 5 and reload U (keeps D, X, CC)
+                    puls      x
+                    bcc       got@
+                    ldb       #E$MFull
+                    bra       AScrnErr
+got@                clra
+                    std       >gr.PDRGS+R$X       return the block
+                    stb       1,x                 V.BMxBlk
+                    lda       #%00000001
+                    sta       ,x                  V.BMxCl_En = enable, CLUT 0
+                    tst       V.TermLive,u
+                    beq       ok@                 shadow: PullBuf programs it on the switch
+                    sta       >gr.b3              control byte (enable)
+                    lda       >gr.PDRGS+R$Y+1
+                    sta       >gr.b2              bitmap #
+                    tfr       b,a
+                    clrb
+                    lbsr      Blk2Addr
+                    std       >gr.d1              physical address
+                    lbsr      BmEnCore
+ok@                 clrb
+                    jmp       >GrfMod+SysRet
+AScrnBad            ldb       #E$IllArg
+AScrnErr            coma
+                    jmp       >GrfMod+SysRet
+
+
+*******************************************************************
 * GF.PSGInit (b12) - sound hardware setup, once from vtio's Init.
 *   Stereo bits in SYS1, the WM8776 CODEC, then silence the PSG at $C4.
 *   SYS1 and CODEC.Base are in the fixed $FExx I/O page.
@@ -1278,13 +1340,16 @@ GFPalIdx            ldb       >gr.b2              palette register #
 *   Free  : zero all four bytes
 *   Palet : b3 = CLUT# rolled with the enable bit -> ctrl
 *******************************************************************
-GFBmEnable          bsr       GFBmX
+GFBmEnable          bsr       BmEnCore
+                    jmp       >GrfMod+SysRet
+* BmEnCore - GF.BmEnable's body, also called by GFAScrn.
+BmEnCore            bsr       GFBmX
                     lda       >gr.b3              control byte
                     sta       ,x
                     ldd       >gr.d1              physical address
                     std       1,x
                     clr       3,x
-                    jmp       >GrfMod+SysRet
+                    rts
 GFBmFree            bsr       GFBmX
                     clr       ,x
                     clr       1,x

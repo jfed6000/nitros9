@@ -444,6 +444,7 @@ toproc
 
 *******************************************************************
 * CallGrfDrv - B = GF.*  Y = path descriptor (copies PD.RGS)
+* CallGrfDrvRet - CallGrfDrv, then copies the caller's registers back
 * CallGrfDrvNoPD - B = GF.*  no PD (ISR / switch)
 *******************************************************************
 CallWriteCharLive   ldx	     gr.WriteCharLive
@@ -455,6 +456,22 @@ CallScrollLive      ldx	     gr.ScrollLive
 CallScrollShadow    ldx	     gr.ScrollShadow
 		    bra	     CallGrfDrv2
 		    
+* CallGrfDrvRet - CallGrfDrv, then copy the caller's R$A..R$U back from
+* gr.PDRGS so a grfdrv op can return values in the caller's registers.
+* Entry as CallGrfDrv (B = GF.* op, Y = path descriptor).  B and carry
+* (grfdrv's error) are preserved across the copy.  R$CC/R$PC are not
+* copied: IOMan reports the error in R$CC.
+CallGrfDrvRet       bsr       CallGrfDrv
+                    pshs      cc,b
+                    ldx       #gr.PDRGS+R$A
+                    ldy       >gr.RGSADR
+                    leay      R$A,y
+                    ldb       #R$PC-R$A
+cgrloop             lda       ,x+
+                    sta       ,y+
+                    decb
+                    bne       cgrloop
+                    puls      cc,b,pc
 CallGrfDrv
                     pshs      x,u,y,b
                     ldx       PD.RGS,y
@@ -2538,58 +2555,11 @@ errnomap@           puls      cc                  if error, pull cc
 ;;; Exit:  B = A non-zero error code.
 ;;;       CC = Carry flag clear to indicate success
 ;;;        X = Starting Page# of bitmap address
-SSAScrn             lda       R$Y+1,x             load the bitmap number
-                    lsla                          multiply by 2
-                    leay      V.BM0BLK,u
-                    lda       a,y                 see if there is a current block number
-                    beq       NewBitMap@          if zero, then no bitmap, make a new one
-                    ldb       #E$WADef            error: bitmap already defined
-                    sta       R$X+1,x             store the bitmap block# in X
-                    clr       R$X,x
-                    bra       error@
-NewBitMap@          ldb       R$X+1,x             get the window type (0 or 1)
-                    beq       tenblocks@          need 10 blocks for 320x240
-eightblocks         ldb       #$08                need 8 blocks for 320x200
-                    bra       GetMem@
-tenblocks@          ldb       #10                 need 10 8k Blocks from highram
-GetMem@             os9       F$AlHRAM            allocate ram, put starting block# in D
-                    bcc       map@                check for error, continue if no error
-                    ldb       #E$MFull            set error code to Memory Full error and return
-                    bra       error@
-*                   **** Store starting block# for bitmap in V.BMXBlk
-* The mirror is a PAIR per bitmap - V.BMxCl_En then V.BMxBlk - and PullBuf
-* programs both halves of $C0+$1000+8*x from it on every terminal switch.
-* Storing only the block left the control byte at zero, so the first
-* Alt-arrow back into this terminal disabled the bitmap it had just
-* enabled.  Write the same byte here that the register gets.
-map@                lda       R$Y+1,x             load bitmap@
-                    lsla                          multiply by 2 to get correct index
-                    leay      V.BM0Cl_En,u        calc address for the BM0/BM1/BM2 mirror pair
-                    leay      a,y
-                    stb       1,y                 V.BMxBlk = the allocated block
-                    lda       #%00000001
-                    sta       ,y                  V.BMxCl_En = enable, CLUT 0
-                    clra
-                    std       R$X,x               store block # in X for return value
-* -> b2 bitmap #, b3 control byte, d1 physical address.
-                    lda       R$Y+1,x
-                    sta       >gr.b2              bitmap # 0-2
-                    lbsr      Blk2Addr
-                    std       >gr.d1              physical address
-                    lda       #%00000001
-                    sta       >gr.b3              control byte (enable)
-* A shadow terminal owns its mirror but not the registers; PullBuf will
-* program them when it comes on screen.  Without this, SS.AScrn from a
-* background terminal points the LIVE display at the new bitmap.
-                    tst       V.TermLive,u
-                    beq       ok@
-                    ldb       #GF.BmEnable
-                    lbsr      CallGrfDrvNoPD
-ok@                 clrb
-                    andcc     #^Carry
-                    rts
-error@              coma                          set carry bit on error
-end@                rts
+* grfdrv's GF.AScrn does the work; CallGrfDrvRet brings R$X (the block)
+* back into the caller's registers, B and carry too.
+SSAScrn             lbsr      SetThisTermGrfPtrs
+                    ldb       #GF.AScrn
+                    lbra      CallGrfDrvRet
 
 
 ;;;  GS.DScrn
@@ -2797,21 +2767,6 @@ SSDfPal             lbsr      SetThisTermGrfPtrs
                     ldb       #GF.DfPal
                     lbra      CallGrfDrv
 
-* Block to Address: Convert block# to high 16 bits in D
-* b = block#, a = 0.  d = high 16 bits of address
-* Try to replace with math coprocessor multiply in Vicky?
-Blk2Addr            clra                          clear a, block # is in b
-                    lslb                          multiply block# by $20 to get top 16 bits x2
-                    rola                          of physical address (ex $3F*$20 = $07E0)
-                    lslb                          x4
-                    rola                          roll carry into a
-                    lslb                          x8
-                    rola                          roll carry into a
-                    lslb                          x16
-                    rola                          roll carry into a
-                    lslb                          x32 ($20)
-                    rola
-                    rts
                     endc
 
 

@@ -24,12 +24,15 @@ tree also carries a deliberately
 **uncommitted** more-memory change in `level2/modules/kernel/krnp2.asm` — do not
 commit it along with other work.
 
-Moving more vtio work into grfdrv follows `docs/grfdrv-offload-plan.md`; items 1
-(dead code and probes), 2 (sound chip setup into `GF.PSGInit`) and 4
-(`SS.DfPal` into `GF.DfPal`) are done, margin 643 → 1,011.
+Moving more vtio work into grfdrv (`docs/grfdrv-offload-plan.md`) is done in
+MAME for all five items: dead code and probes, sound chip setup into
+`GF.PSGInit`, `SS.DfPal` into `GF.DfPal`, `SS.AScrn` into `GF.AScrn` with the
+`CallGrfDrvRet` copy-back.  vtio 4,229 → 3,795 bytes, bootfile margin 643 →
+1,077.  Not yet on the board.
 
 The sections below are in date order, oldest first; the newest is
-**`SS.DfPal` moved into grfdrv: `GF.DfPal`** (2026-09-13), after
+**`SS.AScrn` moved into grfdrv: `GF.AScrn`, and `CallGrfDrvRet`** (2026-09-13),
+after **`SS.DfPal` moved into grfdrv: `GF.DfPal`**, after
 **Sound chip setup moved into `GF.PSGInit`**,
 **Dead code and unread probes removed from vtio** and
 **`TermTerm`'s fall-back moved too: `GF.TermGone`** (same day), after
@@ -1770,6 +1773,60 @@ build wrote.  Not investigated, and identical in both builds: `shellbg` on
 **Same limitation left elsewhere:** `GF.GSFntChar`/`GF.SSFntChar` map only the
 one caller block holding `R$X` (`GMapAddr2Blk`), so their 8 bytes still cannot
 cross an 8K boundary.
+
+### `SS.AScrn` moved into grfdrv: `GF.AScrn`, and `CallGrfDrvRet`  (2026-09-13, same day)
+
+Items 3 and 5 of `docs/grfdrv-offload-plan.md`.  Verified in MAME `wbjr2`;
+only `l2`/`jr2` rebuilt.
+
+**`CallGrfDrvRet` (vtio).**  `CallGrfDrv`, then copies `R$A..R$U` (9 bytes)
+from `gr.PDRGS` back to `[gr.RGSADR]`, keeping `B` and CC.  It is the first
+thing that copies `gr.PDRGS` back, so an op can now return values in the
+caller's registers by writing `gr.PDRGS` the way vtio writes a register stack.
+`R$CC`/`R$PC` are not copied.  Returning grfdrv's `Y` from a SetStat stub is
+safe: SCF's `ExecuteStatusRequest` saves and restores `Y`/`U` around the driver
+call (`level1/modules/scf.asm`, `pshs u,y` / `jsr b,x` / `puls y,u,pc`).
+
+**What moved.**  vtio's `SSAScrn` is a three-instruction stub
+(`SetThisTermGrfPtrs`, `ldb #GF.AScrn`, `lbra CallGrfDrvRet`), and vtio's
+`Blk2Addr` is gone.  grfdrv's `GFAScrn` (op 26) keeps the old behaviour: an
+existing `V.BMxBlk` returns that block in `R$X` with `E$WADef`; otherwise
+`F$AlHRAM` 10 blocks (screen type 0) or 8, `E$MFull` on failure, store the
+`V.BMxCl_En`/`V.BMxBlk` mirror pair, return the block in `R$X`, and program the
+bitmap only when live, through `BmEnCore` - `GFBmEnable`'s body, split out.
+**New:** bitmap # above 2 is `E$IllArg` (it used to index past `V.BM2Blk`).
+
+**First `os9` call from grfdrv256.**  `F$AlHRAM` goes through the kernel's
+`MapGrf` path as expected.  `GFAScrn` saves `X` (a slot-5 alias) across it and
+runs `SetBlkC2C3` again afterwards to remap slot 5 and reload `U` rather than
+trust the map the kernel rebuilt from `gr.DATImg`; `SetBlkC2C3` keeps `D`, `X`
+and CC, so the carry test comes after it.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 3,861 | 3,795 |
+| `grfdrv256` | 2,301 | 2,408 |
+| bootfile modules | 31,245 | 31,179 |
+| margin to 32,256 | 1,011 | 1,077 |
+
+**Verification**, on the `e1f2627c` disk and the new one side by side, with two
+more throwaway commands (not committed): `asctest` allocates bitmap 1 (8
+blocks), asks again, requires carry + `E$WADef` + the same `X`, and exits with
+the block number as its status; `ascarg` asks for bitmap 3.
+
+| test | both builds |
+|---|---|
+| `shellbg` on live `/term` | `BM2 ctrl=$05` → block `$34`, mirror `BM2 ctl=$05 blk=$34`, pixmap block sums `$34-$3D` identical |
+| `shellbg` on `/vt1` after Alt+Right | `BM2` → block `$32` live and in `/vt1`'s mirror |
+| `shellbg >/vt1` (background) | live `BM0-2` all zero; `/vt1` mirror `BM2 ctl=$05 blk=$32` |
+| `asctest` on `/term` | `ERROR #054` (block `$36`); `BM1 ctrl=$01` → `$36`, mirror the same |
+| `asctest >/vt1` (background) | `ERROR #052` (block `$34`); live `BM1` zero, `/vt1` mirror `BM1 ctl=$01 blk=$34` |
+| `ascarg` (new build only) | `ERROR #187` (`E$IllArg`) |
+| regression set, `dftest` (new build) | as before |
+
+Remaining dump differences: the statics block (`gr.VBlk` `$02` → `$01`, vtio
+is smaller), banner timestamps in buffer sums, and stale RAM in buffer blocks
+and never-loaded `T.CLUTn`.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and
