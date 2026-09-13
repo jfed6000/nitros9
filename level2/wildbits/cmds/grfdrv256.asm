@@ -956,7 +956,51 @@ GSCPZero            clra
                     rts
 
 
-PSGInit             lbsr      SetBlkC4
+*******************************************************************
+* GF.PSGInit (b12) - sound hardware setup, once from vtio's Init.
+*   Stereo bits in SYS1, the WM8776 CODEC, then silence the PSG at $C4.
+*   SYS1 and CODEC.Base are in the fixed $FExx I/O page.
+*******************************************************************
+* WM8776 CODEC chip registers
+* R00 = [0000000][U][Z][AAAAAAA]             Headphone attenuation: U=Update, Z=Zero Crossing Detection, A=bB 1111001 default for 0dB
+* R10 = [0001010][XXX][DS][0][0][DF]         DS=DAC input size 16/20/24/32, DF=DAC Format  Right/Left/I2S/DSP
+* R12 = [0001100][0][0][DAC][0][ADC]         DAC rate  ADC rate, both are custom 101 in original vtio
+* R13 = [0001101][XX][1][XX][H][D][A][C]     Headphones/DAC/ADC/Chip 0=Enabled 1=Muted
+* R22 = [0010110][MUX]                       MUX  Bypass,Aux,DAC (bits 2,1,0)
+* R23 = Write anything to Reset WM8776
+
+PSGInit             lda       SYS1                get the byte at SYS1
+*                    anda      #^SYS_PSG_ST clear the stereo flag
+                    ora       #SYS_PSG_ST|SYS_SID_ST
+                    sta       SYS1                and save it back
+                    ldx       #CODEC.Base
+
+                    ldd       #%0010111000000000                    R23 - Reset chip
+                    bsr       SendToCODEC
+                    ldd       #%0001010000000010                    R10 - DAC Interface Control 16-bit i2s
+                    bsr       SendToCODEC
+                    ldd       #%0010001100000001                    R17 - ALC Control 2 
+                    bsr       SendToCODEC
+                    ldd       #%0010101000000011                    R21 - ADC Mux Control   AIN
+                    bsr       SendToCODEC
+                    ldd       #%0010110000000111                    R22 - Output Mux MX[2:0] = "111" 
+                    bsr       SendToCODEC
+                    ldd       #%0001101000000000                    R13 - PWR Down Control, Everything on
+                    bsr       SendToCODEC
+                    ldd       #%0000011111110000                    R03 - Left DAC Attenuation
+                    bsr       SendToCODEC
+                    ldd       #%0000100111110000                    R04 - Right DAC Attenuation
+                    bsr       SendToCODEC
+                    ldd       #%0000000101101100                    R00 - Left Headphone Attenuation Control
+                    bsr       SendToCODEC
+                    ldd       #%0000001101101100                    R01 - Right Headphone Attenuation Control
+                    bsr       SendToCODEC
+*                   ldd       #%0001011000000010                    R11 - ADC Interface Control 
+*                   bsr       SendToCODEC
+*                   ldd       #%0001100111010101                    R12 - Master Mode Control
+*                   bsr       SendToCODEC
+
+                    lbsr      SetBlkC4
                     lda       #%10011111
                     sta       $2000+PSGM.Base
                     lda       #%10111111
@@ -966,6 +1010,21 @@ PSGInit             lbsr      SetBlkC4
                     lda       #%11111111
                     sta       $2000+PSGM.Base
                     jmp       >GrfMod+SysRet
+
+* Send data to CODEC and await its digestion.
+*
+* Entry: D = Value to send to CODEC.
+*        X = Base address of CODEC.
+SendToCODEC         pshs      d
+w@                  lda       CODECCtrl,x
+                    lsra
+                    bcs       w@
+                    puls      d
+                    sta       CODECCmdHi,x
+                    stb       CODECCmdLo,x
+                    lda       #$01
+                    sta       CODECCtrl,x
+                    rts
 
 
 *******************************************************************

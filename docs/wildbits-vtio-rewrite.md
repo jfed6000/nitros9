@@ -24,11 +24,13 @@ tree also carries a deliberately
 **uncommitted** more-memory change in `level2/modules/kernel/krnp2.asm` — do not
 commit it along with other work.
 
-Moving more vtio work into grfdrv follows `docs/grfdrv-offload-plan.md`; item 1
-(dead code and probes, margin 643 → 772) is done.
+Moving more vtio work into grfdrv follows `docs/grfdrv-offload-plan.md`; items 1
+(dead code and probes) and 2 (sound chip setup into `GF.PSGInit`) are done,
+margin 643 → 863.
 
 The sections below are in date order, oldest first; the newest is
-**Dead code and unread probes removed from vtio** (2026-09-13), after
+**Sound chip setup moved into `GF.PSGInit`** (2026-09-13), after
+**Dead code and unread probes removed from vtio** and
 **`TermTerm`'s fall-back moved too: `GF.TermGone`** (same day), after
 **Switching moved into grfdrv: `GF.Switch`** and **`1B 21` Select** (same day) and **Insert Line and Delete Line** (2026-09-12),
 which follow the three 2026-09-09 sections near the
@@ -1682,6 +1684,38 @@ second block of `/term`'s buffer in the one-terminal run.
 | …then on `/vt1`: `display 1b 21 >/term` | `$00` |
 | `display 1b 21`, `display 1b 21 >/vt2` | `$00`, `TermCnt=1`, no error |
 | `shell i=/vt&` (factory `SSOpen`), Alt+Right | `$01`, `TermCnt=2` |
+
+### Sound chip setup moved into `GF.PSGInit`  (2026-09-13, same day)
+
+Item 2 of `docs/grfdrv-offload-plan.md`.  Verified in MAME `wbjr2`; only
+`l2`/`jr2` rebuilt.  Audio itself (headphones, bell tone) is board-only.
+
+**What moved.**  `InitSound`'s `SYS1` stereo bits, `InitCODEC`'s ten WM8776
+register writes and `SendToCODEC` are now the front of grfdrv's `PSGInit`
+(op 12), ahead of the existing PSG silencing; `SYS1` (`$FE01`) and
+`CODEC.Base` (`$FE70`) are in the fixed `$FExx` page, present in grfdrv's map.
+vtio keeps `clr D.SndPrcID` and `InitBELL` (`Bell` is vtio code): `InitSound`
+now falls straight through into `InitBELL`.  The one behaviour change is order —
+the codec is programmed after keydrv/mousedrv are linked and grfdrv is loaded,
+instead of before.  `SendToCODEC`'s busy-wait runs unmasked, as it did in vtio.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 4,100 | 4,009 |
+| `grfdrv256` | 2,058 | 2,137 |
+| bootfile modules | 31,484 | 31,393 |
+| margin to 32,256 | 772 | 863 |
+
+**Verification.**  The regression set from the previous section plus
+`display 07` followed by `echo ok`, on the `7155730f` disk and the new one.  All
+end states match and re-entry count is 0; `display 07` returns and `echo ok`
+runs.  MAME's codec stores its registers but the dump does not show them, so a
+**temporary** `printf` in `codec_w`/`sys1_w` (reverted afterwards) logged every
+write: both builds make the same 30 codec writes (ten commands, each high byte,
+low byte, go) in the same order, and `SYS1=$0C`; in the new build the Level 2
+`SYS1` write comes from grfdrv (PC `$C5CC`, `PSGInit`).  The earlier `SYS1` and
+codec writes at PC `$BCxx` in both logs are the FEU's Level 1 vtio before the
+handoff.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and

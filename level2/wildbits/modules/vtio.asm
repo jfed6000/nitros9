@@ -142,20 +142,6 @@ AltSndEx            jmp       [D.OrgAlt]         branch to the original alternat
 
 
            
-* Send data to CODEC and await its digestion.
-*
-* Entry: D = Value to send to CODEC.
-*        X = Base address of CODEC.
-SendToCODEC         pshs      d
-w@                  lda       CODECCtrl,x
-                    lsra
-                    bcs       w@
-                    puls      d
-                    sta       CODECCmdHi,x
-                    stb       CODECCmdLo,x
-                    lda       #$01
-                    sta       CODECCtrl,x
-                    rts
 
 *********************************************************************************
 * Init              
@@ -221,58 +207,18 @@ InitFail
                     rts                 carry and B already set
 
 
-* Initialize the sound hardware.
+* Initialize the sound state.  SYS1 and the CODEC are programmed by
+* grfdrv256's GF.PSGInit (InitPSG, after InitGrfDrv).
 InitSound           clr       D.SndPrcID          clear the process ID of the current sound emitter (none)
-                    lda       SYS1                get the byte at SYS1
-*                    anda      #^SYS_PSG_ST clear the stereo flag
-                    ora       #SYS_PSG_ST|SYS_SID_ST
-                    sta       SYS1                and save it back
-                    bra       InitCODEC           InitPSG needs grfdrv256 (after InitGrfDrv)
-
-* Silence PSG via GF.Write. Call after InitGrfDrv. Never system MAPSLOT.
-InitPSG             ldb       #GF.PSGInit
-		    lbsr      CallGrfDrvNoPD
-		    rts
-
-* WM8776 CODEC chip registers
-* R00 = [0000000][U][Z][AAAAAAA]             Headphone attenuation: U=Update, Z=Zero Crossing Detection, A=bB 1111001 default for 0dB
-* R10 = [0001010][XXX][DS][0][0][DF]         DS=DAC input size 16/20/24/32, DF=DAC Format  Right/Left/I2S/DSP
-* R12 = [0001100][0][0][DAC][0][ADC]         DAC rate  ADC rate, both are custom 101 in original vtio
-* R13 = [0001101][XX][1][XX][H][D][A][C]     Headphones/DAC/ADC/Chip 0=Enabled 1=Muted
-* R22 = [0010110][MUX]                       MUX  Bypass,Aux,DAC (bits 2,1,0)
-* R23 = Write anything to Reset WM8776
-
-InitCODEC
-                    ldx       #CODEC.Base
-
-                    ldd       #%0010111000000000                    R23 - Reset chip
-                    lbsr      SendToCODEC
-                    ldd       #%0001010000000010                    R10 - DAC Interface Control 16-bit i2s
-                    lbsr      SendToCODEC
-                    ldd       #%0010001100000001                    R17 - ALC Control 2 
-                    lbsr      SendToCODEC
-                    ldd       #%0010101000000011                    R21 - ADC Mux Control   AIN
-                    lbsr      SendToCODEC
-                    ldd       #%0010110000000111                    R22 - Output Mux MX[2:0] = "111" 
-                    lbsr      SendToCODEC
-                    ldd       #%0001101000000000                    R13 - PWR Down Control, Everything on
-                    lbsr      SendToCODEC
-                    ldd       #%0000011111110000                    R03 - Left DAC Attenuation
-                    lbsr      SendToCODEC
-                    ldd       #%0000100111110000                    R04 - Right DAC Attenuation
-                    lbsr      SendToCODEC
-                    ldd       #%0000000101101100                    R00 - Left Headphone Attenuation Control
-                    lbsr      SendToCODEC
-                    ldd       #%0000001101101100                    R01 - Right Headphone Attenuation Control
-                    lbsr      SendToCODEC
-*                   ldd       #%0001011000000010                    R11 - ADC Interface Control 
-*                   lbsr      SendToCODEC
-*                   ldd       #%0001100111010101                    R12 - Master Mode Control
-*                   lbsr      SendToCODEC
 
 InitBELL            leax      Bell,pcr point to the bell emission code
                     stx       >D.Bell   save it in the system global's bell vector
                     rts
+
+* SYS1, CODEC and PSG silence via GF.PSGInit. Call after InitGrfDrv. Never system MAPSLOT.
+InitPSG             ldb       #GF.PSGInit
+		    lbsr      CallGrfDrvNoPD
+		    rts
                     
 * Initialize the display I/O registers. No MAPSLOT.
 *
