@@ -30,7 +30,7 @@ PSG.Base            equ       PSGM.Base
 * from wildbits_vtio.d.
 
 * System LUT 0 slot 2 home is SRAM $03. Glyph/erase/scroll/blank,
-* InitDisplay / text palettes, bitmap SetStat, PSG, and dbgwrite all
+* InitDisplay / text palettes, bitmap SetStat and PSG all
 * go through GF.Write (LUT 1). Do not map system MAPSLOT.
 
                     mod       eom,name,tylg,atrv,start,size
@@ -171,10 +171,7 @@ w@                  lda       CODECCtrl,x
 * First INIZ (/term): hardware + InitTerm (IT.WND=0). Old Write still owns $C2.
 * Later named INIZ (/vtN): skip hardware, InitTerm only.
 * Factory INIZ (/vt, IT.WND=$FF): skip hardware and InitTerm; SS.Open binds.
-* Markers: $12FD='I' $12FE=$A5 $12FF=$5A entered
-*          $12FC='P' InitDisplay returned
-*          $12FB='Z' Init success rts
-* InitTerm log $12F0-'T' $12F1=id $12F2=blk $12F3-4=X $12F5=active $12F6=cnt $12F7=K/E
+* InitTerm log (read by the MAME dump): $12F5=active $12F6=cnt $12F7=K/E $12F8=err
 Init
                     pshs      y
                     lda       >gr.FirstInitDone
@@ -337,27 +334,6 @@ DispRegs            fcb       Mstr_Ctrl_Text_Mode_En,$00
 
 
 
-* X = logical address in D.Proc. Exit: A = block, X = offset in 8K.
-Log2Blk             pshs      y
-                    ldy       >D.Proc
-                    leay      P$DATImg,y
-                    tfr       x,d
-                    pshs      d
-                    lsra
-                    lsra
-                    lsra
-                    lsra
-                    lsra
-                    lsla
-                    inca
-                    lda       a,y
-                    puls      x
-                    pshs      a
-                    tfr       x,d
-                    anda      #$1F
-                    tfr       d,x
-                    puls      a
-                    puls      y,pc
 
 * Keyboard initialization  
 * NOTE: If we fail to find the 'keydrv' module, carry is returned set, but
@@ -475,7 +451,6 @@ has2
                     clra
 store7
                     std       ,x++
-                    std       $1208
                     ldy       >D.TskIPt
                     ldx       #gr.DATImg
                     stx       2,y
@@ -812,7 +787,7 @@ InitTSDone          puls      d,x,y,pc
 * BlankTermText - T.TXT spaces and T.TXTCOLOR = V.FBCol in the 16K.
 * GF.Write WOp=WO.Blank in LUT 1. Never system MAPSLOT / MAPSLOT+1.
 * Refuse V.TermBufBlk=0 (that aliases kernel block 0 at $4000).
-* Probe $12EB-EF: 'B' blk txt0 fbcol 'K'
+* Probe $12EC = blk (read by the MAME dump)
 *******************************************************************
 BlankTermText       pshs      cc,d,x,y
                     lda       V.TermBufBlk,u
@@ -938,7 +913,6 @@ InitError
                     puls      x,y,u,pc
  
 * Term — glue #9: unlink keydrv/IRQ only when gr.TermCnt==0.
-* Probe $12E0=remaining TermCnt $12E1='Q'
 *
 * Entry:
 *    U  = address of device memory area
@@ -949,10 +923,7 @@ InitError
 *
 Term
                     lbsr      TermTerm
-                    lda       #'Q
-                    sta       $12E1
                     lda       >gr.TermCnt
-                    sta       $12E0
                     bne       TermEx
                     ldx       >D.OrgAlt
                     stx       <D.AltIRQ
@@ -2310,20 +2281,13 @@ SetStat             ldx       PD.RGS,y            get caller's registers in X
 * V$DESC, UnLink factory. Name at $12D8 (not $1200). Y = system
 * DAT image; tosysproc so the module maps in system space.
 * Never pass $FF into id*4. Slot 0 is /term; start at id 1.
-* Probe $12DC='O' $12DD=IT.WND $12DE=V.TermID $12DF=TermCnt
-* $12D5=id $12D6=T.Flags $12D7=link/InitTerm err $12D8-DA=vtN
 SSOpen              ldx       PD.DEV,y
                     ldx       V$DESC,x
                     ldb       IT.WND,x
-                    stb       $12DD
-                    lda       #'O
-                    sta       $12DC
-                    tstb
                     lbpl      SSOpenNamed
                     pshs      x,y,u
                     ldb       #1
-SSOpenFind          stb       $12D5
-                    cmpb      #G.TermMax
+SSOpenFind          cmpb      #G.TermMax
                     bhs       SSOpenNone
                     pshs      b
                     lda       #gr.TermSz
@@ -2331,14 +2295,12 @@ SSOpenFind          stb       $12D5
                     ldx       #gr.TermTbl
                     leax      d,x
                     lda       T.Flags,x
-                    sta       $12D6
                     bita      #T.Init
                     puls      b
                     beq       SSOpenGot
                     incb
                     bra       SSOpenFind
 SSOpenNone          ldb       #E$MNF
-                    stb       $12D7
                     comb
                     puls      x,y,u,pc
 SSOpenGot           lda       #'v
@@ -2359,10 +2321,9 @@ SSOpenGot           lda       #'v
                     lbsr      toproc
                     leas      2,s
                     bcc       SSOpenLnk
-                    stb       $12D7
                     puls      b
                     incb
-                    lbra      SSOpenFind
+                    bra       SSOpenFind
 SSOpenLnk           pshs      u
                     ldb       2,s
                     ldu       7,s
@@ -2375,26 +2336,17 @@ SSOpenLnk           pshs      u
                     ldu       1,s
                     os9       F$UnLink
                     ldu       5,s
-                    lda       V.TermID,u
-                    sta       $12DE
-                    lda       >gr.TermCnt
-                    sta       $12DF
                     leas      7,s
                     clrb
                     andcc     #^Carry
                     rts
-SSOpenITFail        stb       $12D7
-                    puls      u
+SSOpenITFail        puls      u
                     pshs      cc,b
                     os9       F$UnLink
                     puls      cc,b
                     leas      1,s
                     puls      x,y,u,pc
-SSOpenNamed         lda       V.TermID,u
-                    sta       $12DE
-                    lda       >gr.TermCnt
-                    sta       $12DF
-                    clrb
+SSOpenNamed         clrb
                     andcc     #^Carry
                     rts
                   ENDC
@@ -3034,23 +2986,6 @@ Blk2Addr            clra                          clear a, block # is in b
                     rts
                     endc
 
-* One glyph at $C2 cell 1 via GF.Cell. No-op before InitGrfDrv
-* (gr.Entry=0). Never system MAPSLOT. The flip clobbers Y; Init
-* reads IT.WND,y after the first-INIZ 'F' breadcrumb.
-dbgwrite
-                    pshs      d,x,y,u
-                    ldx       >gr.Entry
-                    beq       dbgdn
-                    sta       >gr.b2              glyph
-                    ldx       #1
-                    stx       >gr.d1              cell offset 1
-                    lda       #$10
-                    sta       >gr.b3              colour attr
-                    lda       #WD.Vicky
-                    sta       >gr.b4              straight to the live planes
-                    ldb       #GF.Cell
-                    lbsr      CallGrfDrvNoPD
-dbgdn               puls      d,x,y,u,pc
 
                     emod
 eom                 equ       *

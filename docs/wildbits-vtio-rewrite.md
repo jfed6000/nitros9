@@ -24,8 +24,12 @@ tree also carries a deliberately
 **uncommitted** more-memory change in `level2/modules/kernel/krnp2.asm` — do not
 commit it along with other work.
 
+Moving more vtio work into grfdrv follows `docs/grfdrv-offload-plan.md`; item 1
+(dead code and probes, margin 643 → 772) is done.
+
 The sections below are in date order, oldest first; the newest is
-**`TermTerm`'s fall-back moved too: `GF.TermGone`** (2026-09-13), after
+**Dead code and unread probes removed from vtio** (2026-09-13), after
+**`TermTerm`'s fall-back moved too: `GF.TermGone`** (same day), after
 **Switching moved into grfdrv: `GF.Switch`** and **`1B 21` Select** (same day) and **Insert Line and Delete Line** (2026-09-12),
 which follow the three 2026-09-09 sections near the
 bottom of this half of the document — **Bitmaps**, **…and the bitmap registers
@@ -1640,6 +1644,44 @@ the dump, and `.mods/krnp2` at 3,290 bytes instead of 3,248.  Fix:
 `rm .mods/krnp2 bootfile` and rebuild.  `krnp2.asm` is the only source with a
 `k2`/`jr2` conditional today, but the next K2 build will pick up a jr2 `krnp2`
 the same way.
+
+### Dead code and unread probes removed from vtio  (2026-09-13, same day)
+
+Item 1 of `docs/grfdrv-offload-plan.md`.  Verified in MAME `wbjr2`; only
+`l2`/`jr2` rebuilt.  No behaviour change intended.
+
+**Removed:** `dbgwrite`/`dbgdn` and `Log2Blk` (no callers); `InitGrfDrv`'s
+`std $1208`; `Term`'s `$12E0`/`$12E1` stores and the `lda #'Q` (the
+`lda >gr.TermCnt` stays — `bne TermEx` tests its flags); every `SSOpen` probe
+(`$12D5`, `$12D6`, `$12D7` ×3, `$12DC`, `$12DD`, `$12DE`/`$12DF` ×2), the
+`lda V.TermID,u` / `lda >gr.TermCnt` loads that existed only for them, and the
+`tstb` before `lbpl SSOpenNamed` (`ldb IT.WND,x` already sets N).  The retry
+branch back to `SSOpenFind` is now a short `bra`; `lbpl SSOpenNamed` has to stay
+long.  `$12D8-$12DA` stays: it is the `/vtN` name `F$SLink` links.  The stale
+marker lists in `Init`'s and `BlankTermText`'s headers now name only what is
+still written.  Every breadcrumb the MAME dump reads is untouched.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 4,229 | 4,100 |
+| bootfile modules | 31,613 | 31,484 |
+| margin to 32,256 | 643 | 772 |
+
+**Verification:** the plan's regression set, run on the `529dd28a` disk and the
+new one side by side.  All nine runs match the expected end state, re-entry
+count 0, and the terminal texts are identical between the two builds; the only
+dump differences are statics addresses (module placement), buffer-block sums
+that include the Shell+ banner's time of day, and stale RAM in the unpushed
+second block of `/term`'s buffer in the one-terminal run.
+
+| test | result |
+|---|---|
+| three terminals, Alt+Right ×1 / ×2 / ×3, Alt+Left ×1 | `$01` / `$02` / `$00` / `$02`, `TermCnt=3` |
+| shells on `/vt1`, `/vt2` (no `iniz`), Alt+Right, `ex` | `$00`, `TermCnt=2`, `/vt2` prompt intact |
+| `iniz /vt1`, `shell i=/vt1&`, `display 1b 21 >/vt1` | `$01` |
+| …then on `/vt1`: `display 1b 21 >/term` | `$00` |
+| `display 1b 21`, `display 1b 21 >/vt2` | `$00`, `TermCnt=1`, no error |
+| `shell i=/vt&` (factory `SSOpen`), Alt+Right | `$01`, `TermCnt=2` |
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and
