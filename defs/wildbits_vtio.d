@@ -431,6 +431,7 @@ GF.Pal              equ       18        ; one text-LUT entry (1B 60 / 1B 61)
 GF.BmEnable         equ       19        ; bitmap: enable + phys addr
 GF.BmFree           equ       20        ; bitmap: zero the four registers
 GF.BmPalet          equ       21        ; bitmap: assign CLUT
+GF.InsLine          equ       22        ; 1F 30 insert line at V.CurRow (reads DSS)
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 

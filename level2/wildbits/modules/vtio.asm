@@ -1480,7 +1480,7 @@ Esc1FTbl            fcb       $20,0
                     fcb       $25,0
                     fdb       BlkOff-Esc1FTbl     blink off (stub)
                     fcb       $30,0
-                    fdb       InsLine-Esc1FTbl    insert line (stub)
+                    fdb       InsLine-Esc1FTbl    insert line
                     fcb       $31,0
                     fdb       DelLine-Esc1FTbl    delete line
                     fcb       $00
@@ -2123,8 +2123,20 @@ BlkOff              rts
 
 ************************************************************************
 *** 1F 30 - Insert Line
+*** Opens a blank line (spaces in V.FBCol) at the cursor's row; that row
+*** and the rows below move down one and the last row is lost.  The
+*** cursor does not move.  grfdrv reads CurRow/WWidth/WHeight/TermLive
+*** from the DSS, so this only guards, clamps and aims gr.* at this term.
 ***
-InsLine             rts
+InsLine             lda       V.WHeight,u
+                    beq       ilx@                no rows
+                    ldb       V.WWidth,u
+                    beq       ilx@                no columns
+                    lbsr      CalcCurPos          clamps V.CurRow below V.WHeight
+                    lbsr      SetThisTermGrfPtrs  gr.TermBlk/VBlk/U5 for THIS term
+                    ldb       #GF.InsLine
+                    lbsr      CallGrfDrvNoPD      preserves U
+ilx@                rts
 
 ************************************************************************
 *** 1F 31 - Delete Line

@@ -240,6 +240,7 @@ FuncTbl
 		    fdb	      GrfMod+GFBmEnable	  ; b=19
 		    fdb	      GrfMod+GFBmFree	  ; b=20
 		    fdb	      GrfMod+GFBmPalet	  ; b=21
+                    fdb       GrfMod+GFInsLine    ; b=22
 
 
 *******************************************************************
@@ -686,6 +687,60 @@ l@                  clrb                          clear the column
                     puls      a                   recover our row counter
                     bra       l@                  go erase more
 ex@                 jmp       >GrfMod+SysRet      return		    
+
+*******************************************************************
+* GF.InsLine (22) - 1F 30 Insert Line at V.CurRow.
+* Rows CurRow..WHeight-2 move down one (the last row is lost), then
+* row CurRow is erased to spaces in V.FBCol.  No parameters: reads the
+* DSS through U like EraseLine.  vtio clamps V.CurRow below V.WHeight
+* and refuses a zero width or height before calling.
+*******************************************************************
+GFInsLine           lbsr      SetBlkC2C3          U = this terminal's statics
+                    lda       V.WHeight,u
+                    deca
+                    suba      V.CurRow,u          rows to move
+                    ldb       V.WWidth,u
+                    mul                           D = bytes to move per plane
+                    beq       ilblank@            inserting at the last row
+                    pshs      d,u                 count, statics
+                    ldb       V.WWidth,u
+                    clra
+                    pshs      d                   ,s = width, 2,s = count, 4,s = statics
+                    ldx       V.ScreenSize,u      X = dest end offset
+                    tst       V.TermLive,u
+                    beq       ilshad@
+                    ldd       #$2000              live text plane
+                    bsr       InsPlane
+                    ldd       #$4000              live colour plane
+                    bsr       InsPlane
+                    bra       ildone@
+ilshad@             ldd       #$6000              shadow text plane
+                    bsr       InsPlane
+                    ldd       #$6000+T.TXTCOLOR   shadow colour plane
+                    bsr       InsPlane
+ildone@             leas      4,s                 drop width, count
+                    puls      u                   statics back
+ilblank@            lda       V.CurRow,u
+                    clrb                          from column 0
+                    lbsr      EraseLineCore       row CurRow -> spaces, V.FBCol
+                    jmp       >GrfMod+SysRet
+
+* InsPlane - move one plane's rows down one row, copying end to start
+* (CpyBlk copies upward, which would smear row CurRow down the screen).
+* Entry: D = plane base, X = dest end offset (V.ScreenSize)
+*        2,s = width, 4,s = count (the caller's frame)
+* Preserves X.
+InsPlane            pshs      x                   now 4,s = width, 6,s = count
+                    leay      d,x                 Y = dest end
+                    tfr       y,d
+                    subd      4,s                 source end = dest end - one row
+                    tfr       d,u
+                    ldx       6,s                 count (never 0 - caller checks)
+iplp@               lda       ,-u
+                    sta       ,-y
+                    leax      -1,x
+                    bne       iplp@
+                    puls      x,pc
 
 
 PSGInit             lbsr      SetBlkC4
