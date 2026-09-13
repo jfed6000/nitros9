@@ -28,7 +28,8 @@ Moving more vtio work into grfdrv (`docs/grfdrv-offload-plan.md`) is done in
 MAME for all five items: dead code and probes, sound chip setup into
 `GF.PSGInit`, `SS.DfPal` into `GF.DfPal`, `SS.AScrn` into `GF.AScrn` with the
 `CallGrfDrvRet` copy-back.  vtio 4,229 → 3,795 bytes, bootfile margin 643 →
-1,077.  Not yet on the board.
+1,077.  The K2 build was tested on the board by the user 2026-09-13 ("K2 looks
+good"); the Jr2 build is MAME only.
 
 The sections below are in date order, oldest first; the newest is
 **`SS.AScrn` moved into grfdrv: `GF.AScrn`, and `CallGrfDrvRet`** (2026-09-13),
