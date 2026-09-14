@@ -42,7 +42,8 @@ margin 2,103).  Three leftovers found during item 4 were removed afterwards
 user's decision.  The plan is finished.
 
 The sections below are in date order, oldest first; the newest is
-**Three leftovers removed: `FindFreeTerm`, `ClearTermTbl`, `Init`'s statics writes** (2026-09-13), after
+**After the plan: a dead process when a terminal closes, and switch speed** (2026-09-13), after
+**Three leftovers removed: `FindFreeTerm`, `ClearTermTbl`, `Init`'s statics writes**, after
 **Final squeeze: breadcrumbs deleted, long branches shortened**, after
 **Terminal setup and teardown moved into grfdrv: `GF.TermNew`**, after
 **`InitDisplay` moved into grfdrv: `GF.InitDisp`**, after
@@ -72,6 +73,9 @@ Still open, in the order I would take them:
 4. Try `1F 30` / `1F 31`, `1B 21`, Alt+arrow under `GF.Switch` and closing
    a live terminal under `GF.TermGone` on the board, and rebuild the other
    three targets (clearing `.mods/krnp2` between platforms).
+5. **Terminal switch speed**, deferred by the user: measure first; candidates are
+   under "After the plan: a dead process when a terminal closes, and switch
+   speed".
 
 ## STATUS  (2026-09-08)  — **RESOLVED.**  Boots the full `sysgo` → `Shell
 ## "startup -p"` → nested-fork chain to an interactive prompt.  The cause was
@@ -2217,6 +2221,46 @@ disk.
   and `echo ok` output;
 - no dump differences apart from the version string and the timestamps inside
   buffer sums.
+
+### After the plan: a dead process when a terminal closes, and switch speed  (2026-09-13, same day)
+
+**The `sDead` report is not a regression.**  Seen on the K2 board: `shell i=/vt1&`
+and `shell i=/vt2&` on `/term`, `ex` on `/vt1`, then `proc` on `/vt2` lists
+process 3 as `sDead`, parent 2 (the `/term` shell), with a garbage module name
+and blank I/O paths.  MAME shows exactly the same on the current disk and on
+disks rebuilt from `01f32aeb` (before switching moved into grfdrv) and
+`972356b7` (the last K2 board test).
+- This is standard OS-9.  `F$Exit` (`level1/modules/kernel/fexit.asm`, Level 2
+  branch) closes the process's paths and unlinks its module.  If the parent is
+  not in `F$Wait`, it marks the process `Dead` "so F$Wait will find us".  The
+  blank paths and the stale module name are what any dead process shows.
+- The `/term` shell collects it the next time it runs a command.  Switching
+  terminals, or an empty Enter on `/term`, does not.  Running `proc` on `/term`
+  collects it before listing, which is why it doesn't always appear.
+- A process whose parent has already exited gets parent 0 and is freed at once.
+
+**Building an old disk for comparison.**  Back to `01f32aeb`, only `vtio.asm`,
+`grfdrv256.asm` and `defs/wildbits_vtio.d` differ outside `docs/`.
+1. Copy the tree without `mame/` and `.git` (`tar`; `rsync` isn't installed).
+2. `git show <commit>:<file>` those three files into the copy.
+3. Symlink the sibling checkouts (`nitros9-languages`, `nitros9-apps`,
+   `nitros9-games`) next to the copy: `wildbits.mak` builds from
+   `$(NITROS9DIR)/..`.
+4. Build with `NITROS9DIR` pointing at the copy.
+
+**Switch speed.**  Switching felt slightly slower on the board.  The code copies
+the same memory per switch as at `01f32aeb`, about 32K bytes: text and colour
+4,800 each, font bank 0, sprite bank 0 and CLUTs, each way.  The `TermSave*`
+flags are unchanged, and it now takes one grfdrv trip instead of two.  Nothing
+was measured.  The user deferred speed work, and considers the bootfile space
+worth it even if switching is slower.  Measure first (a cycle counter around the
+grfdrv call in the MAME driver).  Candidates:
+- copy only the used cells, `V.WWidth*V.WHeight`, of the text and colour planes;
+- `TermSaveCLUT` 0, relying on the mirror `SS.DfPal` keeps, at the cost of
+  direct CLUT pokes no longer being carried per terminal;
+- `GF.TermNew`'s `PushCore` text and colour copies, which are blanked straight
+  after (terminal open only);
+- `tfm` in `CpyBlk` on a 6309 build.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and
