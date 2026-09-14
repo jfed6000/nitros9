@@ -183,7 +183,7 @@ ifeq ($(LEVEL),2)
 endif
 
 ifeq ($(LEVEL),2)
-$(DSKIMAGE): bootfile $(MODDIR)/sysgo $(addprefix $(MODDIR)/,$(CMDS)) $(STARTUP) $(FEU_STARTUP) wildbits-sys-assets $(RECIPE_DEPS)
+$(DSKIMAGE): bootfile $(MODDIR)/sysgo $(MODDIR)/vtcmd $(addprefix $(MODDIR)/,$(CMDS)) $(STARTUP) $(FEU_STARTUP) wildbits-sys-assets $(RECIPE_DEPS)
 else
 $(DSKIMAGE): bootfile $(addprefix $(MODDIR)/,$(CMDS)) $(STARTUP) $(FEU_STARTUP) wildbits-sys-assets $(RECIPE_DEPS)
 endif
@@ -202,6 +202,11 @@ ifneq ($(filter runb,$(CMDS)),)
 endif
 	$(OS9COPY) $(addprefix $(MODDIR)/,$(CMDS)) $@,CMDS
 	$(OS9ATTR_EXEC) $(foreach file,$(CMDS),$@,CMDS/$(file))
+ifeq ($(LEVEL),2)
+# vt's source is vtcmd.asm: .mods/vt is the /vt factory descriptor
+	$(OS9COPY) $(MODDIR)/vtcmd $@,CMDS/vt
+	$(OS9ATTR_EXEC) $@,CMDS/vt
+endif
 	$(CPL) $(SYS_TEXT_FILES) $@,SYS
 	$(OS9ATTR_TEXT) $(foreach file,$(notdir $(SYS_TEXT_FILES)),$@,SYS/$(file))
 ifneq ($(strip $(SYS_BIN_FILES)),)
