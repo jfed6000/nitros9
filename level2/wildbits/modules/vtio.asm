@@ -30,7 +30,7 @@ PSG.Base            equ       PSGM.Base
 * from wildbits_vtio.d.
 
 * System LUT 0 slot 2 home is SRAM $03. Glyph/erase/scroll/blank,
-* InitDisplay / text palettes, bitmap SetStat and PSG all
+* display setup / text palettes, bitmap SetStat and PSG all
 * go through GF.Write (LUT 1). Do not map system MAPSLOT.
 
                     mod       eom,name,tylg,atrv,start,size
@@ -175,7 +175,6 @@ Init
                     lda       #1
                     sta       V.TermLive,u first console writes Vicky $C2/$C3
                     clr       >gr.SwitchReq
-                    lbsr      InitDisplay initialize the display
                     lbsr      InitSound initialize the sound
                     lbsr      InitKeyboard initialize the keyboad
                     lbsr      InitMouse
@@ -220,67 +219,6 @@ InitPSG             ldb       #GF.PSGInit
 		    lbsr      CallGrfDrvNoPD
 		    rts
                     
-* Initialize the display I/O registers. No MAPSLOT.
-*
-* V.V_MCR / V.V_LayerCTL / V.BordBack are a 16-byte mirror of $FFC0-$FFCF
-* that PullBuf programs on a terminal switch.  They are SEEDED here and
-* the hardware is programmed FROM them, so mirror and registers agree by
-* construction and nothing ever has to read a Vicky register back to
-* learn the current state.  That matters: those registers are not
-* guaranteed readable, and this routine used to leave 6 of the 16
-* untouched ($FFC2/$FFC3 layer, $FFC8/$FFC9 border size, $FFCD-$FFCF
-* background) - so the mirror held whatever read-back produced, and
-* PullBuf then programmed it.  Every writer must keep the mirror in step;
-* every reader must use the mirror, not the register.
-InitDisplay         pshs      u,y
-                    ldd       #80*256+60
-                    std       V.WWidth,u
-                    lbsr      SetScreenSize
-                    leax      DispRegs,pcr
-                    leay      V.V_MCR,u
-                    ldb       #16
-IDseed              lda       ,x+
-                    sta       ,y+
-                    decb
-                    bne       IDseed
-                    leay      V.V_MCR,u
-                    ldx       #TXT.Base
-                    ldb       #16
-IDprog              lda       ,y+
-                    sta       ,x+
-                    decb
-                    bne       IDprog
-* IDprog leaves X at $FFD0.  Reload it - the cursor writes below are all
-* TXT.Base-relative, and without this they land at $FFE0-$FFE6, which is
-* undocumented I/O page on a real board (MAME maps only $FFC0-$FFDF to
-* Vicky and lets the rest fall through to slot-7 RAM past the end of Krn,
-* where it is inert, so MAME booted and hardware did not).
-                    ldx       #TXT.Base
-                    lda       #Vky_Cursor_Enable|Vky_Cursor_Flash_Rate0|Vky_Cursor_Flash_Rate1
-                    sta       VKY_TXT_CURSOR_CTRL_REG,x
-                    clra
-                    clrb
-                    std       VKY_TXT_CURSOR_Y_REG_H,x
-                    std       VKY_TXT_CURSOR_X_REG_H,x
-                    lda       #'_
-                    sta       VKY_TXT_CURSOR_CHAR_REG,x
-                    puls      u,y,pc
-
-* The 16 bytes of $FFC0-$FFCF, in register order: MASTER_CTRL_REG_L/H,
-* VKY_LAYER_CTRL_L/H, BORDER_CTRL_REG, BORDER_COLOR_B/G/R,
-* BORDER_X_SIZE, BORDER_Y_SIZE, VKY_RESERVED_02/03/04,
-* BACKGROUND_COLOR_B/G/R.  Text mode on, 80x60 (no DBL_X/DBL_Y), no
-* layers, border off and sized 0, black background.
-DispRegs            fcb       Mstr_Ctrl_Text_Mode_En,$00
-                    fcb       $00,$00
-                    fcb       $00,$00,$00,$00
-                    fcb       $00,$00
-                    fcb       $00,$00,$00
-                    fcb       $00,$00,$00
-
-
-
-
 * Keyboard initialization  
 * NOTE: If we fail to find the 'keydrv' module, carry is returned set, but
 * the caller can chose to ignore the error condition.
@@ -704,7 +642,7 @@ ClrBMTile           clr       ,x+
                     cmpx      ,s
                     puls      u
                     beq       InitTSDone
-* Match the live console. InitDisplay starts 80x60; fcfg/DWSet often
+* Match the live console. InitTermStatic starts 80x60; fcfg/DWSet often
 * leaves /term at 80x30. Hardcoded 60 meant no scroll until row 60 and
 * the last line sat below the DBL_Y visible area.
                     ldd       V.WWidth,x
@@ -834,6 +772,11 @@ AlHramD             puls      x
 * that ran first (e.g. the sign-on banner's PutCell) mapped block 0
 * into MMU slots 3/4 via SetBlkC2C3. Load them now, same as NotFirst.
                     lbsr      SetTermGrfPtrs
+* Seed the $FFC0-$FFCF mirror and program the registers with it, and set up
+* the text cursor - for the first terminal only; later ones inherit the
+* mirror from the live console in InitTermStatic.
+                    ldb       #GF.InitDisp
+                    lbsr      CallGrfDrvNoPD
                     bra       TermInited
 NotFirst
                     clr       V.TermLive,u

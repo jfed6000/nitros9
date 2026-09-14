@@ -5,9 +5,9 @@ Written 2026-09-13 for a fresh session.  Branch `wb/multiterm`, baseline commit
 `docs/grfdrv-offload-plan.md`, is finished: all five items are done in MAME, and
 the user tested the K2 build on the board ("K2 looks good").
 
-**Progress:** items 1-2 done in MAME 2026-09-13 (vtio 3,310, grfdrv256 2,733,
-jr2 margin 1,562).  **Item 3 skipped** (the user's decision, 2026-09-13); items
-4-6 remain.
+**Progress:** items 1, 2 and 5 done in MAME 2026-09-13 (vtio 3,232, grfdrv256
+2,799, jr2 margin 1,640).  **Item 3 skipped** (the user's decision,
+2026-09-13); items 4 and 6 remain.
 
 **Find code by label, not by line number.**  Line numbers go stale after the first edit.
 
@@ -226,9 +226,10 @@ Graphics set (runs with `SECS=60`; Appendix B has the test commands): `shellbg` 
   `EraseLineCore`, `GSEnter`, `GSCalcPos`.
 - Put new grfdrv code **after `ErEOScrn`**, because `ErEOLine`/`ErEOScrn` reach
   `EraseLineCore` with a short `bsr`.  The newest ops (`GFDfPal`, `GFAScrn`,
-  then item 2's `GFGetStt`/`GFSetStt` and their handlers) sit just before
-  `PSGInit`.
-- Next free op number: **29** (27/28 are `GF.GetStt`/`GF.SetStt` since item 2).
+  then item 2's `GFGetStt`/`GFSetStt` and their handlers, then item 5's
+  `GFInitDisp` and `DispRegs`) sit just before `PSGInit`.
+- Next free op number: **30** (27/28 are `GF.GetStt`/`GF.SetStt` since item 2,
+  29 is `GF.InitDisp` since item 5).
   Put `GF.*` equates next to their siblings in `defs/wildbits_vtio.d`.  Adding
   a `FuncTbl` entry does not move GrfMem.
 - `DoFontGetSet`'s debug stores at `$11A0-$11B3`, `$12B0`, `$12C0` were removed
@@ -559,9 +560,9 @@ deleted for writing the text LUTs to the wrong block; this one touches no LUTs.
 | 1 (measured) | 3,750 | 1,122 | 2,408 |
 | 2 (measured) | 3,310 | 1,562 | 2,733 |
 | 3 | skipped | | |
-| 4 (approx.) | 3,060 | 1,810 | 2,980 |
-| 5 (approx.) | 2,995 | 1,875 | 3,050 |
-| 6 (approx.) | 2,915 | 1,955 | 3,050 |
+| 5 (measured; done before 4) | 3,232 | 1,640 | 2,799 |
+| 4 (approx.) | 2,980 | 1,890 | 3,050 |
+| 6 (approx.) | 2,900 | 1,970 | 3,050 |
 
 Estimates are listing sizes minus stub costs; measure each step.  Item 6's
 long-branch count will differ now that item 3 isn't happening; rerun Appendix C.

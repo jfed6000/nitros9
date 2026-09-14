@@ -247,6 +247,7 @@ FuncTbl
                     fdb       GrfMod+GFAScrn      ; b=26
                     fdb       GrfMod+GFGetStt     ; b=27
                     fdb       GrfMod+GFSetStt     ; b=28
+                    fdb       GrfMod+GFInitDisp   ; b=29
 
 
 *******************************************************************
@@ -1275,6 +1276,54 @@ del@                pshs      y
                     tst       V.TermLive,u
                     lbne      GFBmFree            live: zero the registers
                     lbra      StatOK
+
+*******************************************************************
+* GF.InitDisp (b29) - display setup for the first terminal, issued by
+*   vtio's InitTerm after SetTermGrfPtrs.  (Not the GF.InitDisp deleted
+*   earlier for writing the text LUTs to the wrong block; this one
+*   touches no LUT.)
+* V.V_MCR / V.V_LayerCTL / V.BordBack are the 16-byte mirror of
+* $FFC0-$FFCF that PullBuf programs on a terminal switch.  Each DispRegs
+* byte goes to the mirror and to its register together, so the two agree
+* by construction and nothing has to read a Vicky register back - they
+* are not guaranteed readable.  Every writer must keep the mirror in
+* step; every reader must use the mirror.  Later terminals inherit the
+* mirror from the live console in vtio's InitTermStatic.
+* Then the text cursor: enabled, flashing, '_' at 0,0.
+*******************************************************************
+GFInitDisp          lbsr      SetBlkC2C3          U = this terminal's statics
+                    leax      DispRegs,pcr
+                    leay      V.V_MCR,u
+                    ldu       #TXT.Base
+                    ldb       #16
+seed@               lda       ,x+
+                    sta       ,y+                 mirror
+                    sta       ,u+                 register
+                    decb
+                    bne       seed@
+                    ldx       #TXT.Base
+                    lda       #Vky_Cursor_Enable|Vky_Cursor_Flash_Rate0|Vky_Cursor_Flash_Rate1
+                    sta       VKY_TXT_CURSOR_CTRL_REG,x
+                    clra
+                    clrb
+                    std       VKY_TXT_CURSOR_Y_REG_H,x
+                    std       VKY_TXT_CURSOR_X_REG_H,x
+                    lda       #'_
+                    sta       VKY_TXT_CURSOR_CHAR_REG,x
+                    clrb
+                    jmp       >GrfMod+SysRet
+
+* The 16 bytes of $FFC0-$FFCF, in register order: MASTER_CTRL_REG_L/H,
+* VKY_LAYER_CTRL_L/H, BORDER_CTRL_REG, BORDER_COLOR_B/G/R,
+* BORDER_X_SIZE, BORDER_Y_SIZE, VKY_RESERVED_02/03/04,
+* BACKGROUND_COLOR_B/G/R.  Text mode on, 80x60 (no DBL_X/DBL_Y), no
+* layers, border off and sized 0, black background.
+DispRegs            fcb       Mstr_Ctrl_Text_Mode_En,$00
+                    fcb       $00,$00
+                    fcb       $00,$00,$00,$00
+                    fcb       $00,$00
+                    fcb       $00,$00,$00
+                    fcb       $00,$00,$00
 
 
 *******************************************************************

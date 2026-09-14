@@ -32,12 +32,14 @@ MAME for all five items: dead code and probes, sound chip setup into
 good"); the Jr2 build is MAME only.  **Next work:** `docs/vtio-shrink-plan.md` —
 SetStat/GetStat forwarding, the escape parser into grfdrv (`GF.Ctrl`), terminal
 setup, `InitDisplay`, and a final squeeze, aiming at roughly 1,950 bytes of
-vtio.  Items 1 and 2 are done in MAME: `SSDMAFill` deleted, and GetStat/SetStat
-forwarded to grfdrv (vtio 3,310, margin 1,562).  Item 3, the escape parser into
-grfdrv, was skipped by the user's decision; items 4-6 remain.
+vtio.  Items 1, 2 and 5 are done in MAME: `SSDMAFill` deleted, GetStat/SetStat
+forwarded to grfdrv, and `InitDisplay` moved into `GF.InitDisp` (vtio 3,232,
+margin 1,640).  Item 3, the escape parser into grfdrv, was skipped by the
+user's decision; items 4 and 6 remain.
 
 The sections below are in date order, oldest first; the newest is
-**GetStat/SetStat forwarded to grfdrv** (2026-09-13), after
+**`InitDisplay` moved into grfdrv: `GF.InitDisp`** (2026-09-13), after
+**GetStat/SetStat forwarded to grfdrv**, after
 **`SSDMAFill` deleted**, after
 **`SS.AScrn` moved into grfdrv: `GF.AScrn`, and `CallGrfDrvRet`**, after
 **`SS.DfPal` moved into grfdrv: `GF.DfPal`**, after
@@ -1969,6 +1971,60 @@ It is timing, not logic:
 
 The extra grfdrv trips move the close past a tick.  The dump's `gr.TermBlk`
 differs for a related reason: GetStat calls now aim it too.
+
+### `InitDisplay` moved into grfdrv: `GF.InitDisp`  (2026-09-13, same day)
+
+Item 5 of `docs/vtio-shrink-plan.md` (item 3 was skipped, item 4 is still to
+come).  Verified in MAME `wbjr2`; only `l2`/`jr2` rebuilt.
+
+**What moved.**  vtio's `InitDisplay` and `DispRegs` are gone, and `Init` no
+longer calls it.
+- Its first three lines (80x60, `SetScreenSize`) duplicated `InitTermStatic`,
+  which does the same for every terminal before anything reads them.
+- The rest, which seeds the `$FFC0-$FFCF` mirror from `DispRegs`, programs the
+  registers and sets up the text cursor, is now grfdrv's `GFInitDisp`, op 29.
+- `InitTerm`'s first-terminal branch issues it right after `SetTermGrfPtrs`.
+  That is the first point where grfdrv is loaded and aimed at the terminal
+  whose mirror it seeds.
+
+The first terminal needs the seed because `InitTermStatic` skips its inherit
+copy when `D.KbdSta` equals `U`.  Later terminals still inherit the mirror from
+the live console there.
+
+The name is reused on purpose.  The `GF.InitDisp` deleted earlier (see
+"`GF.InitDisp` deleted; text LUTs were on the wrong block") installed fonts and
+LUTs.  This one touches no LUT.
+
+**Differences in how it runs:**
+- One loop writes each `DispRegs` byte to the mirror and to its register
+  together.  `InitDisplay` seeded all 16, then programmed the registers from
+  the mirror.  The values and register order are the same.
+- The registers are programmed at the end of the first `Init` instead of
+  before the keyboard, mouse, grfdrv and PSG setup.  Nothing in between writes
+  the display.
+- The first-terminal branch also runs when a terminal opens after every other
+  one has closed (`gr.TermCnt` back to 0).  That terminal now gets the seed too;
+  `InitDisplay` only ever ran on the very first `Init`.  This case can't be
+  reached in MAME, because `sysgo`'s shell holds `/term`.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 3,310 | 3,232 |
+| `grfdrv256` | 2,733 | 2,799 |
+| bootfile modules | 30,694 | 30,616 |
+| margin to 32,256 | 1,562 | 1,640 |
+
+**Verification**, on the item 2 disk and the new one side by side:
+
+| test | result |
+|---|---|
+| boot, no keys | identical `HW MCR` (`$0104`), `HW CURSOR` (`ctrl=$07 char=$5F`, same position), text LUT FG, `V:` lines and screen |
+| regression set | same `LiveTerm`/`TermCnt` values, re-entry count 0; the only difference is the version string |
+| `shellbg` on `/term`, on `/vt1` after Alt+Right, `>/vt1`; `shellbg` then `shellbgoff`; `dftest`; `asctest` | no differences |
+| `gstest` on `/term`, after `1b 20 02 00 00 50 1e 01 00 00`, after `shellbg` | no differences; its `SS.DScrn` reads the mirror `GF.InitDisp` seeds |
+
+Otherwise only the version string, banner timestamp, and stale RAM in block
+`$3F` and the never-loaded `T0.CLUT1/2` differ.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and

@@ -439,6 +439,7 @@ GF.DfPal            equ       25        ; SS.DfPal: 1K at caller R$Y -> CLUT R$X
 GF.AScrn            equ       26        ; SS.AScrn: allocate bitmap R$Y, block back in R$X
 GF.GetStt           equ       27        ; GetStat codes vtio does not keep: code in gr.b1, results in gr.PDRGS
 GF.SetStt           equ       28        ; SetStat codes vtio does not keep: code in gr.b1
+GF.InitDisp         equ       29        ; first terminal: seed + program the $FFC0-$FFCF mirror, cursor (not old 18)
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 
