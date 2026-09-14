@@ -343,8 +343,9 @@ gr.TermTbl          RMB       72        ; Screen table base
 *   ScrollLive/Shadow    -           -            -      -      start off  end off
 *     (direct calls, A = width; start = CurRow*WWidth or 0, end = V.ScreenSize)
 *
-* b1 is GF.TermGone's closing terminal id and GF.GetStt/GF.SetStt's status
-*   code.  (It was the GF.Write sub-op selector before that layer went.)
+* b1 is GF.TermNew's and GF.TermGone's terminal id, and GF.GetStt/GF.SetStt's
+*   status code.  d1 is GF.TermNew's and GF.TermGone's device static (its
+*   system address).  (It was the GF.Write sub-op selector before that layer went.)
 * b4 "dest" is set by vtio's SetWDest: WD.Buf = the 16K terminal backup
 *   buffer at LUT1 $6000, WD.Vicky = the live $C2/$C3 planes.
 * d1/d2 halves are addressed gr.d1 / gr.d1+1 the way D splits into A/B.
@@ -359,9 +360,9 @@ gr.TermTbl          RMB       72        ; Screen table base
 * The physical order below (b1 b2 d1 d2 b3 b4 b5) is historical, not
 * meaningful; it is kept so GrfMem offsets did not move in the rename.
 *******************************************************************
-gr.b1               rmb       1         ; GF.TermGone: closing id / GF.GetStt, GF.SetStt: status code
+gr.b1               rmb       1         ; GF.TermNew, GF.TermGone: terminal id / GF.GetStt, GF.SetStt: status code
 gr.b2               rmb       1         ; glyph / palette reg # / bitmap #
-gr.d1               rmb       2         ; cell offset / PSG freq / BM addr / LUT b0-1
+gr.d1               rmb       2         ; cell offset / PSG freq / BM addr / LUT b0-1 / GF.TermNew, GF.TermGone: static
 gr.d2               rmb       2         ; GF.Pal LUT bytes 2-3 / scroll end offset
 gr.b3               rmb       1         ; colour attr / PSG volume / BM ctrl byte
 gr.b4               rmb       1         ; WD.Buf (16K backup) / WD.Vicky ($C2/$C3)
@@ -434,12 +435,13 @@ GF.BmFree           equ       20        ; bitmap: zero the four registers
 GF.BmPalet          equ       21        ; bitmap: assign CLUT
 GF.InsLine          equ       22        ; 1F 30 insert line at V.CurRow (reads DSS)
 GF.Switch           equ       23        ; change live terminal per gr.SwitchReq (AltISR)
-GF.TermGone         equ       24        ; terminal id gr.b1 is closing (vtio TermTerm)
+GF.TermGone         equ       24        ; terminal id gr.b1, static gr.d1, is closing (vtio TermTerm)
 GF.DfPal            equ       25        ; SS.DfPal: 1K at caller R$Y -> CLUT R$X (buffer + live)
 GF.AScrn            equ       26        ; SS.AScrn: allocate bitmap R$Y, block back in R$X
 GF.GetStt           equ       27        ; GetStat codes vtio does not keep: code in gr.b1, results in gr.PDRGS
 GF.SetStt           equ       28        ; SetStat codes vtio does not keep: code in gr.b1
 GF.InitDisp         equ       29        ; first terminal: seed + program the $FFC0-$FFCF mirror, cursor (not old 18)
+GF.TermNew          equ       30        ; set up terminal id gr.b1 for static gr.d1 (vtio InitTerm)
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 

@@ -34,11 +34,13 @@ SetStat/GetStat forwarding, the escape parser into grfdrv (`GF.Ctrl`), terminal
 setup, `InitDisplay`, and a final squeeze, aiming at roughly 1,950 bytes of
 vtio.  Items 1, 2 and 5 are done in MAME: `SSDMAFill` deleted, GetStat/SetStat
 forwarded to grfdrv, and `InitDisplay` moved into `GF.InitDisp` (vtio 3,232,
-margin 1,640).  Item 3, the escape parser into grfdrv, was skipped by the
-user's decision; items 4 and 6 remain.
+margin 1,640).  Item 4 is done in MAME too: terminal setup and teardown moved
+into `GF.TermNew`/`GF.TermGone` (vtio 2,814, margin 2,058).  Item 3, the escape
+parser into grfdrv, was skipped by the user's decision; item 6 remains.
 
 The sections below are in date order, oldest first; the newest is
-**`InitDisplay` moved into grfdrv: `GF.InitDisp`** (2026-09-13), after
+**Terminal setup and teardown moved into grfdrv: `GF.TermNew`** (2026-09-13), after
+**`InitDisplay` moved into grfdrv: `GF.InitDisp`**, after
 **GetStat/SetStat forwarded to grfdrv**, after
 **`SSDMAFill` deleted**, after
 **`SS.AScrn` moved into grfdrv: `GF.AScrn`, and `CallGrfDrvRet`**, after
@@ -2028,6 +2030,104 @@ LUTs.  This one touches no LUT.
 
 Otherwise only the version string, banner timestamp, and stale RAM in block
 `$3F` and the never-loaded `T0.CLUT1/2` differ.
+
+### Terminal setup and teardown moved into grfdrv: `GF.TermNew`  (2026-09-13, same day)
+
+Item 4 of `docs/vtio-shrink-plan.md`.  Verified in MAME `wbjr2`; the K2 disk is
+built for the board.
+
+**What moved.**  vtio's `InitTerm` body, `InitTermStatic`, `BlankTermText`, and
+`TermTerm`'s `FreeBuf`/`ClearEntry` are gone.  `InitTerm` and `TermTerm` are now
+stubs sharing a tail: the id goes in `gr.b1`, the static's system address in
+`gr.d1`, and they issue an op.
+- `GF.TermNew` (op 30) checks the id and `T.Init` (`E$DevBsy`), does `F$AlHRAM`
+  for the 16K buffer, and fills the whole table entry and the statics'
+  defaults.  The first terminal then goes live and tail-jumps into
+  `GFInitDisp`.  A later one gets the inherit copy, `PushCore` and the buffer
+  blank.  `T.Init` is written last.
+- `GF.TermGone` (op 24) gains the ownership check, `F$DelRAM`, the entry clear
+  and `dec gr.TermCnt`.
+- vtio still stores `V.TermID` before the call.  `SSOpen` and `Init` are
+  unchanged.
+- `GFBlank`'s body is now `BlankCore`.  Ops 7, 17 and 29 have no vtio caller
+  any more; their `FuncTbl` entries stay.
+- `GFTermNew` writes the `$12EC` and `$12F5-$12F8` breadcrumbs, with the same
+  meaning, so dumps compare across builds.
+
+**Why the claim comes last.**  The old `InitTerm` set `T.Init` before storing
+`T.StatPtr`, `T.VBlk` and `T.grU5`, and before the statics or the buffer were
+ready, with interrupts on.  An Alt+arrow served in that window could make a
+half-built terminal live.  At worst `GSEnter` put `T.StatPtr = 0` into
+`D.KbdSta`, and the keyboard ISR then called through direct-page garbage.
+While an op runs the AltISR declines to switch (`gr.Busy`), including during
+grfdrv's own `F$AlHRAM`/`F$DelRAM`.  So a pending request is served on the next
+tick, against a complete entry.  The sweep below did not reproduce the old race
+on either build; the window is a few instructions wide.
+
+**What the code showed, against the plan's item 4 notes:**
+- The system DAT image *is* in block 0: `krn.asm:377` sets `D.SysPrc` to
+  `$0600`, and `:496` points `D.SysDAT` at its `P$DATImg`.  grfdrv computes
+  `T.VBlk` itself.
+- The live terminal's statics go in slot 1 (its `T.VBlk`, and `T.grU5` less
+  `$8000`), beside the new ones in slot 5.  One block may sit in both slots, so
+  the same-block case needs nothing.  A static can't straddle two blocks:
+  `V.Last` is `$FA` and `F$SRqMem` hands out whole pages.
+- `T.StatPtr` is in block 0, so the ownership check moved as well.  It is not
+  only defensive: a `/vt` factory static that never bound has `V.TermID` 0,
+  which is `/term`'s id, when IOMan detaches it.
+- IOMan clears a new static (`level1/modules/ioman.asm:679-686`), so most of
+  `InitTermStatic`'s clears were already no-ops.  They are ported anyway, by the
+  user's choice.
+- IOMan reloads what it needs after `D$INIT` (`ioman.asm:737-739`) and `D$TERM`
+  (`:813-822`), and `SSOpen` reloads `Y`, so the stubs don't preserve `X`/`Y`.
+- `PushCore` stays in setup, but not for the reason `InitTerm`'s comment gave.
+  It no longer reads the bitmap or tile registers.  With `TermSaveFont0`,
+  `TermSaveSprite0` and `TermSaveCLUT` on, it copies the live font bank 0,
+  sprite bank 0 and CLUTs into the new buffer.  Its text and colour copies are
+  blanked straight after.
+
+**The inherit copy** is three runs from `InhRuns`, with interrupts masked,
+because the AltISR's keydrv call writes the live `V.KeyDrvStat`:
+- `V.WWidth` through `V.MSDrvEPtr`, 14 bytes: size, `V.ScreenSize`, `V.FBCol`,
+  the unread `V.BordCol`, the keydrv and mouse pointers;
+- `V.KeyDrvStat`, 8 bytes;
+- `V.ST` and the `$FFC0-$FFCF` mirror, 17 bytes.
+
+Copying `V.ScreenSize` replaces the `SetScreenSize` call.  The source is
+`gr.LiveTerm`'s entry (the copy is skipped if no terminal is live), not
+`D.KbdSta`.  First versus later is still decided by `gr.TermCnt`.
+
+**`GF.TermGone`'s order** is now:
+1. range-check the id;
+2. `T.StatPtr` must equal `gr.d1`;
+3. `T.Init` from one read of the flags;
+4. clear the flags under mask;
+5. bring in the lowest open id if it was live;
+6. with interrupts back on, `F$DelRAM` of `T.Block`, clear `T.Block` and
+   `T.StatPtr`, `dec gr.TermCnt`.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 3,232 | 2,814 |
+| `grfdrv256` | 2,799 | 3,156 |
+| bootfile modules | 30,616 | 30,198 |
+| margin to 32,256 | 1,640 | 2,058 |
+
+**Verification**, on the item 5 disk and the new one side by side:
+
+| test | result |
+|---|---|
+| regression set | same `LiveTerm`/`TermCnt` values, re-entry count 0 |
+| `shellbg` on `/term`, on `/vt1` after Alt+Right, `>/vt1` | no differences |
+| on `/term` `display 1b 20 02 00 00 50 1e 01 00 00` and `display 1b 32 03`; then `iniz /vt1` + `shell i=/vt1&`, or `shell i=/vt&`; Alt+Right, `echo ok` | identical dumps; `/vt1` has `W=80 H=30 ScrSz=2400 FBCol=$30`, and `ok` prints on it (keydrv pointers inherited) |
+| `iniz /vt1` / `deiniz /vt1` three times, then `mfree` | same total on both builds (32 blocks; 31 on both without the cycles), `TermCnt=1` |
+| `shell i=/vt&` twice; then Alt+Right, `ex`, Alt+Right, `ex` | `TermCnt=3`; then `TermCnt=1`, `LiveTerm=$00` |
+| `iniz /vt1 /vt2 ... /vt8`, then `display 07 >/vt` | `ERROR #034` on both builds, `TermCnt=9`, `/term` still live and answers `echo ok` |
+| Alt+Right keyed 5 to 95 frames after `iniz /vt1`'s Enter, ten runs | all `LiveTerm=$01`, `TermCnt=2`, re-entry count 0, on both builds |
+
+Otherwise only known noise differs: the version string, Shell+ timestamps inside
+buffer sums, stale RAM in `/term`'s never-pushed block `$3F` and `T0.CLUT0-3`,
+and `s3`'s switch-versus-free timing.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and

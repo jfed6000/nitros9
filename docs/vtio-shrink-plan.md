@@ -5,9 +5,9 @@ Written 2026-09-13 for a fresh session.  Branch `wb/multiterm`, baseline commit
 `docs/grfdrv-offload-plan.md`, is finished: all five items are done in MAME, and
 the user tested the K2 build on the board ("K2 looks good").
 
-**Progress:** items 1, 2 and 5 done in MAME 2026-09-13 (vtio 3,232, grfdrv256
-2,799, jr2 margin 1,640).  **Item 3 skipped** (the user's decision,
-2026-09-13); items 4 and 6 remain.
+**Progress:** items 1, 2, 5 and 4 done in MAME 2026-09-13 (vtio 2,814, grfdrv256
+3,156, jr2 margin 2,058).  **Item 3 skipped** (the user's decision,
+2026-09-13); item 6 remains.
 
 **Find code by label, not by line number.**  Line numbers go stale after the first edit.
 
@@ -235,9 +235,10 @@ Graphics set (runs with `SECS=60`; Appendix B has the test commands): `shellbg` 
 - Put new grfdrv code **after `ErEOScrn`**, because `ErEOLine`/`ErEOScrn` reach
   `EraseLineCore` with a short `bsr`.  The newest ops (`GFDfPal`, `GFAScrn`,
   then item 2's `GFGetStt`/`GFSetStt` and their handlers, then item 5's
-  `GFInitDisp` and `DispRegs`) sit just before `PSGInit`.
-- Next free op number: **30** (27/28 are `GF.GetStt`/`GF.SetStt` since item 2,
-  29 is `GF.InitDisp` since item 5).
+  `GFInitDisp` and `DispRegs`, then item 4's `GFTermNew` and `InhRuns`) sit just
+  before `PSGInit`.
+- Next free op number: **31** (27/28 are `GF.GetStt`/`GF.SetStt` since item 2,
+  29 is `GF.InitDisp` since item 5, 30 is `GF.TermNew` since item 4).
   Put `GF.*` equates next to their siblings in `defs/wildbits_vtio.d`.  Adding
   a `FuncTbl` entry does not move GrfMem.
 - `DoFontGetSet`'s debug stores at `$11A0-$11B3`, `$12B0`, `$12C0` were removed
@@ -479,7 +480,15 @@ Also:
 - An unknown sub-code (`1b 7f`, `05 7f`, `1f 7f`) is ignored, and the next
   command works.
 
-### 4. Terminal setup and teardown — a few hundred bytes, design first
+### 4. Terminal setup and teardown — a few hundred bytes, design first — **DONE**
+
+**Done 2026-09-13 in MAME** as `GF.TermNew` (op 30) plus an extended
+`GF.TermGone`: vtio 3,232 → 2,814, jr2 margin 1,640 → 2,058, grfdrv256 2,799 →
+3,156.  The design as built, and where the notes below turned out wrong (the
+system DAT image *is* in block 0; the claim must be the op's last act; no
+same-block special case; the ownership check can move), is in the rewrite
+doc's section "Terminal setup and teardown moved into grfdrv".  The notes below
+are the pre-design sketch, kept for the record.
 
 Less certain than items 2-3: read the code again before committing to a split.
 
@@ -530,10 +539,10 @@ deleted for writing the text LUTs to the wrong block; this one touches no LUTs.
 - **Long branches.**  At `07a6f4a4`, 23 long branches would fit short ones
   (about 30 bytes).  Rerun the scan after items 2-5 (Appendix C), shorten them,
   and rebuild.
-- **Breadcrumbs** (about 55 bytes):
-  - Put `HandleKeySwtchTrm`'s `$12E4-$12E7`, `BlankTermText`'s `$12EC`, and the
-    `$12F5-$12F8` stores in `TermInited`/`AlreadyOpen`/`InitError` under
-    `IFNE VTIODBG`, with `VTIODBG set 0` near the top of vtio.
+- **Breadcrumbs** (about 20 bytes since item 4):
+  - Put `HandleKeySwtchTrm`'s `$12E4-$12E7` stores under `IFNE VTIODBG`, with
+    `VTIODBG set 0` near the top of vtio.  The `$12EC` and `$12F5-$12F8` stores
+    moved into grfdrv's `GFTermNew` with item 4 and cost no bootfile bytes.
   - **Keep `CallGrfDrvGo`'s re-entry counter (`$12E2`/`$12E3`)
     unconditional.**  It is the only detector for a real hazard, and the
     regression set checks it.
@@ -569,8 +578,8 @@ deleted for writing the text LUTs to the wrong block; this one touches no LUTs.
 | 2 (measured) | 3,310 | 1,562 | 2,733 |
 | 3 | skipped | | |
 | 5 (measured; done before 4) | 3,232 | 1,640 | 2,799 |
-| 4 (approx.) | 2,980 | 1,890 | 3,050 |
-| 6 (approx.) | 2,900 | 1,970 | 3,050 |
+| 4 (measured) | 2,814 | 2,058 | 3,156 |
+| 6 (approx.) | 2,780 | 2,090 | 3,156 |
 
 Estimates are listing sizes minus stub costs; measure each step.  Item 6's
 long-branch count will differ now that item 3 isn't happening; rerun Appendix C.

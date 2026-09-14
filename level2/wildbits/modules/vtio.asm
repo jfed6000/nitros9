@@ -157,7 +157,7 @@ AltSndEx            jmp       [D.OrgAlt]         branch to the original alternat
 * First INIZ (/term): hardware + InitTerm (IT.WND=0). Old Write still owns $C2.
 * Later named INIZ (/vtN): skip hardware, InitTerm only.
 * Factory INIZ (/vt, IT.WND=$FF): skip hardware and InitTerm; SS.Open binds.
-* InitTerm log (read by the MAME dump): $12F5=active $12F6=cnt $12F7=K/E $12F8=err
+* GF.TermNew's log (read by the MAME dump): $12F5=active $12F6=cnt $12F7=K/E $12F8=err
 Init
                     pshs      y
                     lda       >gr.FirstInitDone
@@ -515,51 +515,30 @@ SetTermGrfPtrs      pshs      d,x,y,u
                     puls      d,x,y,u,pc
 
 *******************************************************************
-* TermTerm - release this device's terminal.  The screen side - taking it
-* off the switch list and, if it was live, bringing in another terminal -
-* is grfdrv's GF.TermGone.  vtio frees the 16K buffer and clears the
-* table entry.  CallGrfDrv2 keeps U, so Term's later V.KeyDrvEPtr,u is
-* still this static.
+* InitTerm - set up terminal B (0-8, never $FF) for this static.
+* TermTerm - release this device's terminal.
+* Both are grfdrv ops.  GF.TermNew allocates the 16K buffer, fills the
+* gr.TermTbl entry, sets the statics up (inheriting from the live
+* terminal) and marks the entry open last.  GF.TermGone takes it off the
+* switch list, brings in another terminal if it was live, frees the
+* buffer, clears the entry and counts gr.TermCnt down.  Each gets the id
+* in gr.b1 and this static in gr.d1; GF.TermGone does nothing unless
+* T.StatPtr is this static, because IOMan calls Term after a failed Init
+* or /vt open, and V.TermID need not be ours then.
+* V.TermID is stored before the call so Term always has an id to offer.
+* Exit: B and carry from grfdrv.  CallGrfDrv2 keeps U, so Term's later
+* V.KeyDrvEPtr,u is still this static; A, X and Y are grfdrv's.  IOMan
+* reloads what it needs after D$INIT and D$TERM, and SSOpen reloads Y.
 *******************************************************************
-TermTerm
-                    pshs      x,y,u
-                    ldb       V.TermID,u
-                    lda       #gr.TermSz
-                    mul
-                    ldx       #gr.TermTbl
-                    leax      d,x
-                    lda       T.Flags,x
-                    bita      #T.Init
-                    lbeq      TermNotInit
-* V.TermID is written before InitTerm knows the id is free, and IOMan calls
-* Term after a failed Init - so make sure the entry really is ours.
-                    cmpu      T.StatPtr,x
-                    lbne      TermNotInit
-                    ldb       V.TermID,u
-                    stb       >gr.b1              closing id for GF.TermGone
-                    pshs      x
-                    ldb       #GF.TermGone
-                    lbsr      CallGrfDrvNoPD
-                    puls      x
-FreeBuf
-                    ldb       T.Block,x
-                    beq       ClearEntry
-                    pshs      x
-                    clra
-                    tfr       d,x
-                    ldb       #2
-                    os9       F$DelRAM
-                    puls      x
-ClearEntry
-                    clr       T.Flags,x
-                    clr       T.Block,x
-                    clra
-                    clrb
-                    std       T.StatPtr,x
-                    dec       >gr.TermCnt
-TermNotInit
-                    clrb
-                    puls      x,y,u,pc
+InitTerm            stb       V.TermID,u
+                    lda       #GF.TermNew
+TermCall            stb       >gr.b1              terminal id
+                    stu       >gr.d1              this static, as a system address
+                    tfr       a,b
+                    lbra      CallGrfDrvNoPD
+TermTerm            ldb       V.TermID,u
+                    lda       #GF.TermGone
+                    bra       TermCall
 
 
 
@@ -602,222 +581,6 @@ FindFreeFail        comb
                     ldb       #E$MNF
                     rts
 
-*******************************************************************
-* InitTermStatic - per-terminal driver static that every INIZ needs
-*******************************************************************
-InitTermStatic      pshs      d,x,y
-                    clr       V.WriteState,u    escape collector idle
-                    ldb       #$10
-                    stb       V.FBCol,u
-                    ldd       #80*256+60
-                    std       V.WWidth,u
-                    lbsr      SetScreenSize
-                    clr       V.CurRow,u
-                    clr       V.CurCol,u
-* V.CurPos is the cached V.CurRow*V.WWidth+V.CurCol that PutGlyph paints
-* at; clearing row/col without it leaves a stale cell offset behind.
-                    clr       V.CurPos,u
-                    clr       V.CurPos+1,u
-                    clr       V.IBufH,u
-                    clr       V.IBufT,u
-                    clr       V.LastCh,u
-                    clr       V.Reverse,u
-                    clr       V.ST,u
-* The bitmap / CLUT-block / tile mirror starts as a defined "everything
-* off" for a new terminal.  It used to be seeded by InitTerm's PushBuf
-* reading the live registers back; PushBuf does not read them any more,
-* so without this PullBuf would program uninitialized static into the
-* bitmap and tile registers the first time this terminal came up.
-* Deliberately NOT inherited from the live console below: a new terminal
-* has no bitmaps of its own, and pointing it at another terminal's is
-* exactly the bug this whole mirror exists to prevent.
-                    leax      V.BM0Cl_En,u
-                    ldb       #V.GCX-V.BM0Cl_En
-ClrBMTile           clr       ,x+
-                    decb
-                    bne       ClrBMTile
-                    ldx       >D.KbdSta        first term statics?
-                    beq       InitTSDone
-                    pshs      u
-                    cmpx      ,s
-                    puls      u
-                    beq       InitTSDone
-* Match the live console. InitTermStatic starts 80x60; fcfg/DWSet often
-* leaves /term at 80x30. Hardcoded 60 meant no scroll until row 60 and
-* the last line sat below the DBL_Y visible area.
-                    ldd       V.WWidth,x
-                    std       V.WWidth,u
-                    lbsr      SetScreenSize
-                    lda       V.FBCol,x
-                    sta       V.FBCol,u
-                    lda       V.ST,x
-                    sta       V.ST,u
-                    ldd       V.KeyDrvMPtr,x
-                    std       V.KeyDrvMPtr,u
-                    ldd       V.KeyDrvEPtr,x
-                    std       V.KeyDrvEPtr,u
-                    pshs      x
-                    leax      V.KeyDrvStat,x
-                    leay      V.KeyDrvStat,u
-                    lda       #8
-CopyKS              ldb       ,x+
-                    stb       ,y+
-                    deca
-                    bne       CopyKS
-                    puls      x
-* The 16-byte $FFC0-$FFCF mirror (V.V_MCR / V.V_LayerCTL / V.BordBack).
-* PullBuf programs the hardware from it, so a new terminal has to start
-* from the live console's values.  It used to start from whatever
-* PushBuf's read-back of the registers produced.
-                    pshs      x
-                    leax      V.V_MCR,x
-                    leay      V.V_MCR,u
-                    lda       #16
-CopyVR              ldb       ,x+
-                    stb       ,y+
-                    deca
-                    bne       CopyVR
-                    puls      x
-                    ldd       V.MSDrvMPtr,x
-                    std       V.MSDrvMPtr,u
-                    ldd       V.MSDrvEPtr,x
-                    std       V.MSDrvEPtr,u
-InitTSDone          puls      d,x,y,pc
-
-*******************************************************************
-* BlankTermText - T.TXT spaces and T.TXTCOLOR = V.FBCol in the 16K.
-* GF.Write WOp=WO.Blank in LUT 1. Never system MAPSLOT / MAPSLOT+1.
-* Refuse V.TermBufBlk=0 (that aliases kernel block 0 at $4000).
-* Probe $12EC = blk (read by the MAME dump)
-*******************************************************************
-BlankTermText       pshs      cc,d,x,y
-                    lda       V.TermBufBlk,u
-                    beq       BTTSkip
-                    sta       $12EC
-                    sta       >gr.TermBlk
-                    lda       #C$SPAC
-                    sta       >gr.b2              fill glyph
-                    lda       V.FBCol,u
-                    sta       >gr.b3              fill colour attr
-                    ldb       #GF.Blank
-                    lbsr      CallGrfDrvNoPD
-BTTSkip             puls      cc,d,x,y,pc
-
-*******************************************************************
-* InitTerm
-* B = terminal id (0-8). Never $FF.
-* First term: V.TermLive=1, no BlankTermText, no PushBuf.
-* Later: V.TermLive=0, PushBuf into the new 16K, then BlankTermText.
-* PushBuf used to be what seeded the new terminal's display registers,
-* and skipping it left PullBuf programming an uninitialized MCR - the
-* display went black after a one-frame flash. That is no longer its job:
-* InitTermStatic inherits the $FFC0-$FFCF mirror from the live console,
-* and PushBuf no longer reads any Vicky register or Vicky memory back
-* (see TermVRAMSave). What it still captures is the bitmap and tilemap
-* register block, so keep it.
-*******************************************************************
-InitTerm
-                    pshs      x,y,u
-                    stb       V.TermID,u
-                    lda       #gr.TermSz
-                    mul
-                    ldx       #gr.TermTbl
-                    leax      d,x
-                    lda       T.Flags,x
-                    bita      #T.Init
-                    lbne      AlreadyOpen
-                    pshs      x
-                    ldd       #2
-                    os9       F$AlHRAM
-                    lbcs      InitError
-                    cmpx      #DAT.BlMx+1
-                    bhs       AlHramD
-                    tfr       x,d
-AlHramD             puls      x
-                    stb       T.Block,x
-                    stb       V.TermBufBlk,u
-                    lda       #T.Init
-                    sta       T.Flags,x
-                    stu       T.StatPtr,x	   store location of DSS
-                    pshs      d,y 		   compute block # for static storage
-		    tfr	      u,d                  but first compute U for grfdrv
-		    anda      #$1F
-		    ora	      #$A0
-		    std	      T.grU5,x             store U for grfdrv slot 5
-                    ldy       >D.SysDAT                now oompute block # for static storage
-                    tfr       u,d
-                    lsra
-                    lsra
-                    lsra
-                    lsra
-                    lsra              A = page (U >> 13)
-                    lsla
-                    inca              -> block-number byte of that DAT entry
-                    lda       a,y
-                    sta       T.VBlk,x	            store block # for static storage
-                    puls      d,y
-                    lbsr      InitTermStatic
-                    lda       >gr.TermCnt
-                    bne       NotFirst
-                    lda       V.TermID,u
-                    sta       >gr.LiveTerm
-                    lda       #T.Init+T.Live
-                    sta       T.Flags,x
-                    lda       #1
-                    sta       V.TermLive,u
-* BUG FIX: /term (first terminal) used to skip straight to TermInited,
-* which also skipped SetTermGrfPtrs (NotFirst's job below). That left
-* gr.TermBlk/gr.VBlk/gr.U5/gr.VStaStorU at InitGrfDrv's cleared zeros
-* until SetWDest's next per-call snapshot caught up - so any grfdrv op
-* that ran first (e.g. the sign-on banner's PutCell) mapped block 0
-* into MMU slots 3/4 via SetBlkC2C3. Load them now, same as NotFirst.
-                    lbsr      SetTermGrfPtrs
-* Seed the $FFC0-$FFCF mirror and program the registers with it, and set up
-* the text cursor - for the first terminal only; later ones inherit the
-* mirror from the live console in InitTermStatic.
-                    ldb       #GF.InitDisp
-                    lbsr      CallGrfDrvNoPD
-                    bra       TermInited
-NotFirst
-                    clr       V.TermLive,u
-                    lbsr      SetTermGrfPtrs
-                    pshs      x,y,u
-* CallGrfDrvNoPD does not wait if gr.Busy (gbusy unused). Overlapping
-* factory I$Open PushBuf would Flip1 twice; spin would starve the holder.
-*WaitPush            tst       >gr.Busy
-*                    beq       PushGo
-*                    ldx       #1
-*                    os9       F$Sleep
-*                    bra       WaitPush
-PushGo              ldb       #GF.PushBuf
-                    lbsr      CallGrfDrvNoPD
-                    puls      x,y,u
-                    lbsr      BlankTermText
-TermInited
-                    lda       V.TermLive,u
-                    sta       $12F5
-                    inc       >gr.TermCnt
-                    lda       >gr.TermCnt
-                    sta       $12F6
-                    lda       #'K
-                    sta       $12F7
-                    clrb
-                    andcc     #^Carry
-                    puls      x,y,u,pc
-AlreadyOpen
-                    comb
-                    ldb       #E$DevBsy
-                    lda       #'E
-                    sta       $12F7
-                    stb       $12F8
-                    puls      x,y,u,pc
-InitError
-                    puls      x
-                    lda       #'E
-                    sta       $12F7
-                    stb       $12F8
-                    puls      x,y,u,pc
- 
 * Term — glue #9: unlink keydrv/IRQ only when gr.TermCnt==0.
 *
 * Entry:
@@ -951,7 +714,7 @@ SWDestX             rts
 *
 * Exit: Z clear = gr.TermBlk loaded, go ahead.  Z set = V.TermBufBlk is
 * 0, so there is no buffer and the caller must skip the write; block 0
-* at LUT 1 $6000 is the kernel.  Same refusal BlankTermText makes.
+* at LUT 1 $6000 is the kernel.
 * STA/LDA both set Z and PULS does not touch CC, so the flag survives.
 * Preserves A/B/X/Y/U - PutGlyph needs all of them.
 *******************************************************************

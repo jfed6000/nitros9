@@ -248,6 +248,7 @@ FuncTbl
                     fdb       GrfMod+GFGetStt     ; b=27
                     fdb       GrfMod+GFSetStt     ; b=28
                     fdb       GrfMod+GFInitDisp   ; b=29
+                    fdb       GrfMod+GFTermNew    ; b=30
 
 
 *******************************************************************
@@ -427,7 +428,7 @@ PushCore            lbsr      SetBlkC2C3
                     endc
 * The 16 main display registers ($FFC0-$FFCF) are NOT read back here any
 * more.  V.V_MCR / V.V_LayerCTL / V.BordBack are seeded by vtio's
-* InitDisplay, inherited by InitTermStatic and updated by every writer
+* GF.InitDisp, inherited by GF.TermNew and updated by every writer
 * (SetWin, ChgFont, SSDScrn, SSPScrn), so the mirror is already correct
 * and authoritative - while reading a Vicky register back is not
 * something the hardware owes us.  PullBuf still programs them from the
@@ -444,7 +445,7 @@ PushCore            lbsr      SetBlkC2C3
 * there and the failure never appears.
 *
 * vtio owns these values now: SS.AScrn and SS.Palet write V.BMxCl_En /
-* V.BMxBlk, SS.FScrn clears them, InitTermStatic zeroes the whole
+* V.BMxBlk, SS.FScrn clears them, GF.TermNew zeroes the whole
 * bitmap+tile mirror for a new terminal, and PullBuf below programs the
 * registers from it.  A program that poked $C0+$1000 behind the driver's
 * back would no longer have its bitmap carried per terminal - nothing
@@ -773,13 +774,16 @@ GSDone              clr       >gr.SwitchReq
                     jmp       >GrfMod+SysRet
 *******************************************************************
 * GFTermGone - GF.TermGone (op 24): a terminal is closing (vtio TermTerm).
-* Entry gr.b1 = its id.  vtio has already checked T.Init and that the
-* entry belongs to the closing static; T.Init is checked again here so the
-* op is safe on its own.  The flags are read once, THEN cleared - so the
-* AltISR can no longer switch to this terminal - and the live decision
-* uses the copy.  vtio still frees T.Block and clears the rest of the
-* entry.  If it was live, the lowest open id takes over (the cleared entry
-* fails the T.Init test, so the search skips it), else no terminal is live.
+* Entry gr.b1 = its id, gr.d1 = the closing device's static (system
+* address).  Nothing happens unless the entry has T.Init AND its T.StatPtr
+* is that static: IOMan calls Term after a failed Init or /vt open, and a
+* /vt factory static that never bound still has V.TermID 0 - /term's id.
+* The flags are read once, THEN cleared - so the AltISR can no longer
+* switch to this terminal - and the live decision uses the copy.  If it
+* was live, the lowest open id takes over (the cleared entry fails the
+* T.Init test, so the search skips it), else no terminal is live.  Then,
+* with interrupts back on, the 16K buffer is freed, the rest of the entry
+* cleared and gr.TermCnt counted down.
 * gr.SwitchReq is left alone: a pending Alt+arrow still runs next tick.
 *******************************************************************
 GFTermGone          pshs      cc
@@ -791,12 +795,16 @@ GFTermGone          pshs      cc
                     mul
                     ldx       #gr.TermTbl
                     abx                           X = closing entry
+                    ldd       T.StatPtr,x
+                    cmpd      >gr.d1
+                    bne       GTDone              not this static's terminal
                     ldb       T.Flags,x           B = its flags, read once
                     bitb      #T.Init
                     beq       GTDone              not open - nothing to do
                     clr       T.Flags,x           no switch can pick it now
+                    pshs      x                   the closing entry, for the free
                     bitb      #T.Live
-                    beq       GTDone              was not on screen
+                    beq       GTFree              was not on screen
                     clra                          A = id, B = offset, from 0
                     clrb
 GTFind              ldx       #gr.TermTbl
@@ -807,7 +815,7 @@ GTFind              ldx       #gr.TermTbl
                     puls      a
                     beq       GTSkip
                     lbsr      GSEnter
-                    bra       GTDone
+                    bra       GTFree
 GTSkip              inca
                     addb      #gr.TermSz
                     cmpa      #G.TermMax
@@ -817,6 +825,25 @@ GTSkip              inca
                     clra
                     clrb
                     std       >D.KbdSta
+* Interrupts back on before the os9 call.  The entry has no T.Init, so no
+* switch can pick it, and gr.Busy keeps the AltISR out of grfdrv anyway.
+GTFree              puls      x
+                    puls      cc
+                    ldb       T.Block,x
+                    beq       GTClear
+                    pshs      x
+                    clra
+                    tfr       d,x                 X = first block of the 16K
+                    ldb       #2
+                    os9       F$DelRAM
+                    puls      x
+GTClear             clr       T.Block,x
+                    clra
+                    clrb
+                    std       T.StatPtr,x
+                    dec       >gr.TermCnt
+                    clrb
+                    jmp       >GrfMod+SysRet
 GTDone              puls      cc
                     clrb
                     jmp       >GrfMod+SysRet
@@ -1279,7 +1306,7 @@ del@                pshs      y
 
 *******************************************************************
 * GF.InitDisp (b29) - display setup for the first terminal, issued by
-*   vtio's InitTerm after SetTermGrfPtrs.  (Not the GF.InitDisp deleted
+*   GF.TermNew's first-terminal branch.  (Not the GF.InitDisp deleted
 *   earlier for writing the text LUTs to the wrong block; this one
 *   touches no LUT.)
 * V.V_MCR / V.V_LayerCTL / V.BordBack are the 16-byte mirror of
@@ -1288,7 +1315,7 @@ del@                pshs      y
 * by construction and nothing has to read a Vicky register back - they
 * are not guaranteed readable.  Every writer must keep the mirror in
 * step; every reader must use the mirror.  Later terminals inherit the
-* mirror from the live console in vtio's InitTermStatic.
+* mirror from the live console in GF.TermNew.
 * Then the text cursor: enabled, flashing, '_' at 0,0.
 *******************************************************************
 GFInitDisp          lbsr      SetBlkC2C3          U = this terminal's statics
@@ -1324,6 +1351,181 @@ DispRegs            fcb       Mstr_Ctrl_Text_Mode_En,$00
                     fcb       $00,$00
                     fcb       $00,$00,$00
                     fcb       $00,$00,$00
+
+
+*******************************************************************
+* GF.TermNew (b30) - set up terminal gr.b1 for the device static at gr.d1
+*   (its system address).  Issued by vtio's InitTerm - a named INIZ, or
+*   the /vt factory's SS.Open - which has already stored V.TermID.
+* The whole setup runs inside the op, so the AltISR (it declines while
+* gr.Busy is set) cannot switch in the middle of it, and T.Init is the
+* LAST thing written: until then GFSwitch and GFTermGone skip the entry.
+* vtio used to set T.Init first, with interrupts on, before T.StatPtr,
+* T.VBlk and T.grU5 were stored - an Alt+arrow in that window could make a
+* half-built terminal live.
+*   1. the id is in range and not open, else E$DevBsy;
+*   2. F$AlHRAM the 16K switch buffer (2 blocks);
+*   3. the entry: T.Block, T.StatPtr, T.grU5 (the $A0xx alias) and T.VBlk
+*      from the system DAT image - D.SysPrc is $0600, so D.SysDAT is in
+*      block 0;
+*   4. the statics' defaults (what vtio's InitTermStatic did).  IOMan zeroes a new
+*      static, so most of the clears are redundant; they are kept to be safe;
+*   5. the first terminal (gr.TermCnt 0) goes live and gets GF.InitDisp's
+*      body.  A later one inherits from the live terminal (InhRuns), then
+*      PushCore puts the live font, sprite bank 0 and CLUTs in its buffer
+*      (the TermSave* switches) and the buffer's text is blanked in V.FBCol.
+* Log for the MAME dump: $12F5 = V.TermLive, $12F6 = gr.TermCnt,
+*   $12F7 = 'K' or 'E', $12F8 = error, $12EC = a later terminal's buffer.
+* Exit: B = 0, or carry + E$DevBsy / F$AlHRAM's error.
+*******************************************************************
+GFTermNew           lda       >gr.b1
+                    cmpa      #G.TermMax
+                    lbhs      TNBusy
+                    ldb       #gr.TermSz
+                    mul
+                    ldx       #gr.TermTbl
+                    abx                           X = this terminal's entry
+                    lda       T.Flags,x
+                    bita      #T.Init
+                    lbne      TNBusy
+                    pshs      x
+                    ldd       #2
+                    os9       F$AlHRAM            D = first block of the 16K buffer
+                    puls      x
+                    lbcs      TNErr
+                    stb       T.Block,x
+                    ldd       >gr.d1
+                    std       T.StatPtr,x
+                    anda      #$1F
+                    ora       #$A0
+                    std       T.grU5,x            the static through slot 5
+                    lda       >gr.d1
+                    lsra
+                    lsra
+                    lsra
+                    lsra
+                    lsra                          A = system slot (U >> 13)
+                    lsla
+                    inca                          -> block-number byte of that DAT entry
+                    ldy       >D.SysDAT
+                    lda       a,y
+                    sta       T.VBlk,x            block holding the static
+                    lbsr      GSTermPtrs          aim gr.TermBlk/VStaStorU/VBlk/U5 (keeps X)
+                    lbsr      SetBlkC2C3          U = the new statics, slots 3/4 = its buffer
+                    ldb       T.Block,x
+                    stb       V.TermBufBlk,u
+* Defaults.  80x60 is also what GF.InitDisp's DispRegs program.
+                    clr       V.WriteState,u      escape collector idle
+                    ldb       #$10
+                    stb       V.FBCol,u
+                    ldd       #80*256+60
+                    std       V.WWidth,u
+                    ldd       #80*60
+                    std       V.ScreenSize,u      SetScreenSize's product
+* V.CurPos is the cached V.CurRow*V.WWidth+V.CurCol that PutGlyph paints
+* at; clearing row/col without it leaves a stale cell offset behind.
+                    clr       V.CurRow,u
+                    clr       V.CurCol,u
+                    clr       V.CurPos,u
+                    clr       V.CurPos+1,u
+                    clr       V.IBufH,u
+                    clr       V.IBufT,u
+                    clr       V.LastCh,u
+                    clr       V.Reverse,u
+                    clr       V.ST,u
+* The bitmap / CLUT-block / tile mirror starts "everything off" and is
+* never inherited: a new terminal has no bitmaps of its own, and pointing
+* it at another terminal's is the bug the mirror exists to prevent.
+                    leay      V.BM0Cl_En,u
+                    ldb       #V.GCX-V.BM0Cl_En
+tnclr@              clr       ,y+
+                    decb
+                    bne       tnclr@
+                    tst       >gr.TermCnt
+                    bne       TNInherit
+* First terminal: live now, then GF.InitDisp's body seeds and programs the
+* $FFC0-$FFCF mirror and the cursor, and returns for us.
+                    lda       >gr.b1
+                    sta       >gr.LiveTerm
+                    lda       #1
+                    sta       V.TermLive,u
+                    lda       #T.Init+T.Live
+                    sta       T.Flags,x
+                    inc       >gr.TermCnt
+                    lbsr      TNLog
+                    lbra      GFInitDisp
+* A later terminal matches the live one.  Its statics go in slot 1 (the
+* $A0xx alias less $8000) beside the new ones in slot 5; one block in both
+* slots is fine.  Interrupts stay masked through the copy, because the
+* AltISR's keydrv call writes the live V.KeyDrvStat.
+TNInherit           clr       V.TermLive,u
+                    pshs      x
+                    ldb       >gr.LiveTerm
+                    cmpb      #G.TermMax
+                    bhs       TNPush              no live terminal to copy from
+                    lda       #gr.TermSz
+                    mul
+                    ldx       #gr.TermTbl
+                    abx                           X = the live terminal's entry
+                    ldb       T.VBlk,x
+                    ldx       T.grU5,x
+                    leax      -$8000,x            X = its statics through slot 1
+                    pshs      cc
+                    orcc      #IntMasks
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    clra
+                    stb       MMU_SLOT_1 $2000
+                    std       >gr.DATImg+2
+                    leay      InhRuns,pcr
+inhrun@             ldb       ,y+                 field offset, 0 ends the table
+                    beq       inhdone@
+                    pshs      x,u
+                    abx                           X -> the live field
+                    clra
+                    leau      d,u                 U -> the new field
+                    lda       ,y+                 length
+inhcp@              ldb       ,x+
+                    stb       ,u+
+                    deca
+                    bne       inhcp@
+                    puls      x,u
+                    bra       inhrun@
+inhdone@            puls      cc
+* PushCore remaps slots 1/2 and exits U = gr.U5.  Its text and colour
+* copies into the new buffer are blanked straight after.
+TNPush              lbsr      PushCore
+                    ldx       ,s
+                    ldb       T.Block,x
+                    stb       $12EC
+                    lda       #C$SPAC             fill glyph
+                    ldb       V.FBCol,u           fill colour, as inherited
+                    lbsr      BlankCore
+                    puls      x
+                    lda       #T.Init
+                    sta       T.Flags,x           open: switchable from here on
+                    inc       >gr.TermCnt
+                    bsr       TNLog
+                    clrb
+                    jmp       >GrfMod+SysRet
+TNLog               lda       V.TermLive,u
+                    sta       $12F5
+                    lda       >gr.TermCnt
+                    sta       $12F6
+                    lda       #'K
+                    sta       $12F7
+                    rts
+TNBusy              ldb       #E$DevBsy
+TNErr               stb       $12F8
+                    lda       #'E
+                    sta       $12F7
+                    coma                          carry: the error in B
+                    jmp       >GrfMod+SysRet
+* Runs inherited from the live terminal's statics: offset, length.
+InhRuns             fcb       V.WWidth,V.MouseVect-V.WWidth   size, V.ScreenSize, colours, keydrv/mouse ptrs
+                    fcb       V.KeyDrvStat,8                  keydrv state
+                    fcb       V.ST,V.BordBack+12-V.ST         V.ST and the $FFC0-$FFCF mirror
+                    fcb       0
 
 
 *******************************************************************
@@ -1500,19 +1702,23 @@ GFCSlp              sta       ,x+
 *   b2 = fill glyph -> T.TXT     b3 = fill colour -> T.TXTCOLOR
 *******************************************************************
 GFBlank             lbsr      SetBlkC2C3
-                    ldx       #$6000
-                    ldy       #4800
                     lda       >gr.b2
+                    ldb       >gr.b3
+                    bsr       BlankCore
+                    jmp       >GrfMod+SysRet
+* BlankCore - GF.Blank's body, also called by GFTermNew.  A = fill glyph,
+* B = fill colour, the buffer mapped at slots 3/4.  Clobbers X and Y.
+BlankCore           ldx       #$6000
+                    ldy       #4800
 GFBlkT              sta       ,x+
                     leay      -1,y
                     bne       GFBlkT
                     ldx       #$6000+T.TXTCOLOR
                     ldy       #4800
-                    lda       >gr.b3
-GFBlkC              sta       ,x+
+GFBlkC              stb       ,x+
                     leay      -1,y
                     bne       GFBlkC
-                    jmp       >GrfMod+SysRet
+                    rts
 
 
 *******************************************************************
