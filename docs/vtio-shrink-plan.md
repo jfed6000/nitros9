@@ -6,7 +6,8 @@ Written 2026-09-13 for a fresh session.  Branch `wb/multiterm`, baseline commit
 the user tested the K2 build on the board ("K2 looks good").
 
 **Progress:** items 1-2 done in MAME 2026-09-13 (vtio 3,310, grfdrv256 2,733,
-jr2 margin 1,562).
+jr2 margin 1,562).  **Item 3 skipped** (the user's decision, 2026-09-13); items
+4-6 remain.
 
 **Find code by label, not by line number.**  Line numbers go stale after the first edit.
 
@@ -33,7 +34,7 @@ Where vtio's bytes go (routine sizes from `recipes/wildbits/l2/vtio.list`):
 
 | bytes | what | movable? |
 |---|---|---|
-| 1,274 | Write path: glyph painting and line wrap 244, escape parser and tables 331, escape handlers 699 | parser and handlers yes (item 3); glyph painting parked |
+| 1,274 | Write path: glyph painting and line wrap 244, escape parser and tables 331, escape handlers 699 | parser and handlers: item 3, skipped; glyph painting parked |
 | 527 | graphics GetStat/SetStat handlers and their dispatch | yes (item 2) |
 | 492 | terminal setup and teardown: `InitTerm` 178, `InitTermStatic` 154, `TermTerm` and helpers 129, `BlankTermText` 31 | mostly (item 4) |
 | 189 + 88 + 80 | `InitGrfDrv`, `InitKeyboard`/`InitMouse`, `Term` | no |
@@ -53,7 +54,8 @@ Where vtio's bytes go (routine sizes from `recipes/wildbits/l2/vtio.list`):
 - a stub `Write`.
 
 Reaching it also means moving the printable-glyph path, which is parked (see
-below).  This plan targets about **1,900**.
+below).  This plan targeted about **1,900**; with item 3 skipped, about
+**2,900**.
 
 **grfdrv's own ceiling.**  grfdrv256 must stay inside one 8K block.  Past that,
 `InitGrfDrv` maps the module's second block into slot 7 instead of the kernel,
@@ -131,7 +133,7 @@ from Appendix A.
     live `CLUT0-3` sums, `BLK $30-$3F` sums, the text LUT FG entries.
 - **It does not print** `V.FBCol`, `V.Reverse`, `V.ScTyp` or the live colour
   plane.  Add those to `dump_multiterm()` in
-  `mame/src/mame/wildbits/wildbits_jr2.cpp` before item 3.  Rebuild with
+  `mame/src/mame/wildbits/wildbits_jr2.cpp` if item 3 is ever revived.  Rebuild with
   `make SOURCES=src/mame/wildbits/wildbits_jr2.cpp -j12` from `mame/`; the
   `mame/` tree is untracked.
 
@@ -344,7 +346,18 @@ Also, in grfdrv:
   forwarder.
 - Regression set.
 
-### 3. Control bytes and the escape parser into grfdrv (`GF.Ctrl`) — about 950 bytes, medium-high
+### 3. Control bytes and the escape parser into grfdrv (`GF.Ctrl`) — about 950 bytes, medium-high — **SKIPPED**
+
+**Skipped 2026-09-13 by the user's decision.**  The design below is kept for
+the record only; don't start it without deciding again.  Costs that weigh
+against it:
+- every control byte becomes a grfdrv trip (CR LF on a line that isn't the
+  bottom row goes from 0 calls to 2);
+- the largest block of code moves, taking grfdrv toward 4K;
+- escape-handler addresses stay live across grfdrv calls;
+- the verification needs every escape code, on live and background terminals.
+
+With item 2 done, the margin (1,562) no longer needs the saving.
 
 **Design.**  vtio keeps painting printable characters exactly as today, through
 the direct `WriteCharLive`/`WriteCharShadow` entries.  It also keeps the
@@ -524,6 +537,7 @@ deleted for writing the text LUTs to the wrong block; this one touches no LUTs.
 
 | candidate | why parked |
 |---|---|
+| item 3, control bytes and the escape parser into grfdrv (about 950 bytes) | skipped by the user's decision 2026-09-13; see item 3 |
 | printable-glyph path into grfdrv (about 250 more bytes) | every printable byte would become a full op with `SetBlkC2C3` (two dozen instructions, masked slot writes) instead of today's direct entry, which skips remapping when `$C2`/`$C3` are already mapped.  Needs a throughput measurement first |
 | `SS.FntLoadF` out of the driver (188 bytes) | reverses the decision recorded under "Asset loading" in `docs/wildbits-vtio-rewrite.md`: it blocks on file I/O, so it can't go to grfdrv, and an `assetload`-style command changes the API |
 | `SSOpen`, `Read`, AltISR, `InitKeyboard`/`InitMouse`/`Term`, `InitGrfDrv`, `CallGrfDrv*` | must stay: `Read` sleeps; `SSOpen` swaps the process around `F$SLink`; the rest link, load or are the plumbing |
@@ -539,17 +553,18 @@ deleted for writing the text LUTs to the wrong block; this one touches no LUTs.
 
 ## Expected result
 
-| after item | vtio (approx.) | jr2 margin (approx.) | grfdrv256 (approx.) |
+| after item | vtio | jr2 margin | grfdrv256 |
 |---|---|---|---|
 | baseline | 3,795 | 1,077 | 2,408 |
-| 1 | 3,750 | 1,120 | 2,408 |
-| 2 | 3,300 | 1,570 | 2,850 |
-| 3 | 2,350 | 2,520 | 3,800 |
-| 4 | 2,100 | 2,770 | 4,050 |
-| 5 | 2,035 | 2,835 | 4,120 |
-| 6 | 1,955 | 2,915 | 4,120 |
+| 1 (measured) | 3,750 | 1,122 | 2,408 |
+| 2 (measured) | 3,310 | 1,562 | 2,733 |
+| 3 | skipped | | |
+| 4 (approx.) | 3,060 | 1,810 | 2,980 |
+| 5 (approx.) | 2,995 | 1,875 | 3,050 |
+| 6 (approx.) | 2,915 | 1,955 | 3,050 |
 
-Estimates are listing sizes minus stub costs; measure each step.
+Estimates are listing sizes minus stub costs; measure each step.  Item 6's
+long-branch count will differ now that item 3 isn't happening; rerun Appendix C.
 
 ## Per-item checklist
 

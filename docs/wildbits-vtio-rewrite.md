@@ -33,7 +33,8 @@ good"); the Jr2 build is MAME only.  **Next work:** `docs/vtio-shrink-plan.md` â
 SetStat/GetStat forwarding, the escape parser into grfdrv (`GF.Ctrl`), terminal
 setup, `InitDisplay`, and a final squeeze, aiming at roughly 1,950 bytes of
 vtio.  Items 1 and 2 are done in MAME: `SSDMAFill` deleted, and GetStat/SetStat
-forwarded to grfdrv (vtio 3,310, margin 1,562).
+forwarded to grfdrv (vtio 3,310, margin 1,562).  Item 3, the escape parser into
+grfdrv, was skipped by the user's decision; items 4-6 remain.
 
 The sections below are in date order, oldest first; the newest is
 **GetStat/SetStat forwarded to grfdrv** (2026-09-13), after
