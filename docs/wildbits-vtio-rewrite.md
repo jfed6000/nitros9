@@ -2262,6 +2262,287 @@ grfdrv call in the MAME driver).  Candidates:
   after (terminal open only);
 - `tfm` in `CpyBlk` on a 6309 build.
 
+### The `vt` command  (2026-09-14)
+
+`vt` opens, switches to and lists terminals from the shell.  Source
+`level2/wildbits/cmds/vtcmd.asm`, 542 bytes; no driver change and no bootfile
+bytes.  Verified in MAME `wbjr2`; not yet on the board.
+
+| command | does |
+|---|---|
+| `vt` | opens `/vt`, forks `shell i=/vtN` on it, switches to it |
+| `vt n` | switches to terminal n (0 = `/term`); if it is not open, opens `/vtn` and starts a shell on it first |
+| `vt -l` | lists the open terminals, `*` after the one on screen |
+
+Anything else prints a usage message and exits with E$IllArg (187).  The
+syntax is `vt n`, not `vt -n`: n is an operand, and `-` stays for options.
+
+**The name.**  The bootfile already has a module named `vt`, the factory
+descriptor.  The kernel keeps a program and a descriptor of the same name
+apart, because every lookup that gives a type matches on it:
+`F$FModul` (`level2/modules/kernel/ffmodul.asm`), `VModul`'s search with the
+new module's own type, and IOMan's `Devic+Objct` attach (`ioman.asm:369,526`).
+Shell+ does not give a type.  It links a typed command name with any type
+first (`shellplus.asm:2940`, "Wildcard NMLink"), and `F$FModul` searches
+newest first.  With only the descriptor in memory, `vt` found it, saw type `$F1`
+and failed with `E$NEMod` (234), without looking in `CMDS`.  The user saw
+exactly that.  So `level2/wildbits/startup` does `load vt` right after
+`load utilpak1`, and the program sits after the descriptor from boot on.
+Typing `vt` ran the program in every run below.  Checked both ways: with the
+program only in `CMDS`, `vt` and `vt -l` gave `ERROR #234` and `mdir` showed only
+the descriptor.  With `load vt` in startup, `mdir` lists a second `vt` last and
+both commands work.  (It was merged into `utilpak1` at first; the user preferred
+it as its own `CMDS` file.)
+
+**What the separate load costs: one 8K block.**  IOMan's `LoadMod` rounds a
+loaded file up to whole 8K blocks (`ioman.asm:1806`).  The MAME block map shows a
+new module block (`$10` = `ModBlock|RAMinUse`) only in the `load vt` run.  Merged
+into `utilpak1` (7,667 bytes, under 8,192) it cost nothing.  The user is keeping
+`load vt` while testing; changing Shell+ is the likely real fix.  When the
+any-type link finds a module that is neither a program, a data module, a
+shellsub nor a known language (`shellplus.asm` `L14D7` -> `L1629`), Shell+
+could look on disk instead of failing.  That is not investigated yet.  Shell+ is
+in the merged `CMDS/shell` (`SHELLMODS`), whose growth once caused the slot-7
+boot failure.
+
+**Build.**  The source can't be `vt.asm`: `rules.mak`'s vpath searches
+`modules/` before `cmds/`, and `.mods/vt` is the descriptor.  `wildbits.mak`
+copies `.mods/vtcmd` to `CMDS/vt` on L2 disks.  `l2/makefile` adds it to the `wildbits_vtio.d` dependency line, because
+it assembles `gr.LiveTerm`/`gr.TermTbl` offsets in.
+
+**How it works.**
+- **`vt` with no argument.**  The `/vt` factory's `SS.Open` binds the lowest
+  free id and swaps in `/vtN`'s descriptor.  `SS.DevNm` then returns `vtN`:
+  IOMan answers it from `V$DESC` after the file manager call and discards the
+  driver's `E$UnkSvc` (`ioman.asm:1375-1388`).
+- **Keeping the terminal open.**  A terminal lives only while a path holds it
+  open.  `vt` closes its paths 0-2 and `I$Dup`s the terminal path onto them
+  before `F$Fork`.  The child gets its own copies inside the call, so there is
+  no window where `vt` exiting frees the terminal before the shell reopens it
+  with `i=`.  No `F$Wait`, as with `&`.
+- **Open or not.**  For `vt n`, `F$CpyMem` reads `gr.LiveTerm` and `gr.TermTbl`
+  out of system block 0 (a 16-byte all-zero DAT image) before the open.
+  `T.Init` decides between starting a shell and switching only.  `vt -l` uses
+  the same copy.
+- **Switching** is `1B 21` written to the terminal's path.
+
+**Verification** (`wbjr2`, one disk copy per run; `vt -l` output and usage text
+read from the VRAM snapshot):
+
+| keys | result |
+|---|---|
+| `vt`; on `/vt1` `vt -l`, `echo ok` | `TermCnt=2 LiveTerm=$01`; lists `/term`, `/vt1 *`; `ok` prints |
+| `vt 6`; on `/vt6` `vt 6`, `procs`, `vt 0`; on `/term` `vt -l` | one Shell per terminal (the second `vt 6` only switched); `LiveTerm=$00`; lists `/term *`, `/vt6` |
+| `vt 9`, `vt x`, `vt -q`, `vt 12` | usage and `ERROR #187` each time; `TermCnt=1` |
+| `vt`, `vt 0`, `vt`, `ex` on `/vt2`, `vt -l` | `/vt2` freed, display back on `/term`, `TermCnt=2`; lists `/term *`, `/vt1` |
+| `vt` nine times | ids 1-8 open and each shown in turn; the ninth printed `ERROR #034`; `vt -l` lists all nine, `/vt8 *` |
+
+**Bug found: a full table returned error 34, not 221.**  `SSOpenNone` did
+`ldb #E$MNF` then `comb`.  `comb` sets carry but also complements B, so 221
+(`$DD`) reached the caller as `$22`, which is 34.  The earlier `ERROR #034` for
+`display 07 >/vt` with all eight open (the item 4 test table) was the same bug.
+Fixed by setting carry first (`comb`, then `ldb #E$MNF`), which keeps vtio the
+same size (2,685 bytes; bootfile 30,208).  Rerun in MAME: the ninth `vt` now
+prints `ERROR #221`, with `TermCnt=9`, `/vt8` still live, and `vt -l` unchanged.
+
+### A full table prints a message, and a grfdrv MMU race it exposed  (2026-09-14, same day)
+
+**The message.**  When `vt`'s `/vt` open fails with E$MNF, `vt` prints
+`vt: no more terminals available` on stderr and still exits with 221, so Shell+
+adds `ERROR #221` after it.  Only that open is checked: `F$Fork` can also return
+221 if `shell` is missing, and "no more terminals" would be wrong there.
+
+**The crash it exposed.**  With all eight terminals open, 5 of 6 MAME runs
+crashed partway through the message, always after `vt: no more terminals`
+(cursor x=20).  The PC was in `$4Dxx`, executing `$7A` bytes (the colour
+attribute).  In every crash the system map, LUT 0, read `[00, C2, C3, ...]`,
+where healthy runs have `[00, 09, 03, ...]`.  `D.Proc` was `$5800`, in slot 2,
+so the kernel was reading Vicky colour memory as `vt`'s process descriptor.
+The shell failing `echo hi >/vt` and printing its error at once never crashed
+(4 of 4), and neither did `vt` exiting without writing.
+
+**Cause: grfdrv's `WriteCharLive` and `ScrollLive` selected the edit LUT with
+interrupts enabled.**  They wrote `EDIT_LUT_1+ACT_LUT_1` to `MMU_MEM_CTRL`, read
+`MMU_SLOT_1`/`MMU_SLOT_2` to see whether `C2 C3` was already mapped, and masked
+only around the remap.
+- The kernel's IRQ return from task 1 writes `DAT.Task` = `D.TINIT|1`
+  (`S.SysIRQ`, `krn.asm` ~1178-1183).  `D.TINIT` has no EDIT_LUT bits; only
+  `KrnWeGngBack` sets EDIT_LUT_1.
+- An interrupt in that window left EDIT_LUT on 0.  The slot read then saw the
+  system map (`09 03`), and the remap wrote `C2`/`C3` into LUT 0 slots 1-2.
+  Nothing puts them back.
+- With few terminals, nothing reads system slot 2 before the kernel's scratch
+  use of slot 1 overwrites it, so it never showed.  Nine terminals and their
+  shells put process descriptors at `$4000-$5FFF`.  `vt`'s long uninterrupted
+  write hit the window at the same point every time.
+- `WriteCharShadow`, `ScrollShadow`, `SetBlkC0C1`/`C2C3`/`C4`, `GFDfPal`,
+  `TNInherit` and `DoFontGetSet` (via `GMapAddr2Blk`) already select the edit
+  LUT inside `orcc #IntMasks`.  The GF `entry` selects it unmasked but writes no
+  slots itself.
+
+**Fix:** both live routines now `pshs cc` and `orcc #IntMasks` first, then select
+the edit LUT, read, compare and remap, then `puls cc`, as the shadow routines do.
+grfdrv256 3,156 -> 3,148 bytes; it loads from `CMDS`, so the bootfile is
+unchanged.
+
+**Verification** (`wbjr2`, jr2 disk):
+
+| test | result |
+|---|---|
+| nine `vt`s then `vt 3`, six runs | no crash in any; message and `ERROR #221` on `/vt8`, then `/vt3` live; LUT 0 `[00, 09, 03, ...]` (was 5 of 6 crashed) |
+| `dir /dd/cmds` on `/term` (live scroll), `echo ok` | scrolls, `ok` prints |
+| `vt`, Alt+Left, `echo t0`, Alt+Right, `echo t1` | `t0` on `/term`, `t1` on `/vt1` |
+
+### Audit: every MMU register access in grfdrv, and three cleanups  (2026-09-14, same day)
+
+After the `WriteCharLive`/`ScrollLive` fix, every reference to `MMU_MEM_CTRL`,
+`MMU_SLOT_n`, `DAT.Regs`, `DAT.Task`, `$FFAx`, `EDIT_LUT` and `ACT_LUT` was
+checked for interrupt state.  vtio has none.  The rule: select EDIT_LUT_1 after
+`orcc #IntMasks`, and finish every slot read or write before the matching
+`puls cc`.  The kernel's IRQ return drops EDIT_LUT to 0.
+
+| site | interrupts | verdict |
+|---|---|---|
+| `entry` (GF op dispatch) | selects unmasked, touches no slot | fine; every op's slot writes go through masked helpers that re-select |
+| `WriteCharLive`, `ScrollLive` | masked | fixed earlier the same day |
+| `WriteCharShadow`, `ScrollShadow` | masked | fine |
+| `DoFontGetSet` (`SS.FntChar`) | masked through the copy, and calls `GMapAddr2Blk` inside the mask | fine |
+| `GFDfPal`, `DfPalLive`, `DfPalOff` | masked, and `DfPalOff` pops CC; the `CpyBlk` copies use the active map, not the slot registers | fine |
+| `TNInherit` | masked through the copy | fine |
+| `SetBlkC0C1`, `SetBlkC2C3`, `SetBlkC4` | masked | fine |
+| kernel `S.Flip1` -> `KrnWeGngBack` | vtio's `CallGrfDrvGo` masks before `jmp [D.Flip1]`, and `SysRet` masks before `D.Flip0` | fine |
+| `GMapAddr2Blk` | was unmasked; safe only because its one caller masks | now masks itself |
+| `MMUKrnVars`, `MMURestore` | unmasked, never called | deleted, with the empty `GetABXYU`/`PutABXYU` labels above them |
+
+`DoFontGetSet` wrote `%10010001` to `MMU_MEM_CTRL`.  Bit 7 isn't defined in
+`defs/wildbits.d`, and every other site writes `EDIT_LUT_1+ACT_LUT_1`.  It now
+writes that too.  Not exercised in MAME: `scfg`'s font code is Level-1 only, and
+`hexed`/`fm` build only with `FM=1`.
+
+A kernel fix (keep EDIT_LUT across the IRQ return) would cover every caller at
+once, but `Krn` must stay exactly `$1000` bytes and its constant page is full.
+
+grfdrv256 3,148 -> 3,127 bytes; vtio 2,685 and the bootfile 30,208 are unchanged.
+Checked in MAME `wbjr2`: nine `vt`s then `vt 3`, twice (message and
+`ERROR #221`, then `/vt3` live); `dir /dd/cmds` scrolling on `/term`; `vt` plus
+Alt+Left/Right (`t0` on `/term`, `t1` on `/vt1`); and the board sequence (nine
+`vt`s, `proc`, `vt -l`, `vt 6`, `echo ok`, with `ok` on `/vt6`).  Every run ended
+with LUT 0 intact.  K2 disk rebuilt.
+
+### RESOLVED: `vt N` hung when switching on the K2 board  (2026-09-14)
+
+(Found to be SCF device locking and fixed with `SS.TermSel`; see "`vt` switches with `SS.TermSel`" below.)
+
+**Update, same day: it is `vt` that hangs, not the system.**  On the board `vt N`
+froze on `/vt6`: no prompt came back there, but the other terminals kept
+working and switching.  `proc` from `/vt7` listed process 4, module `vt`,
+parent 9 (the `/vt6` shell), paths `/vt6` on all three, status `s`.  Only
+`/term`, `/vt4`, `/vt6`, `/vt7` and `/vt8` had shells, so the table was not full.
+- System-state code is never preempted, so a `vt` looping in a system call
+  would have frozen every terminal.  It must be blocked instead: asleep, or
+  queued for a device or path, with nothing waking it.  Its system calls on this
+  path are `F$CpyMem`, `I$Open /vtN`, `I$Write` of `1B 21` and `I$Close`; for a
+  terminal that was not open, also `I$Dup` and `F$Fork`.
+- The `(Not Defined)` line in that listing belongs to process 3, `Basic09` on
+  `/vt4`.  `proc` prints it for a BASIC09/RunB process with no current procedure
+  (`level2/cmds/proc.asm:229-241`).  It is unrelated.
+- Still unknown: the N typed, whether the display changed, and whether
+  `kill 4` ends the process.  If a signal wakes it, it was sleeping or queued.
+
+**Found, same day: SCF device locking, not grfdrv or vtio.**  On the board it was
+`vt 4`, and `/vt4`'s foreground program was `Basic09`.  The display did not
+switch.  `kill` left `vt` as `sCondem` with its paths closed but never gone, and
+Ctrl+C/Escape did nothing.  Reproduced in MAME (`wbjr2`):
+
+| foreground program on `/vt1` | command on `/term` | result | `/vt1` statics |
+|---|---|---|---|
+| `basic09` at `B:` | `vt 1` | hangs: no switch, and `echo ok` typed after it never runs | `V.BUSY=3`, `V.WAKE=3` |
+| `basic09` at `B:` | `display 1b 21 >/vt1` | hangs the same way | `V.BUSY=3`, `V.WAKE=3` |
+| shell prompt | `vt 1` | switches, `ok` prints | `V.BUSY=0` |
+
+- BASIC09 sleeps in vtio `Read` while still owning the device in SCF's
+  `V.BUSY` (`WAKE` = its pid).  An idle Shell+ does not.
+- SCF's `AcquireDevice` (`level1/modules/scf.asm:890-905`) queues any other
+  writer with `F$IOQu` until `V.BUSY` clears, so `1B 21` written to a terminal
+  whose foreground program is waiting for input blocks until that read ends.
+  This is standard SCF behaviour, and `display 1b 21 >/vtN` has it too.  It
+  looked random because it depends on what the target terminal is running.
+- Which SCF entry points wait on the device (`level1/modules/scf.asm`):
+  `write`/`writln` (960-964), `read`/`readln` (692, 852) and `setstt` (569) call
+  `WaitForDevices`; `I$Open` and `I$Close` send the driver `SS.Open`/`SS.Close`
+  through `CallComStatus` -> `TryAcquireDevices` (671-680), which loops back to
+  `WaitForDevices` while the device is not ours.  Only `getstt` (508) calls the
+  driver directly without waiting.
+- That also explains the unkillable `vt`: its exit closes the `/vtN` path, and
+  the close's `SS.Close` waits on the same device again.  Inferred from the code,
+  not traced.
+
+
+
+**Reported by the user on the K2 board; not reproduced in MAME.**  The machine
+locked up twice, at random.  So far it has only happened when switching
+terminals with `vt N`; no lock-up has been seen with Alt+arrow switching.  The
+first report was nine terminals open, `proc`, `vt -l`, then `vt 6`.  The user
+could not repeat that.  Whether the second lock-up was on the K2 disk built
+after the grfdrv audit (01:02) was not recorded.
+
+What MAME (`wbjr2`) shows: the same sequences pass, including 5 runs of the
+first report's exact keys and a run after the audit.  MAME can't cover the K2's
+memory map (terminal buffers from the `$D0-$EF`/`$A0-$BF` windows under the
+uncommitted `krnp2` change) or real hardware timing.
+
+**How `vt N` switching differs from Alt+arrow, as places to look first
+(unverified):**
+- It is `1B 21` written to a path.  `DWSelect` stores `gr.SwitchTerm`, then
+  `SW.Goto` in `gr.SwitchReq`, and the switch runs on the AltISR's next tick
+  (`SwitchTerm`'s `SW.Goto` branch in `GF.Switch`).  Alt+arrow uses
+  `SW.Next`/`SW.Prev`.
+- `vt` then closes its `/vtN` path right away, so the close can overlap the
+  switch tick: an SS.Close SetStat on that terminal's static while
+  `GF.Switch` runs.  `gr.Busy` is a re-entry detector, not a gate; the
+  `$12E2`/`$12E3` counter would show a second entrant.
+- Before that, `vt` reads `gr.TermTbl` with `F$CpyMem` and opens `/vtN`,
+  which attaches to the existing device table entry.
+
+**Useful to capture next time it locks up:** which terminal was live, the
+target, whether the display changed, and whether Alt+arrow or keys still
+respond.
+
+### `vt` switches with `SS.TermSel`, not `1B 21`  (2026-09-14, same day)
+
+Fix for the `vt N` hang above.  A new SetStat `SS.TermSel` (`$C5`,
+`defs/wildbits.d`, after `SS.SOLMUTE`) takes the terminal id in `R$X`.  `R$A` is
+the path number, so the id can't go there.
+- **grfdrv (`SetSttTbl` -> `SSTermSel`).**  vtio forwards unknown SetStat codes
+  to `GF.SetStt`, so vtio and the bootfile are unchanged.
+  - An id `>= G.TermMax`, or one whose entry lacks `T.Init`, gives `E$IllArg`.
+  - An id equal to `gr.LiveTerm` returns doing nothing; `T.Live` is not trusted.
+  - Otherwise it stores `gr.SwitchTerm` and then `SW.Goto` in `gr.SwitchReq`, as
+    `DWSelect` does.  `GF.Switch` re-checks on the tick.
+  - The handler sits above `SysRet`, away from the short `bra StatOK` branches.
+- **`vt` never does I/O on a terminal that is already open.**  `vt n` for an open
+  n sends only `SS.TermSel`, on the first of its own paths 0-2 that accepts it
+  (stdout may be redirected).  A terminal it creates (`vt`, or `vt n` for one not
+  open) has no reader yet: it is opened, gets its shell, then is selected the same
+  way and closed.  The `1B 21` write is gone.
+- **What can still wait.**  `vt`'s own terminal holding `V.BUSY` in a read.  Its
+  shell is in `F$Wait`, not reading, so only another reader on the same terminal
+  at the same time could cause it.  `display 1b 21 >/vtN` keeps the old behaviour,
+  because it writes to the target.
+
+Sizes: grfdrv256 3,127 -> 3,178, vt 596 -> 619 bytes; vtio 2,685 and the bootfile
+30,208 are unchanged.
+
+**Verification** (`wbjr2`; K2 disk rebuilt, not yet on the board):
+
+| test | result |
+|---|---|
+| `vt`, `basic09` on `/vt1`, Alt+Left, `vt 1` | `LiveTerm=$01` (BASIC09 at `B:` on screen), `/term`'s prompt returns after `vt 1`; `/vt1` still `V.BUSY=3` from BASIC09 (was a hang) |
+| nine `vt`s, then `vt 3` | `/vt3` live |
+| nine `vt`s, `proc`, `vt -l`, `vt 6`, `echo ok` | `ok` on `/vt6` |
+| `vt`, `vt 0`, `vt 1`, `echo ok` | `ok` on `/vt1` |
+| `vt 9`, `vt -l` | usage and `ERROR #187`; lists `/term *` |
+
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and
 ## verified in MAME; boot still doesn't reach a shell; root cause of the
