@@ -35,11 +35,14 @@ setup, `InitDisplay`, and a final squeeze, aiming at roughly 1,950 bytes of
 vtio.  Items 1, 2 and 5 are done in MAME: `SSDMAFill` deleted, GetStat/SetStat
 forwarded to grfdrv, and `InitDisplay` moved into `GF.InitDisp` (vtio 3,232,
 margin 1,640).  Item 4 is done in MAME too: terminal setup and teardown moved
-into `GF.TermNew`/`GF.TermGone` (vtio 2,814, margin 2,058).  Item 3, the escape
-parser into grfdrv, was skipped by the user's decision; item 6 remains.
+into `GF.TermNew`/`GF.TermGone` (vtio 2,814, margin 2,058).  So is item 6, the
+final squeeze: breadcrumbs deleted and long branches shortened (vtio 2,769,
+margin 2,103).  Item 3, the escape parser into grfdrv, was skipped by the
+user's decision.  The plan is finished.
 
 The sections below are in date order, oldest first; the newest is
-**Terminal setup and teardown moved into grfdrv: `GF.TermNew`** (2026-09-13), after
+**Final squeeze: breadcrumbs deleted, long branches shortened** (2026-09-13), after
+**Terminal setup and teardown moved into grfdrv: `GF.TermNew`**, after
 **`InitDisplay` moved into grfdrv: `GF.InitDisp`**, after
 **GetStat/SetStat forwarded to grfdrv**, after
 **`SSDMAFill` deleted**, after
@@ -2128,6 +2131,46 @@ Copying `V.ScreenSize` replaces the `SetScreenSize` call.  The source is
 Otherwise only known noise differs: the version string, Shell+ timestamps inside
 buffer sums, stale RAM in `/term`'s never-pushed block `$3F` and `T0.CLUT0-3`,
 and `s3`'s switch-versus-free timing.
+
+### Final squeeze: breadcrumbs deleted, long branches shortened  (2026-09-13, same day)
+
+Item 6 of `docs/vtio-shrink-plan.md`, the last one; the plan is finished.
+Verified in MAME `wbjr2`; the K2 disk is built for the board.  No behaviour
+change is intended.
+
+**Breadcrumbs.**  `HandleKeySwtchTrm`'s four debug stores to `$12E4-$12E7` (last
+`gr.SwitchReq` seen, `$AA` before `GF.Switch`, `$55` after it, `gr.LiveTerm`)
+and the loads feeding them are deleted outright, not put behind a flag (the
+user's decision).  The dump's `SwReq`/`pre`/`post`/`live` fields now read zero.
+Kept:
+- `CallGrfDrvGo`'s re-entry counter (`$12E2`/`$12E3`), the only detector for a
+  second entrant into grfdrv, which every regression run checks;
+- `GFTermNew`'s `$12EC` and `$12F5-$12F8` stores, which are in grfdrv and cost
+  no bootfile bytes.
+
+**Long branches.**  The plan's Appendix C scan found 22 `lbsr`/`lbra`/`lbcs`/
+`lbeq` whose targets were in short range; shortening them brought one more into
+range, and a third pass found none.  All 23 are ordinary calls, tail jumps and
+error exits (`Init`'s driver setup calls, `InitGrfDrv`'s error exits, the
+`InitTerm` stub's tail, `SetShadowBlk`/`SetWDest`/`EscScan`/`CalcCurPos`/
+`UpdateLiveCursor`, `DWSet`'s colour calls, `SetStat`'s `SS.Open` test,
+`SSFntLoadF`'s `Rd2B2Mem` calls); none is a fixed-size jump-table entry.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 2,814 | 2,769 |
+| `grfdrv256` | 3,156 | 3,156 |
+| bootfile modules | 30,198 | 30,153 |
+| margin to 32,256 | 2,058 | 2,103 |
+
+**Verification**, on the item 4 disk and the new one side by side: the
+regression set, `shellbg` on `/term`, on `/vt1` after Alt+Right and `>/vt1`, and
+item 4's tests (inherit via `iniz /vt1` and via `shell i=/vt&`, `iniz`/`deiniz`
+cycling with `mfree`, two factory opens then closing both, all eight `/vtN`
+then `display 07 >/vt`, Alt+Right timed against `iniz /vt1`).  The same
+`LiveTerm`/`TermCnt` values, re-entry count 0, `echo ok` output, `ERROR #034`
+and `mfree` totals everywhere.  Apart from the version string and timestamps,
+the only dump difference is the four breadcrumb fields reading zero.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and

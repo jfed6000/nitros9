@@ -5,9 +5,9 @@ Written 2026-09-13 for a fresh session.  Branch `wb/multiterm`, baseline commit
 `docs/grfdrv-offload-plan.md`, is finished: all five items are done in MAME, and
 the user tested the K2 build on the board ("K2 looks good").
 
-**Progress:** items 1, 2, 5 and 4 done in MAME 2026-09-13 (vtio 2,814, grfdrv256
-3,156, jr2 margin 2,058).  **Item 3 skipped** (the user's decision,
-2026-09-13); item 6 remains.
+**Progress:** items 1, 2, 5, 4 and 6 done in MAME 2026-09-13 (vtio 2,769, grfdrv256
+3,156, jr2 margin 2,103).  **Item 3 skipped** (the user's decision,
+2026-09-13).  **The plan is finished.**
 
 **Find code by label, not by line number.**  Line numbers go stale after the first edit.
 
@@ -147,8 +147,8 @@ from Appendix A.
   `T0.TXT` row 9, which carries the commit a disk was built at;
 - `gr.TermBlk`, which follows the last terminal grfdrv was aimed at.  Since
   item 2, status calls aim it too;
-- in `s3` (`display 1b 21 >/vt2`), whether `/term`'s buffer holds its screen and
-  the `$12E7` breadcrumb reads `$02`.  That depends on whether a clock tick
+- in `s3` (`display 1b 21 >/vt2`), whether `/term`'s buffer holds its screen
+  (before item 6, also whether the `$12E7` breadcrumb read `$02`).  That depends on whether a clock tick
   serves the switch before `/vt2` closes.  It is timing, not logic, and both
   orders end the same (see item 2's section in the rewrite doc).
 
@@ -244,7 +244,8 @@ Graphics set (runs with `SECS=60`; Appendix B has the test commands): `shellbg` 
 - `DoFontGetSet`'s debug stores at `$11A0-$11B3`, `$12B0`, `$12C0` were removed
   in item 2.
 
-**The MAME dump reads** only `$12E2-$12E7`, `$12EC` and `$12F5-$12F8` of the
+**The MAME dump reads** only `$12E2-$12E7` (nothing writes `$12E4-$12E7` since
+item 6), `$12EC` and `$12F5-$12F8` of the
 probe area.
 
 ---
@@ -534,20 +535,29 @@ deleted for writing the text LUTs to the wrong block; this one touches no LUTs.
 **Verify:** boot on both disks: identical `HW MCR`, `HW CURSOR`, text LUT FG,
 `V:` lines and screen.  Regression set.
 
-### 6. Final squeeze — about 80 bytes, no risk
+### 6. Final squeeze — about 80 bytes, no risk — **DONE**
+
+**Done 2026-09-13 in MAME:** the four `$12E4-$12E7` breadcrumb stores deleted
+(19 bytes) and 23 long branches shortened in two passes (26 bytes); vtio 2,814 →
+2,769, jr2 margin 2,058 → 2,103.  The re-entry counter stays.  Details in the
+rewrite doc's section "Final squeeze: breadcrumbs deleted, long branches
+shortened".
 
 - **Long branches.**  At `07a6f4a4`, 23 long branches would fit short ones
   (about 30 bytes).  Rerun the scan after items 2-5 (Appendix C), shorten them,
   and rebuild.
-- **Breadcrumbs** (about 20 bytes since item 4):
-  - Put `HandleKeySwtchTrm`'s `$12E4-$12E7` stores under `IFNE VTIODBG`, with
-    `VTIODBG set 0` near the top of vtio.  The `$12EC` and `$12F5-$12F8` stores
-    moved into grfdrv's `GFTermNew` with item 4 and cost no bootfile bytes.
+- **Breadcrumbs** (19 bytes since item 4) — **delete them** (the user's decision,
+  2026-09-13; no `VTIODBG` flag):
+  - Delete `HandleKeySwtchTrm`'s four stores to `$12E4-$12E7` and the loads
+    that feed them (`lda #$AA`, `lda #$55`, `lda >gr.LiveTerm`).  The `$12EC`
+    and `$12F5-$12F8` stores moved into grfdrv's `GFTermNew` with item 4 and
+    cost no bootfile bytes.
   - **Keep `CallGrfDrvGo`'s re-entry counter (`$12E2`/`$12E3`)
     unconditional.**  It is the only detector for a real hazard, and the
     regression set checks it.
-  - With the flag off, the dump's `breadcrumbs:` fields read zero; say so in the
-    doc.
+  - Afterwards the dump's `SwReq`/`pre`/`post`/`live` breadcrumb fields read
+    zero, and the `s3` note under "Comparing builds" about `$12E7` no longer
+    applies; say so in the doc.
 
 ---
 
@@ -579,7 +589,7 @@ deleted for writing the text LUTs to the wrong block; this one touches no LUTs.
 | 3 | skipped | | |
 | 5 (measured; done before 4) | 3,232 | 1,640 | 2,799 |
 | 4 (measured) | 2,814 | 2,058 | 3,156 |
-| 6 (approx.) | 2,780 | 2,090 | 3,156 |
+| 6 (measured) | 2,769 | 2,103 | 3,156 |
 
 Estimates are listing sizes minus stub costs; measure each step.  Item 6's
 long-branch count will differ now that item 3 isn't happening; rerun Appendix C.

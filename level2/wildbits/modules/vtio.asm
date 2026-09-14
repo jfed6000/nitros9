@@ -101,18 +101,11 @@ HandleMSTimer       tst       MS_MEN             check if mouse cursor already o
 * Handle Terminal Switching
 HandleKeySwtchTrm   lda       >gr.SwitchReq
                     beq       AltISRCont
-                    sta       $12E4              last SwitchReq seen
                     tst       >gr.Busy
                     bne       AltISRCont
-                    lda       #$AA
-                    sta       $12E5              about to GF.Switch
 * The switch itself lives in grfdrv (GF.Switch); CallGrfDrv2 keeps U.
                     ldb       #GF.Switch
                     lbsr      CallGrfDrvNoPD
-                    lda       #$55
-                    sta       $12E6              GF.Switch returned
-                    lda       >gr.LiveTerm
-                    sta       $12E7
 AltISRCont
 
 * Handle sound. PSG $C4 via GF.Write LUT 1. AltISR cannot F$Sleep, so
@@ -175,11 +168,11 @@ Init
                     lda       #1
                     sta       V.TermLive,u first console writes Vicky $C2/$C3
                     clr       >gr.SwitchReq
-                    lbsr      InitSound initialize the sound
-                    lbsr      InitKeyboard initialize the keyboad
-                    lbsr      InitMouse
+                    bsr       InitSound initialize the sound
+                    bsr       InitKeyboard initialize the keyboad
+                    bsr       InitMouse
                     lbsr      InitGrfDrv
-                    lbsr      InitPSG             $C4 silence in LUT 1
+                    bsr       InitPSG             $C4 silence in LUT 1
                     ldx       >D.AltIRQ get the current alternate IRQ vector
                     stx       >D.OrgAlt save it off in the original vector
                     leax      AltISR,pcr get our alternate interrupt service routine
@@ -321,7 +314,7 @@ setupgrfdrv         leas      2,s       clean process buffer
                     leay      P$DATImg,y
                     os9       F$FModul
                     puls      x
-                    lbcs      initerr2
+                    bcs       initerr2
                     ldy       MD$MPDAT,u
                     clra
                     ldd       ,y
@@ -352,8 +345,8 @@ store7
                     lda       #$FF
                     sta       gr.LiveTerm
                     ldb       #GF.Init           populate gr.WriteCharLive/Shadow + gr.ScrollLive/Shadow
-                    lbsr      CallGrfDrvNoPD
-                    lbcs      initerr3
+                    bsr       CallGrfDrvNoPD
+                    bcs       initerr3
                     clrb
                     puls      y,u,pc
 initerr2            leas      4,s
@@ -535,7 +528,7 @@ InitTerm            stb       V.TermID,u
 TermCall            stb       >gr.b1              terminal id
                     stu       >gr.d1              this static, as a system address
                     tfr       a,b
-                    lbra      CallGrfDrvNoPD
+                    bra       CallGrfDrvNoPD
 TermTerm            ldb       V.TermID,u
                     lda       #GF.TermGone
                     bra       TermCall
@@ -591,7 +584,7 @@ FindFreeFail        comb
 *    B  = error code
 *
 Term
-                    lbsr      TermTerm
+                    bsr       TermTerm
                     lda       >gr.TermCnt
                     bne       TermEx
                     ldx       >D.OrgAlt
@@ -733,7 +726,7 @@ SSBlkX              puls      a,pc
 *******************************************************************
 DoScroll            tst       V.TermLive,u
                     bne       dslive@
-                    lbsr      SetShadowBlk        aim at THIS term's 16K buffer (keeps A)
+                    bsr       SetShadowBlk        aim at THIS term's 16K buffer (keeps A)
                     beq       dsx@                no buffer: nothing to scroll
                     lbra      CallScrollShadow
 dslive@             lbra      CallScrollLive
@@ -749,7 +742,7 @@ PutCell             pshs      d,x
                     stx       >gr.d1              cell offset
                     lda       V.FBCol,u
                     sta       >gr.b3              colour attr
-                    lbsr      SetWDest            sets b4
+                    bsr       SetWDest            sets b4
                     ldb       #GF.Cell
                     lbsr      CallGrfDrvNoPD
                     puls      d,x,pc
@@ -784,7 +777,7 @@ PutGlyph	    ldy	      V.CurPos,u
 		    ldb	      V.FBCol,u
 		    tst	      V.TermLive,u
 		    bne	      writelive
-		    lbsr      SetShadowBlk          aim at THIS term's 16K buffer
+		    bsr       SetShadowBlk          aim at THIS term's 16K buffer
 		    beq	      cont@                 no buffer: drop the glyph
 		    lbsr      CallWriteCharShadow
 		    bra	      cont@
@@ -876,7 +869,7 @@ ChkESC              cmpa      #$1B                is the character ESC?
 * carry CurRght's bye@ path used to hand back to SCF.
                     jsr       d,x                 run the handler...
                     clrb
-                    lbra      UpdateLiveCursor   ...then refresh the hw cursor and rts
+                    bra       UpdateLiveCursor   ...then refresh the hw cursor and rts
 ChkRet              clrb
                     andcc     #^Carry
                     rts
@@ -1038,7 +1031,7 @@ Disp05              leax      Esc05Tbl,pcr
                     bra       DispCom
 Disp1F              leax      Esc1FTbl,pcr
 DispCom             lda       V.EscParms,u       the sub-code byte
-                    lbsr      EscScan
+                    bsr       EscScan
                     bcs       DispNF             unknown sub-code - ignore
                     tstb                          leaf needs parameter bytes?
                     beq       EscRun             no - run it now (X = handler)
@@ -1151,7 +1144,7 @@ CXYrow@             cmpa      V.WHeight,u
                     lda       V.WHeight,u         clamp to last row
                     deca
 CXYrowok@           sta       V.CurRow,u
-                    lbra      CalcCurPos
+                    bra       CalcCurPos
 
 
 **********************************************************************
@@ -1389,12 +1382,12 @@ IsIt40x60           cmpa      #$03
                     bra       setcols@
 IsIt80x60           bsr       SetWin80x60                    
 setcols@            lda       V.DWFore,u
-                    lbsr      FColor
+                    bsr       FColor
                     lda       V.DWBack,u
-                    lbsr      BColor
+                    bsr       BColor
                     lda       V.DWBorder,u
-                    lbsr      Border
-                    lbsr      ClrScrn
+                    bsr       Border
+                    bsr       ClrScrn
                     rts
 
 SetWin40x30         ldb       #DBL_Y|DBL_X
@@ -1724,7 +1717,7 @@ NotReady            comb                          set the carry
 SetStat             ldx       PD.RGS,y            get caller's registers in X
                   IFGT    Level-1
                     cmpa      #SS.Open            path open (SCF); /vt factory here
-                    lbeq      SSOpen
+                    beq       SSOpen
                   ENDC
                     cmpa      #SS.SSig            send signal on data ready?
                     lbeq      SSSig               yes, go process
@@ -1888,7 +1881,7 @@ storeaddr@          pshs      y                   store font offset on stack [O]
                     os9       F$MapBlk
                     bcc       mapgood@            if success, then continue
                     puls      x,u                 else: error
-                    lbra      error@
+                    bra       error@
 mapgood@            stu       4,s                 store mapped address on stack [XUMO]
                     puls      x,u                 restore x,u [MO]
 *                   ****      open file to read             
@@ -1901,7 +1894,7 @@ endcopy@            ldx       R$X,x               pointer to file name in caller
 * Load file's first two bytes onto the stack to verify and check for $87DC
 modulecheck@        leas      -2,s                 add space to stack to store 2 bytes [DMO]
                     leax      ,s                   load x with stack address
-                    lbsr      Rd2B2Mem
+                    bsr       Rd2B2Mem
                     puls      x                    load x with the data [MO]
                     cmpx      #$87CD               check if module
                     bcc       getstart@            if module, get start of data
@@ -1920,7 +1913,7 @@ getstart@           pshs      u                    seek to data start address in
 * s= u|addr|offset                  
 readaddr@           leas      -2,s                 add 2 bytes stack storage [DUMO]
                     leax      ,s                   use the 2 bytes in stack to store addr
-                    lbsr      Rd2B2Mem             read 2 bytes from file
+                    bsr       Rd2B2Mem             read 2 bytes from file
                     bcc       seekaddr@            if success, seek to data address
                     leas      4,s                  else: clean stack and error [MO]
                     bra       errorclose@
