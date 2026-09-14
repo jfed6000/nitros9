@@ -124,6 +124,7 @@ SS.FntLoadF         rmb	      1
 SS.FntChar	    rmb	      1
 SS.SOLIRQ	    rmb	      1
 SS.SOLMUTE	    rmb	      1
+SS.TermSel          rmb       1                   $C5 R$X = terminal id: show it (vtio/grfdrv)
 
 ********************************************************************
 * System control definitions

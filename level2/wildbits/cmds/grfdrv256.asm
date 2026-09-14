@@ -65,15 +65,13 @@ entry               equ       *
 * Direct calls skip 'entry', so they must select LUT 1 for editing
 * themselves - otherwise the stb MMU_SLOT_n below (and the fast-path
 * check) hit LUT 0 and corrupt the SYSTEM task's memory map.
-WriteCharLive	    pshs      a
-		    lda	      #EDIT_LUT_1+ACT_LUT_1
-		    sta	      MMU_MEM_CTRL
-		    puls      a
-		    ldx	      MMU_SLOT_1
-		    cmpx      #$C2C3
-		    beq	      goodmmu@
-		    pshs      cc,a,b,y
-                    orcc      #IntMasks
+WriteCharLive       pshs      cc,d,y
+                    orcc      #IntMasks           IRQ return clears EDIT_LUT: select, read and remap masked
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    ldx       MMU_SLOT_1
+                    cmpx      #$C2C3
+                    beq       mapped@
                     clra
                     ldx       #gr.DATImg+2
                     ldb       #$C2
@@ -82,8 +80,8 @@ WriteCharLive	    pshs      a
                     ldb       #$C3
                     stb       MMU_SLOT_2 $4000
                     std       ,x++
-		    puls      cc,a,b,y
-goodmmu@	    leax      $2000,y
+mapped@             puls      cc,d,y
+                    leax      $2000,y
 		    sta	      ,x
 		    leax      $4000,y
 		    stb	      ,x
@@ -130,15 +128,13 @@ WriteCharShadow	    pshs      cc,a,b,y
 * DoScroll's callers load gr.d1 and gr.d2 immediately before.
 *
 *******************************************************************
-ScrollLive	    pshs      a
-		    lda	      #EDIT_LUT_1+ACT_LUT_1   select LUT 1 (direct call skips 'entry')
-		    sta	      MMU_MEM_CTRL
-		    puls      a
-		    ldx	      MMU_SLOT_1
-		    cmpx      #$C2C3
-		    beq	      goodmmu@
-		    pshs      cc,a,b,y
-                    orcc      #IntMasks
+ScrollLive          pshs      cc,a
+                    orcc      #IntMasks           IRQ return clears EDIT_LUT: select, read and remap masked
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    ldx       MMU_SLOT_1
+                    cmpx      #$C2C3
+                    beq       mapped@
                     clra
                     ldx       #gr.DATImg+2
                     ldb       #$C2
@@ -147,8 +143,8 @@ ScrollLive	    pshs      a
                     ldb       #$C3
                     stb       MMU_SLOT_2 $4000
                     std       ,x++
-		    puls      cc,a,b,y
-goodmmu@            pshs      a                   ,s = width
+mapped@             puls      cc,a
+                    pshs      a                   ,s = width
                     ldd       >gr.d2              end offset
                     subd      >gr.d1              - start offset
                     subb      ,s                  - one row
@@ -317,9 +313,8 @@ GSFntChar           lda       #0
 SSFntChar           lda       #1
 DoFontGetSet        pshs      a         store get/set state on stack
                     pshs      cc
-*		    lbsr      MMUKrnVars
                     orcc      #IntMasks
-                    lda       #%10010001
+                    lda       #EDIT_LUT_1+ACT_LUT_1
                     sta       MMU_MEM_CTRL
                     lda       #FONT_BLK map in font block
                     sta       MMU_SLOT_2
@@ -1126,6 +1121,8 @@ SetSttTbl           fcb       SS.AScrn
                     fdb       GrfMod+SSPalet
                     fcb       SS.FScrn
                     fdb       GrfMod+SSFScrn
+                    fcb       SS.TermSel
+                    fdb       GrfMod+SSTermSel
                     fcb       0
 
 * GetStat SS.ScSiz - R$X = columns, R$Y = rows
@@ -1846,6 +1843,36 @@ SetBlkC4            pshs      cc
                     puls      cc,pc
 
 
+* SetStat SS.TermSel - R$X = terminal id 0-8: show that terminal on the
+*   AltISR's next tick, as 1B 21 does, without any I/O on the target.  SCF
+*   queues a write, SetStat, open or close to a device behind the process
+*   that holds it busy while reading (BASIC09 at its prompt does), so vt
+*   sends this on its own path.  Not open or out of range = E$IllArg; the
+*   live terminal = nothing to do.  Target first, then the request.
+SSTermSel           ldd       R$X,x
+                    cmpd      #G.TermMax
+                    bhs       bad@
+                    pshs      b                   the id
+                    lda       #gr.TermSz
+                    mul
+                    ldx       #gr.TermTbl
+                    abx                           X = its entry
+                    puls      b
+                    lda       T.Flags,x
+                    bita      #T.Init
+                    beq       bad@
+                    cmpb      >gr.LiveTerm        already on screen?
+                    beq       ok@
+                    stb       >gr.SwitchTerm
+                    lda       #SW.Goto
+                    sta       >gr.SwitchReq
+ok@                 clrb
+                    jmp       >GrfMod+SysRet
+bad@                comb
+                    ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
+
+
 *******************************************************************
 * SysRet - Return to System
 * Call this instead of jmp [>D.Flip0]
@@ -1874,7 +1901,7 @@ SysRet
 ;;; y=DAT Image Address
 ;;; x=logical address in process
 ;;; find the block where x is and map it into Slot 1
-GMapAddr2Blk        pshs      d,x       x=address in process;y=Process DAT
+GMapAddr2Blk        pshs      cc,d,x    x=address in process;y=Process DAT
                     tfr       x,d
                     lsra
                     lsra
@@ -1883,34 +1910,14 @@ GMapAddr2Blk        pshs      d,x       x=address in process;y=Process DAT
                     anda      #%0001110
                     inca
                     lda       a,y
-		    ldb	      #EDIT_LUT_1+ACT_LUT_1
-		    stb	      MMU_MEM_CTRL
+                    orcc      #IntMasks IRQ return clears EDIT_LUT: select and write masked
+                    ldb       #EDIT_LUT_1+ACT_LUT_1
+                    stb       MMU_MEM_CTRL
                     sta       MMU_SLOT_1
                     clr       gr.DATImg+2
                     sta       gr.DATImg+3
-                    puls      x,d,pc
+                    puls      cc,d,x,pc
 
-;;; GetXYU - get R$XYU from calling process
-;;; Put values into global variable for use in GrfDrv
-;;; Caller's variable exist in Path Desciptor table in Task 0
-;;; Map in correct block and copy data
-GetABXYU
-
-
-;;; PutABXYU - put R$ABXYU back into calling process
-;;;
-PutABXYU
-
-MMUKrnVars          lda       #%10010001
-                    sta       MMU_MEM_CTRL
-                    ldy       #$0104
-                    sty       MMU_SLOT_3
-                    ldx       >gr.PDRGS load x with PDREGS to get shadow stack regs
-                    rts
-
-MMURestore          lda       #1
-                    sta       MMU_MEM_CTRL
-                    rts
 
 * This is from L1 Coco vtio
 * CpyBlk - Copy contiguous block of memory with a byte value (for screen scrolling, insert/delete line,etc.)
