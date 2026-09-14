@@ -1717,8 +1717,8 @@ SSOpenFind          cmpb      #G.TermMax
                     beq       SSOpenGot
                     incb
                     bra       SSOpenFind
-SSOpenNone          ldb       #E$MNF
-                    comb
+SSOpenNone          comb                          set carry first: comb after ldb turned 221 into 34
+                    ldb       #E$MNF
                     puls      x,y,u,pc
 SSOpenGot           lda       #'v
                     sta       $12D8
