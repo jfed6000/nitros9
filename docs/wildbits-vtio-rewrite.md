@@ -32,11 +32,12 @@ MAME for all five items: dead code and probes, sound chip setup into
 good"); the Jr2 build is MAME only.  **Next work:** `docs/vtio-shrink-plan.md` —
 SetStat/GetStat forwarding, the escape parser into grfdrv (`GF.Ctrl`), terminal
 setup, `InitDisplay`, and a final squeeze, aiming at roughly 1,950 bytes of
-vtio.  Its item 1, deleting `SSDMAFill`, is done in MAME (vtio 3,750, margin
-1,122).
+vtio.  Items 1 and 2 are done in MAME: `SSDMAFill` deleted, and GetStat/SetStat
+forwarded to grfdrv (vtio 3,310, margin 1,562).
 
 The sections below are in date order, oldest first; the newest is
-**`SSDMAFill` deleted** (2026-09-13), after
+**GetStat/SetStat forwarded to grfdrv** (2026-09-13), after
+**`SSDMAFill` deleted**, after
 **`SS.AScrn` moved into grfdrv: `GF.AScrn`, and `CallGrfDrvRet`**, after
 **`SS.DfPal` moved into grfdrv: `GF.DfPal`**, after
 **Sound chip setup moved into `GF.PSGInit`**,
@@ -1870,6 +1871,103 @@ back to `/term` `$00`; `1b 21` then `>/vt2` `$00`, `TermCnt=1`, no error;
 prints `ok`; re-entry count 0 in every run.  The only dump differences are
 banner timestamps in buffer blocks `$3A-$3E`, and stale RAM in block `$3F` and
 in the never-loaded `T0.CLUT1/2`.
+
+### GetStat/SetStat forwarded to grfdrv: `GF.GetStt`, `GF.SetStt`  (2026-09-13, same day)
+
+Item 2 of `docs/vtio-shrink-plan.md`.  Verified in MAME `wbjr2`; only
+`l2`/`jr2` rebuilt.
+
+**What vtio keeps.**  GetStat `SS.EOF` and `SS.Ready`, and SetStat `SS.Open`,
+`SS.SSig`, `SS.Relea`, `SS.Tone` and `SS.FntLoadF`: the ones that need the path
+or process descriptor, send signals, block on file I/O, or are polled.
+Everything else goes through one shared tail, `StatFwd`:
+- store the status code in `gr.b1`;
+- `SetThisTermGrfPtrs`;
+- `CallGrfDrvRet` with `GF.GetStt` (27) or `GF.SetStt` (28).
+
+The code goes in `gr.b1`, not `R$B`, because SCF's own `CallComStatus` calls
+(`SS.ComSt`) don't put it in the caller's `B`.  `SetThisTermGrfPtrs` clobbers
+`D`, so the op number is held on the stack.
+
+**grfdrv side.**  `StatDisp` does `SetBlkC2C3`, loads `X = #gr.PDRGS`, then scans
+a `fcb code / fdb handler` table ended by 0 and does `jmp [,y]`.  `SS.Opt` is
+code 0, so it ends up as unknown, as before.  An unknown code gets `StatUnk`
+(carry + `E$UnkSvc`), which is what SCF tolerates.  With `X = gr.PDRGS` the
+`R$` offsets are the ones vtio used off `PD.RGS`, so the handlers port almost
+line for line:
+
+| direction | codes | handler |
+|---|---|---|
+| Get | `SS.ScSiz`, `SS.ScTyp`, `SS.KySns`, `SS.Joy`, `SS.Mouse`, `SS.DScrn` | new `GSScSiz` … `GSDScrn` |
+| Get | `SS.Palet`, `SS.FBRgs` | `GSFBRgs` |
+| Get | `SS.FntChar` / `SS.DfPal` | existing `GSFntChar` / `StatOK` (`clrb`) |
+| Set | `SS.AScrn`, `SS.DfPal`, `SS.FntChar` | existing `GFAScrn`, `GFDfPal`, `SSFntChar` |
+| Set | `SS.DScrn`, `SS.PScrn`, `SS.Palet`, `SS.FScrn` | new, from vtio |
+
+- `SS.FScrn`'s `F$DelRAM` is grfdrv's second `os9` call.  Like `GFAScrn`, it
+  runs `SetBlkC2C3` again afterwards.
+- `SS.Palet` and `SS.FScrn` end by jumping into `GFBmPalet` / `GFBmFree` when
+  the terminal is live.  Those two now `clrb` before `SysRet`.
+- The unused grfdrv op bodies `GSMouse` (2), `GSDScrn` (3) and `SSDScrn` (6)
+  are deleted.  The first two read Vicky back; `SSDScrn` kept no mirror.
+  Their `FuncTbl` slots point at `StatUnk`.
+- `DoFontGetSet`'s debug stores (`$11A0-$11B3`, `$12B0`, `$12C0`) are removed.
+
+**Behaviour changes, all deliberate:**
+- **`SS.Joy`** wrote its results through `U`, into vtio's own statics (offsets
+  1, 4 and 6).  It now writes `gr.PDRGS`.
+- **`SS.Palet` and `SS.FScrn` reject bitmap # above 2 with `E$IllArg`.**  The
+  old `SS.FScrn` would `F$DelRAM` from whatever byte followed `V.BM2Blk`.
+- Handlers return `B = 0` on success; `SS.ScSiz`/`SS.ScTyp` used to leave junk
+  in `B`.  Callers can't see the difference, because on success the kernel
+  doesn't copy `B` back.
+
+**Cost.**  Each forwarded call is now a grfdrv trip with the 12-byte register
+copy in and 9 bytes out.  That covers Shell+'s `SS.ScSiz`, SCF's `SS.ComSt`
+inside `SS.Opt`, and the `SS.Close` on every close.  `SS.Ready` stays in vtio
+for readers that poll.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 3,750 | 3,310 |
+| `grfdrv256` | 2,408 | 2,733 |
+| bootfile modules | 31,134 | 30,694 |
+| margin to 32,256 | 1,122 | 1,562 |
+
+**Verification**, on the item 1 disk and the new one side by side.  The
+throwaway commands (not committed) are Appendix B's `dftest` and `asctest`,
+plus:
+- `gstest` issues `SS.Ready`, `SS.ScSiz`, `SS.ScTyp`, `SS.KySns`, `SS.Mouse`,
+  `SS.DScrn`, `SS.Palet`, `SS.FBRgs`, `SS.DfPal`, GetStat `SS.FntChar`, GetStat
+  and SetStat code `$7F`, `SS.FScrn` on an unallocated bitmap, and `SS.Joy` on
+  path 1, and prints CC, A, B, X and Y for each.
+- `bmarg` issues `SS.Palet` and `SS.FScrn` for bitmap 3.
+
+| test | result |
+|---|---|
+| regression set | same `LiveTerm`/`TermCnt` values on both, re-entry count 0; `s3` below |
+| `shellbg` on `/term`; on `/vt1` after Alt+Right; `>/vt1` | identical: `BM2 ctrl=$05` → `$34`; `$32` live and in `/vt1`'s mirror; live zero, `/vt1` mirror `BM2 ctl=$05 blk=$32` |
+| `dftest`, `dftest >/vt1` | CLUT1 = CLUT3 = `$01FE00` (`T0` / `T1`) on both |
+| `asctest`, `asctest >/vt1` | `ERROR #054` / `ERROR #052`, mirrors identical |
+| `shellbg` then `shellbgoff` (`SS.DScrn` with `FT_OMIT`, `SS.FScrn` 2) | `HW MCR $0104`, BM2 registers zero, on both |
+| `gstest` on `/term`, `>/vt1`, after `1b 20 02 00 00 50 1e 01 00 00`, after `shellbg` | same output on both disks.  Only exception: `SS.Joy` now returns `A=00`, where the old code left the caller's `A` alone |
+| `tmode pau=0`, `tmode`, `tmode pau=1` | same listing, no error, on both: `SS.ComSt` reaches the dispatcher and `E$UnkSvc` is still tolerated |
+| `bmarg` (new build) | `ERROR #187`; mirror untouched |
+
+**`display 1b 21 >/vt2` changed order, not result.**  The old disk freed
+`/vt2` before the AltISR served the switch.  The new one switches to `/vt2`
+first and back on close, which leaves `/term`'s screen in `T0`'s buffer.  Both
+end at `LiveTerm=$00`, `TermCnt=1`, with the same screen, and the `1B 21`
+section already allows either order.
+
+It is timing, not logic:
+- Shifting the keystrokes by whole frames doesn't change either build.  Keys
+  arrive on frame boundaries, so the phase against the tick stays fixed.
+- `list` of a file holding only `1B 21` frees first on **both** disks.
+- `list` of `1B 21` followed by 3K of text switches first on **both**.
+
+The extra grfdrv trips move the close past a tick.  The dump's `gr.TermBlk`
+differs for a related reason: GetStat calls now aim it too.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and

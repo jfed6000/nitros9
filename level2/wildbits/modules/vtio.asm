@@ -1947,16 +1947,6 @@ dlx@                rts
 
 
 
-* Return special key status
-GSKySns 
-*            ldy       <D.CCMem            get ptr to CC mem
-                    clrb                          clear key code
-*                    cmpu      <G.CurDev,y         are we the active device?
-*                    bne       actv@               branch if not
-                    ldb       V.KySns,u          get key codes
-actv@               stb       R$A,x               save to caller reg
-                    clrb                          return w/o error
-                    rts
 **********************************************************************
 *                      GetStt Routines
 **********************************************************************
@@ -1982,31 +1972,10 @@ GetStat             cmpa      #SS.EOF             is this the EOF call?
                     ldx       PD.RGS,y            else get the pointer to caller's registers (all other calls require this)
                     cmpa      #SS.Ready           is this the data ready call? (keyboard buffer)
                     beq       SSReady             branch if so
-                    cmpa      #SS.ScSiz           get screen size?
-                    beq       SSScSiz             branch if so
-                    cmpa      #SS.ScTyp           get screen type?
-                    beq       SSScTyp             branch if so
-                    cmpa      #SS.KySns           get key sense info?
-                    lbeq      GSKySns             branch if so
-                    cmpa      #SS.Joy             get joystick position?
-                    beq       SSJoy               branch if so
-                    ifgt      Level-1
-                    cmpa      #SS.Mouse
-                    beq       GSMouse
-                    cmpa      #SS.DScrn           SS.DScrn MCR to display text or graphics
-                    lbeq      GSDScrn
-                    cmpa      #SS.FntChar
-                    lbeq      GSFntChar       
-                    endc
-                    cmpa      #SS.Palet           get palettes?
-                    beq       GSPalet             yes, go process
-                    cmpa      #SS.FBRgs           get colors?
-                    lbeq      SSFBRgs             yes, go process
-                    cmpa      #SS.DfPal           get default colors?
-                    beq       GSDfPal             yes, go process
-                    comb                          set the carry
-                    ldb       #E$UnkSvc           load the "unknown service" error
-                    rts                           return
+* The rest are grfdrv's: GF.GetStt dispatches on the code in gr.b1 and
+* leaves its results in gr.PDRGS, which CallGrfDrvRet copies back.
+                    ldb       #GF.GetStt
+                    bra       StatFwd
 
 **********************************************************************
 * SS.EOF    $06	
@@ -2034,161 +2003,6 @@ NotReady            comb                          set the carry
                     rts                           return
 
 
-;;; SS.ScTyp  $63
-;;;
-;;; Returns information about the current video screen.
-;;;
-;;; Entry:  A = The path number.
-;;;         B = SS.ScTyp ($93)
-;;;
-;;; Exit:   A = The screen type.
-;;;              1 = 40x30 text screen
-;;;              2 = 80x30 text screen
-;;;              3 = 40x60 text screen
-;;;              4 = 80x60 text screen
-;;;        CC = Carry flag clear to indicate success.
-;;;
-;;; Error:  B = A non-zero error code.
-;;;        CC = Carry flag set to indicate error.
-SSScTyp             lda       V.ScTyp,u            get the screen type
-                    sta       R$A,x
-                    rts
-
-
-
-;;; SS.ScSiz $1A
-;;;
-;;; Return the screen size.
-;;;
-;;; Entry:  A = The path number.
-;;;         B = SS.ScSiz ($26)
-;;;
-;;; Exit:   X = The number of columns on the screen.
-;;;         Y = The number of rows on the screen.
-;;;        CC = Carry flag clear to indicate success.
-;;;
-;;; Error:  B = A non-zero error code.
-;;;        CC = Carry flag set to indicate error.
-;;;
-;;; Use this call to determine the size of a the screen. The returnedvalues depend on the device in use.
-;;; For non-VTIO devices, the call returns the values following the XON/XOFF bytes in the device descriptor.
-;;; For VTIO devices, the call returns the size of the window or screen in use by the specified device.
-;;; For window devices, the call returns the size of the current working area of the window.
-SSScSiz             clra                          clear the upper 8 bits of D
-                    ldb       V.WWidth,u          get the column count
-                    std       R$X,x               save it in X
-                    ldb       V.WHeight,u         get the row count
-                    std       R$Y,x               save it in Y
-* BUG FIX: this fell straight through into SSJoy below with no rts,
-* so R$X/R$Y (and R$A) got clobbered with joystick VIA-port data right
-* after being set correctly - SS.ScSiz callers (Shell included, at
-* startup) got garbage screen dimensions instead of an error.
-                    rts
-
-;;; SS.Joy $OD
-;;;
-;;; Returns the joystick information.
-;;;
-;;; Entry:  X = Joystick to read.
-;;;         B = SS.Joy ($13)
-;;;
-;;; Exit:   A = Button state.
-;;;         X = Horizontal position (0 = left, 255 = right).
-;;;         Y = Vertical position (0 = top, 255 = bottom).
-;;;        CC = Carry flag clear to indicate success.
-;;;
-;;; Error:  B = A non-zero error code.
-;;;        CC = Carry flag set to indicate error.
-SSJoy               lda       VIA0.Base+VIA_ORA_IRA get the joystick value
-                    ldx       #0                  initialize left/top value in X
-                    ldy       #255                initialize right/bottom value in Y
-                    lsra                          shift out UP
-                    bcc       s1@                 branch if carry clear
-                    stx       R$Y,u               else store left value in caller's Y
-s1@                 lsra                          shift out DOWN
-                    bcc       s2@                 branch if carry clear
-                    sty       R$Y,u               else store right value in caller's Y
-s2@                 lsra                          shift out LEFT
-                    bcc       s3@                 branch if carry clear
-                    stx       R$X,u               else store up value in caller's X
-s3@                 lsra                          shift out RIGHT
-                    bcc       s4@                 branch if carry clear
-                    sty       R$X,u               else store right value in caller's X
-* A now contains (BUTTON 2 | BUTTON 1 | BUTTON 0) in lower 3 bits
-s4@                 sta       R$A,u               store buttons in caller's A
-                    clrb                          clear carry
-                    rts                           return
-
-                    ifgt      Level-1
-;;; SS.Mouse
-;;;
-;;; Returns the mouse information.
-;;;
-;;; Entry:  B  = SS.Mouse 
-;;;
-;;; Exit:   A = Button state.
-;;;         X = Horizontal position (0 - 640).
-;;;         Y = Vertical position (0 - 480).
-;;;        CC = Carry flag clear to indicate success.
-;;;
-;;; Error:  B = A non-zero error code.
-;;;        CC = Carry flag set to indicate error.
-GSMouse             lda       MS_XH
-                    ldb       MS_XL
-                    std       R$X,x
-                    lda       MS_YH
-                    ldb       MS_YL
-                    std       R$Y,x
-                    lda       V.MSButtons,u
-                    sta       R$A,x
-                    clrb                          clear carry
-                    rts   
-                    endc
-;;; SS.Palet
-;;;
-;;; Return palette information.
-GSPalet
-
-;;; SS.FBRGs
-;;;
-;;; Returns the foreground, background, and border palette registers for a window.
-;;;
-;;; Entry:  A = The path number.
-;;;         B = SS.FBRgs ($96)
-;;;
-;;; Exit:   A = The foreground/background palette register numbers.
-;;;         X = The least significant byte of the border palette register number.
-;;;        CC = Carry flag clear to indicate success.
-;;;
-;;; Error:  B = A non-zero error code.
-;;;        CC = Carry flag set to indicate error.
-SSFBRGs             lda                 V.FBCol,u
-                    sta                 R$A,x
-                    ldd                 #0
-                    std                 R$X,x
-                    rts
-
-;;; SS.DfPal
-;;;
-;;; Returns the foreground, background, and border palette registers for a window.
-;;;
-;;; Entry:  A = The path number.
-;;;         B = SS.DfPal ($97)
-;;;         X = A pointer to user-provided 16-byte palette data.
-;;;
-;;; Exit:   X = The default palette data moved to user space.
-;;;        CC = Carry flag clear to indicate success.
-;;;
-;;; Error:  B = A non-zero error code.
-;;;
-;;; Use this call to find the values of the default palette registers when a new screen is allocated.
-;;; The corresponding SetStat alters the default registers. This is for system configuration utilities
-;;; and shouldn't be used by general applications.
-GSDfPal
-
-                    clrb                          no error
-                    rts                           return
-
 *
 * SetStat
 *
@@ -2212,27 +2026,18 @@ SetStat             ldx       PD.RGS,y            get caller's registers in X
                     lbeq      SSRelea             yes, go process
                     cmpa      #SS.Tone
                     lbeq      SSTone
-                    ifgt Level-1                                            
-                    cmpa      #SS.AScrn           SS.AScrn allocated bitmap
-                    lbeq      SSAScrn
-                    cmpa      #SS.DScrn           SS.DScrn MCR to display text or graphics
-                    lbeq      SSDScrn
-                    cmpa      #SS.FScrn           SS.FScrn frees bitmap memory
-                    lbeq      SSFScrn
-                    cmpa      #SS.PScrn           SS.PScrn to set up layers
-                    lbeq      SSPScrn
-                    cmpa      #SS.Palet
-                    lbeq      SSPalet             SS.Palet assigns palette to bitmap
-                    cmpa      #SS.DfPal
-                    lbeq      SSDfPal             SS.DfPal defines and populates a CLUT
-                    cmpa      #SS.FntLoadF
+                    cmpa      #SS.FntLoadF        blocks on file I/O, so not grfdrv's
                     lbeq      SSFntLoadF
-                    cmpa      #SS.FntChar
-                    lbeq      SSFntChar
-                    endc                                            
-                    comb                          set the carry
-                    ldb       #E$UnkSvc           load the "unknown service" error
-                    rts                           return
+* Everything else goes to grfdrv's GF.SetStt, and GetStat's remainder
+* joins here with GF.GetStt.  The code travels in gr.b1, not R$B: SCF's
+* own calls (SS.ComSt from CallComStatus) do not put it in the caller's
+* B.  SetThisTermGrfPtrs clobbers D, so the op number waits on the stack.
+                    ldb       #GF.SetStt
+StatFwd             sta       >gr.b1              status code
+                    pshs      b                   GF.GetStt or GF.SetStt
+                    lbsr      SetThisTermGrfPtrs
+                    puls      b
+                    lbra      CallGrfDrvRet       results, B and carry back to the caller
 
                   IFGT    Level-1
 * SS.Open — SCF calls this on every I$Open.
@@ -2351,42 +2156,6 @@ SSRelea             lda       PD.CPR,y            get the current process ID
 ex@                 rts
 
                     ifgt      Level-1
-;;; GS.FntChar
-;;;
-;;; Copy a font character from font bank 0 or 1 to a user memory location
-;;;
-;;; Entry: R$A = font set 0 or 1
-;;;        R$X = pointer to 8 byte memory
-;;;        R$Y = font character to get (0-255)
-;;;
-;;; Exit:  B = non-zero error code
-;;;       CC = carry flag clear to indicate success
-
-
-;;; SS.FntChar
-;;;
-;;; Set a font character in font bank 0 or 1 from a user memory location
-;;;
-;;; Entry: R$A = font set 0 or 1
-;;;        R$X = pointer to 8 byte memory
-;;;        R$Y = font character to set (0-255)
-;;;
-;;; Exit:  B = non-zero error code
-;;;       CC = carry flag clear to indicate success
-
-;;; difference between get and set is just two lines specifying
-;;; source and destination.  So procedures are combined.
-GSFntChar           lbsr      SetThisTermGrfPtrs
-		    ldb	      #GF.GSFntChar
-		    lbsr      CallGrfDrv
-		    rts
-		    
-SSFntChar           lbsr      SetThisTermGrfPtrs
-		    ldb	      #GF.SSFntChar
-		    lbsr      CallGrfDrv
-		    rts
-
-
 ;;; SS.FntLoadF
 ;;;
 ;;; Load a font from a file.  File should be full path.
@@ -2512,228 +2281,6 @@ errnomap@           puls      cc                  if error, pull cc
                     rts                           and return
 
                     
-;;; SS.AScrn
-;;;
-;;; Allocate a bitmap screen
-;;;
-;;; Entry: R$Y = bitmap# (0-2)
-;;;        R$X = screentype (0=320x240, 1=320x200)
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-;;;        X = Starting Page# of bitmap address
-* grfdrv's GF.AScrn does the work; CallGrfDrvRet brings R$X (the block)
-* back into the caller's registers, B and carry too.
-SSAScrn             lbsr      SetThisTermGrfPtrs
-                    ldb       #GF.AScrn
-                    lbra      CallGrfDrvRet
-
-
-;;;  GS.DScrn
-;;;  Get Display Screen Settings
-;;;
-;;; Return MCR values
-;;;
-;;; Entry: Nothing.  This returns values only
-;;;
-;;; Exit:  R$X = Vicky_MCR Low Byte
-;;;        R$Y = Vicky_MCR High Byte
-;;;
-* Reported from the mirror, not the registers: the registers hold the LIVE
-* terminal's state, which is not this caller's if it is on a shadow
-* terminal, and they are not guaranteed readable.
-GSDScrn             clr       R$X,x               load MCR low byte
-                    clr       R$Y,x               load MCR high byte
-                    lda       V.V_MCR,u             this terminal's MCR low byte
-                    sta       R$X+1,x
-                    ldb       V.V_MCR+1,u           this terminal's MCR high byte
-                    stb       R$Y+1,x
-end@                clrb
-                    rts
-
-;;;  SS.DScrn
-;;;  Display Screen Settings
-;;;
-;;; Set MCR to display text or graphics or both
-;;;
-;;; Entry: R$X = Vicky_MCR Low Byte
-;;;        R$Y = Vicky_MCR High Byte
-;;;
-;;; Exit:  Nothing. This just sets the register and updates driver variables
-;;;
-* Same split as SetWin and ChgFont: the mirror is always updated, the
-* registers only for the terminal that is on screen.  PullBuf programs
-* $FFC0-$FFCF from V.V_MCR when a shadow terminal comes up, so turning
-* graphics on from a background terminal takes effect when you switch to
-* it rather than under whatever is displayed now.
-SSDScrn             lda       R$X+1,x               load MCR low byte
-                    ldb       R$Y+1,x               load MCR high byte
-                    ldy       #TXT.Base
-mcrlbit@            cmpa      #FX_OMIT              If omit, don't change
-                    beq       mcrhbit@
-                    sta       V.V_MCR,u             store copy in driver variables
-                    tst       V.TermLive,u
-                    beq       mcrhbit@
-                    sta       MASTER_CTRL_REG_L,y   store new MCR low byte
-mcrhbit@            cmpb      #FT_OMIT              if omit, don't change
-                    beq       end@
-                    stb       V.V_MCR+1,u           store copy in driver variables
-                    tst       V.TermLive,u
-                    beq       end@
-                    stb       MASTER_CTRL_REG_H,y   store new MCR High byte
-end@                clrb
-                    rts
-
-;;;  SS.PScrn
-;;;  Position Screen Layers
-;;;
-;;;  Set layer to display a screen
-;;;
-;;; Entry: R$X = layer (0-2)
-;;;        R$Y = bitmap# (0-2), tilemap (4-6)
-;;;        
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-;;;
-* V.V_LayerCTL is both the source and the destination here.  It used to
-* read VKY_LAYER_CTRL_0 back to merge the other layer's nibble - twice, in
-* the layer-1 leg - and that is the one thing this driver may not do: a
-* Vicky register is not guaranteed to read back, and it holds the LIVE
-* terminal's layers, not this caller's.  The mirror is authoritative; the
-* register is written only for the terminal that is on screen, and PullBuf
-* programs it for the rest when they come up.
-SSPScrn             ldy       R$X,x                 x=layer
-                    lda       V.V_LayerCTL,u        the mirror, never the register
-sl0@                cmpy      #$00                  test for Screen layer 0
-                    bne       sl1@                  if not, go to layer 1
-                    anda      #%11110000            this is L0, clear L0 values
-                    adda      R$Y+1,x
-                    bra       store0@
-sl1@                cmpy      #$01                  test for layer 1
-                    bne       sl2@                  if not, go to layer 2
-                    anda      #%00001111            keep layer 0, clear the Layer1 bits
-                    pshs      a
-                    lda       R$Y+1,x               bitmap# into the high nibble
-                    ldb       #16
-                    mul
-                    addb      ,s+                   merge, no register read-back
-                    tfr       b,a
-store0@             sta       V.V_LayerCTL,u        keep the mirror in step
-                    tst       V.TermLive,u          only the live terminal owns
-                    beq       end@                  the register
-                    sta       VKY_LAYER_CTRL_0      store them
-                    bra       end@
-sl2@                cmpy      #$02                  test for Layer2
-                    bne       end@
-                    ldb       R$Y+1,x
-                    stb       V.V_LayerCTL+1,u      keep the mirror in step
-                    tst       V.TermLive,u
-                    beq       end@
-                    stb       VKY_LAYER_CTRL_1      store BM# or TM# in L2
-end@                clrb
-                    rts
-
-;;; SS.FScrn
-;;;
-;;; Free a bitmap screen
-;;;
-;;; Entry: R$Y = bitmap# (0-2)
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-SSFScrn             lda       R$Y+1,x              get the bitmap#
-                    lsla                           multiply by 2
-                    leay      V.BM0Blk,u
-                    pshs      x
-                    ldb       a,y                  load block# for bitmapX
-                    bne       deallocate@          if not zero, continue
-                    ldb       #E$WUndef            window undefined
-                    coma
-                    puls      x,pc
-deallocate@         clra
-                    tfr       d,x
-* From V.V_MCR, not MASTER_CTRL_REG_H: the register is write-only as far
-* as this driver is concerned, and reading it wrong here frees the wrong
-* number of blocks.  (SS.AScrn still sizes the allocation from its
-* screentype parameter rather than from CLK_70, so a caller that passes a
-* screentype disagreeing with the clock allocates and frees different
-* counts.  Nothing does today; noted in docs/wildbits-vtio-rewrite.md.)
-                    lda       V.V_MCR+1,u          this terminal's MCR high byte
-                    bita      #CLK_70              Test for CLK_70
-                    beq       CLK_60@
-CLK_70@             ldb       #$08                 clk_70 only has 8 blocks
-                    bra       cont@
-CLK_60@             ldb       #$0A                 clk_60 is 10 blocks
-cont@               os9       F$DelRAM             Free RAM from starting at blockX
-                    puls      x                    recover x
-                    lda       R$Y+1,x              get the bitmap#
-                    lsla                           multiply by 2
-clr_bmvar@          leay      V.BM0Cl_En,u         clear BOTH bytes of the mirror
-                    leay      a,y                  pair - control byte and block,
-                    clr       ,y                   or PullBuf re-enables a bitmap
-                    clr       1,y                  that has just been freed
-                    lda       R$Y+1,x
-                    sta       >gr.b2              bitmap # 0-2
-                    tst       V.TermLive,u
-                    beq       ok@
-                    ldb       #GF.BmFree
-                    lbsr      CallGrfDrvNoPD
-ok@                 clrb
-                    andcc     #^Carry
-                    rts
-
-;;; SS.Palet
-;;; Assign Palette to Bitmap
-;;;
-;;; Assign CLUT# to Bitmap#
-;;;
-;;; Entry: R$Y = bitmap# (0-2)
-;;;        R$X = CLUT (0-3)
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-;;;
-SSPalet             lda       R$Y+1,x
-                    sta       >gr.b2              bitmap # 0-2
-                    ldd       R$X,x               d now has CLUT#
-                    orcc      #Carry              set carry bit
-                    rolb                          shift B, and rotate in enable it
-                    stb       >gr.b3              CLUT# | enable
-* GF.BmPalet rewrites the whole control byte, so the mirror has to take
-* the same value or the next PullBuf undoes the CLUT assignment (and,
-* since the enable bit rides in that byte, turns the bitmap off).
-                    lda       R$Y+1,x
-                    lsla                          two mirror bytes per bitmap
-                    leay      V.BM0Cl_En,u
-                    stb       a,y                 V.BMxCl_En = CLUT# | enable
-                    tst       V.TermLive,u
-                    beq       ok@
-                    ldb       #GF.BmPalet
-                    lbsr      CallGrfDrvNoPD
-ok@                 clrb
-                    andcc     #^Carry
-                    rts
-
-
-
-;;; SS.DfPal
-;;; Define Palette and populate a CLUT from Memory Module
-;;;
-;;; Entry: R$X = CLUT # (0-3)
-;;;        R$Y = pointer to location of data in caller process
-;;;        (Caller must load data module)
-;;;
-;;; Exit:  B = A non-zero error code.
-;;;       CC = Carry flag clear to indicate success
-* grfdrv's GF.DfPal does the work: the 1K goes to T.CLUTn in this
-* terminal's 16K switch buffer and, when it is live (or has no buffer
-* yet), to the live CLUT in $C1.  CallGrfDrv hands grfdrv the caller's
-* registers and DAT image; B and carry come back.
-SSDfPal             lbsr      SetThisTermGrfPtrs
-                    ldb       #GF.DfPal
-                    lbra      CallGrfDrv
-
                     endc
 
 

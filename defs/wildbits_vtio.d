@@ -343,8 +343,8 @@ gr.TermTbl          RMB       72        ; Screen table base
 *   ScrollLive/Shadow    -           -            -      -      start off  end off
 *     (direct calls, A = width; start = CurRow*WWidth or 0, end = V.ScreenSize)
 *
-* b1 is unassigned - a free parameter byte.  (It was the GF.Write
-*   sub-op selector before that dispatch layer was removed.)
+* b1 is GF.TermGone's closing terminal id and GF.GetStt/GF.SetStt's status
+*   code.  (It was the GF.Write sub-op selector before that layer went.)
 * b4 "dest" is set by vtio's SetWDest: WD.Buf = the 16K terminal backup
 *   buffer at LUT1 $6000, WD.Vicky = the live $C2/$C3 planes.
 * d1/d2 halves are addressed gr.d1 / gr.d1+1 the way D splits into A/B.
@@ -359,7 +359,7 @@ gr.TermTbl          RMB       72        ; Screen table base
 * The physical order below (b1 b2 d1 d2 b3 b4 b5) is historical, not
 * meaningful; it is kept so GrfMem offsets did not move in the rename.
 *******************************************************************
-gr.b1               rmb       1         ; GF.TermGone: id of the closing terminal
+gr.b1               rmb       1         ; GF.TermGone: closing id / GF.GetStt, GF.SetStt: status code
 gr.b2               rmb       1         ; glyph / palette reg # / bitmap #
 gr.d1               rmb       2         ; cell offset / PSG freq / BM addr / LUT b0-1
 gr.d2               rmb       2         ; GF.Pal LUT bytes 2-3 / scroll end offset
@@ -399,8 +399,9 @@ G.TermMax           equ       9         ; Maximum terminals (0-8)
 *******************************************************************
 GF.Init             equ       0         ; Initialize
 GF.Term             equ       1         ; Terminate
-GF.GSMouse          equ       2         ; GetStat mouse
-GF.GSDScrn          equ       3         ; GetStat display screen
+* 2 was GF.GSMouse, 3 GF.GSDScrn, 6 GF.SSDScrn: never called, and the first
+* two read Vicky back.  SS.Mouse and SS.DScrn go through GF.GetStt/GF.SetStt;
+* the three FuncTbl slots return E$UnkSvc so the numbering holds.
 GF.GSFntChar        equ       4         ; GetStat font char
 * 5 was GF.SSFntLoadF - load a font from a file inside grfdrv.  Deleted: it
 * was never reachable (vtio's SSFntLoadF does the whole job itself and never
@@ -411,7 +412,6 @@ GF.GSFntChar        equ       4         ; GetStat font char
 * would let a second entrant overwrite the sleeper rather than serialise.
 * Ops above it renumbered down one.
 GF.SSFntChar        equ       5         ; SetStat font char
-GF.SSDScrn          equ       6         ; SetStat display screen
 GF.PushBuf          equ       7         ; Push Vicky state to term buffer
 GF.PullBuf          equ       8         ; Pull term buffer to Vicky
 GF.EraseLine	    equ	      9
@@ -437,6 +437,8 @@ GF.Switch           equ       23        ; change live terminal per gr.SwitchReq 
 GF.TermGone         equ       24        ; terminal id gr.b1 is closing (vtio TermTerm)
 GF.DfPal            equ       25        ; SS.DfPal: 1K at caller R$Y -> CLUT R$X (buffer + live)
 GF.AScrn            equ       26        ; SS.AScrn: allocate bitmap R$Y, block back in R$X
+GF.GetStt           equ       27        ; GetStat codes vtio does not keep: code in gr.b1, results in gr.PDRGS
+GF.SetStt           equ       28        ; SetStat codes vtio does not keep: code in gr.b1
 WD.Buf              equ       0         ; 16K TermBlk at LUT1 $6000
 WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 

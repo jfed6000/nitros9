@@ -5,7 +5,8 @@ Written 2026-09-13 for a fresh session.  Branch `wb/multiterm`, baseline commit
 `docs/grfdrv-offload-plan.md`, is finished: all five items are done in MAME, and
 the user tested the K2 build on the board ("K2 looks good").
 
-**Progress:** item 1 done in MAME 2026-09-13 (vtio 3,750, jr2 margin 1,122).
+**Progress:** items 1-2 done in MAME 2026-09-13 (vtio 3,310, grfdrv256 2,733,
+jr2 margin 1,562).
 
 **Find code by label, not by line number.**  Line numbers go stale after the first edit.
 
@@ -222,12 +223,14 @@ Graphics set (runs with `SECS=60`; Appendix B has the test commands): `shellbg` 
   ops end in `jmp >GrfMod+SysRet`.  Examples: `PushCore`/`PullCore`, `BmEnCore`,
   `EraseLineCore`, `GSEnter`, `GSCalcPos`.
 - Put new grfdrv code **after `ErEOScrn`**, because `ErEOLine`/`ErEOScrn` reach
-  `EraseLineCore` with a short `bsr`.  The last two ops (`GFDfPal`, `GFAScrn`)
-  sit just before `PSGInit`.
-- Next free op number: **27**.  Put `GF.*` equates next to their siblings in
-  `defs/wildbits_vtio.d`.  Adding a `FuncTbl` entry does not move GrfMem.
-- grfdrv's `DoFontGetSet` stores debug values at `$11A0-$11B3`, `$12B0`, `$12C0`.
-  Harmless while GrfMem ends at `gr.b5` (`$119D`); removed in item 2.
+  `EraseLineCore` with a short `bsr`.  The newest ops (`GFDfPal`, `GFAScrn`,
+  then item 2's `GFGetStt`/`GFSetStt` and their handlers) sit just before
+  `PSGInit`.
+- Next free op number: **29** (27/28 are `GF.GetStt`/`GF.SetStt` since item 2).
+  Put `GF.*` equates next to their siblings in `defs/wildbits_vtio.d`.  Adding
+  a `FuncTbl` entry does not move GrfMem.
+- `DoFontGetSet`'s debug stores at `$11A0-$11B3`, `$12B0`, `$12C0` were removed
+  in item 2.
 
 **The MAME dump reads** only `$12E2-$12E7`, `$12EC` and `$12F5-$12F8` of the
 probe area.

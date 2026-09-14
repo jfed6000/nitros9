@@ -220,11 +220,11 @@ ScrollPlane         tfr       y,d
 FuncTbl
                     fdb       GrfMod+Init         ; B=0
                     fdb       GrfMod+Term         ; B=1
-                    fdb       GrfMod+GSMouse      ; B=2
-                    fdb       GrfMod+GSDScrn      ; B=3
+                    fdb       GrfMod+StatUnk      ; B=2  was GSMouse (read back)
+                    fdb       GrfMod+StatUnk      ; B=3  was GSDScrn (read back)
                     fdb       GrfMod+GSFntChar    ; B=4
                     fdb       GrfMod+SSFntChar    ; B=5
-                    fdb       GrfMod+SSDScrn      ; B=6
+                    fdb       GrfMod+StatUnk      ; B=6  was SSDScrn (no mirror)
                     fdb       GrfMod+PushBuf      ; B=7
                     fdb       GrfMod+PullBuf      ; B=8
 		    fdb	      GrfMod+EraseLine	  ; b=9
@@ -245,6 +245,8 @@ FuncTbl
                     fdb       GrfMod+GFTermGone   ; b=24
                     fdb       GrfMod+GFDfPal      ; b=25
                     fdb       GrfMod+GFAScrn      ; b=26
+                    fdb       GrfMod+GFGetStt     ; b=27
+                    fdb       GrfMod+GFSetStt     ; b=28
 
 
 *******************************************************************
@@ -281,33 +283,6 @@ Term
 
                     clrb
                     lbra      SysRet
-
-
-;;; SS.Mouse
-;;;
-;;; Returns the mouse information.
-;;;
-;;; Entry:  B  = SS.Mouse
-;;;
-;;; Exit:   A = Button state.
-;;;         X = Horizontal position (0 - 640).
-;;;         Y = Vertical position (0 - 480).
-;;;        CC = Carry flag clear to indicate success.
-;;;
-;;; Error:  B = A non-zero error code.
-;;;        CC = Carry flag set to indicate error.
-GSMouse             ldx       #gr.PDRGS load x with PDREGS to get shadow stack regs
-                    lda       MS_XH
-                    ldb       MS_XL
-                    std       R$X,x
-                    lda       MS_YH
-                    ldb       MS_YL
-                    std       R$Y,x
-*                    lda       V.MSButtons,u
-                    clra
-                    sta       R$A,x
-                    clrb                clear carry
-                    jmp       >GrfMod+SysRet
 
 
 ;;; GS.FntChar
@@ -356,10 +331,8 @@ DoFontGetSet        pshs      a         store get/set state on stack
                     sta       MMU_MEM_CTRL
 *		    ldy	      #$0104
 *		    sty	      MMU_SLOT_3
-                    stx       $12C0
                     ldx       #gr.PDRGS
                     ldd       R$Y,x     get the char# and mulitply by 8
-                    std       $12B0
                     lslb                because 8 bytes per character
                     rola
                     lslb
@@ -378,7 +351,6 @@ cont@               leay      $4000,y
 mapgood@            ldd       R$X,x
                     anda      #%00011111
                     tfr       d,x
-                    stx       $11A0
                     tst       3,s
                     beq       getfont@
                     puls      y
@@ -386,12 +358,8 @@ mapgood@            ldd       R$X,x
                     bra       contfont@
 getfont@            leay      $2000,x
                     puls      x
-                    stx       $11AC
-                    sty       $11AE
 contfont@           ldb       #4        copy 8 bytes
                     pshs      u
-                    stx       $11B0
-                    sty       $11B2
 copy@               ldu       ,x++
                     stu       ,y++
                     decb
@@ -400,52 +368,6 @@ end@                puls      u         pull blk addr and getset flag
                     puls      cc
                     puls      a
 debugend@           jmp       >GrfMod+SysRet
-
-;;;  GS.DScrn
-;;;  Get Display Screen Settings
-;;;
-;;; Return MCR values
-;;;
-;;; Entry: Nothing.  This returns values only
-;;;
-;;; Exit:  R$X = Vicky_MCR Low Byte
-;;;        R$Y = Vicky_MCR High Byte
-;;;
-GSDScrn             ldx       #gr.PDRGS
-                    clr       R$X,x     load MCR low byte
-                    clr       R$Y,x     load MCR high byte
-                    ldy       #TXT.Base
-mcrlbit@            lda       MASTER_CTRL_REG_L,y store new MCR low byte
-                    sta       R$X+1,x   store copy in driver variables
-mcrhbit@            ldb       MASTER_CTRL_REG_H,y store new MCR High byte
-                    stb       R$Y+1,x   store copy in driver variables
-end@                clrb
-                    jmp       >GrfMod+SysRet
-
-;;;  SS.DScrn
-;;;  Display Screen Settings
-;;;
-;;; Set MCR to display text or graphics or both
-;;;
-;;; Entry: R$X = Vicky_MCR Low Byte
-;;;        R$Y = Vicky_MCR High Byte
-;;;
-;;; Exit:  Nothing. This just sets the register and updates driver variables
-;;;
-SSDScrn             ldx       #gr.PDRGS
-                    lda       R$X+1,x   load MCR low byte
-                    ldb       R$Y+1,x   load MCR high byte
-                    ldy       #TXT.Base
-mcrlbit@            cmpa      #FX_OMIT  If omit, don't change
-                    beq       mcrhbit@
-                    sta       MASTER_CTRL_REG_L,y store new MCR low byte
-*                    sta       V.V_MCR,u             store copy in driver variables
-mcrhbit@            cmpb      #FT_OMIT  if omit, don't change
-                    beq       end@
-                    stb       MASTER_CTRL_REG_H,y store new MCR High byte
-*                    stb       V.V_MCR+1,u           store copy in driver variables
-end@                clrb
-                    jmp       >GrfMod+SysRet
 
 ;;; PushBuf
 ;;; Push Registers to Screen Backup Buffer
@@ -1111,6 +1033,251 @@ AScrnErr            coma
 
 
 *******************************************************************
+* GF.GetStt (b27) / GF.SetStt (b28) - every GetStat and SetStat code
+*   vtio does not keep itself.  vtio puts the code in gr.b1, aims
+*   gr.TermBlk, gr.VBlk and gr.U5, and calls through CallGrfDrvRet: on
+*   entry gr.PDRGS holds the caller's registers, and whatever a handler
+*   leaves there is copied back to the caller afterwards.
+* Handlers run with U = this terminal's statics (SetBlkC2C3) and
+*   X = gr.PDRGS, so R$ offsets read as vtio's did off PD.RGS, and end
+*   with B/carry the result and jmp >GrfMod+SysRet.
+* An unknown code is carry + E$UnkSvc.  SCF's CallComStatus tolerates
+*   exactly that, and tmode/xmode depend on it.
+*******************************************************************
+GFGetStt            leay      GetSttTbl,pcr
+                    bra       StatDisp
+GFSetStt            leay      SetSttTbl,pcr
+StatDisp            lbsr      SetBlkC2C3          U = this terminal's statics
+                    ldx       #gr.PDRGS
+                    lda       >gr.b1              status code
+sdlp@               tst       ,y                  0 ends the table (SS.Opt is 0)
+                    beq       StatUnk
+                    cmpa      ,y+
+                    beq       sdhit@
+                    leay      2,y
+                    bra       sdlp@
+sdhit@              jmp       [,y]
+* StatUnk also fills the retired FuncTbl slots 2, 3 and 6.
+StatUnk             comb
+                    ldb       #E$UnkSvc
+                    jmp       >GrfMod+SysRet
+
+* code, handler
+GetSttTbl           fcb       SS.ScSiz
+                    fdb       GrfMod+GSScSiz
+                    fcb       SS.ScTyp
+                    fdb       GrfMod+GSScTyp
+                    fcb       SS.KySns
+                    fdb       GrfMod+GSKySns
+                    fcb       SS.Joy
+                    fdb       GrfMod+GSJoy
+                    fcb       SS.Mouse
+                    fdb       GrfMod+GSMouse
+                    fcb       SS.DScrn
+                    fdb       GrfMod+GSDScrn
+                    fcb       SS.FntChar
+                    fdb       GrfMod+GSFntChar
+                    fcb       SS.Palet
+                    fdb       GrfMod+GSFBRgs
+                    fcb       SS.FBRgs
+                    fdb       GrfMod+GSFBRgs
+                    fcb       SS.DfPal
+                    fdb       GrfMod+StatOK
+                    fcb       0
+SetSttTbl           fcb       SS.AScrn
+                    fdb       GrfMod+GFAScrn
+                    fcb       SS.DfPal
+                    fdb       GrfMod+GFDfPal
+                    fcb       SS.FntChar
+                    fdb       GrfMod+SSFntChar
+                    fcb       SS.DScrn
+                    fdb       GrfMod+SSDScrn
+                    fcb       SS.PScrn
+                    fdb       GrfMod+SSPScrn
+                    fcb       SS.Palet
+                    fdb       GrfMod+SSPalet
+                    fcb       SS.FScrn
+                    fdb       GrfMod+SSFScrn
+                    fcb       0
+
+* GetStat SS.ScSiz - R$X = columns, R$Y = rows
+GSScSiz             clra
+                    ldb       V.WWidth,u
+                    std       R$X,x
+                    ldb       V.WHeight,u
+                    std       R$Y,x
+* GetStat SS.DfPal - nothing to return
+StatOK              clrb
+                    jmp       >GrfMod+SysRet
+
+* GetStat SS.ScTyp - R$A = screen type
+GSScTyp             lda       V.ScTyp,u
+                    bra       RetA
+* GetStat SS.KySns - R$A = key sense bits
+GSKySns             lda       V.KySns,u
+RetA                sta       R$A,x
+                    bra       StatOK
+
+* GetStat SS.Palet, SS.FBRgs - R$A = foreground/background, R$X = 0 (border)
+GSFBRgs             lda       V.FBCol,u
+                    clr       R$X,x
+                    clr       R$X+1,x
+                    bra       RetA
+
+* GetStat SS.DScrn - R$X = MCR low byte, R$Y = MCR high byte.  From the
+* mirror, not the registers: they hold the LIVE terminal's state, which is
+* not this caller's on a shadow terminal, and they do not read back.
+GSDScrn             clra
+                    ldb       V.V_MCR,u
+                    std       R$X,x
+                    ldb       V.V_MCR+1,u
+                    std       R$Y,x
+                    bra       StatOK
+
+* GetStat SS.Mouse - R$X/R$Y = position, R$A = buttons
+GSMouse             lda       MS_XH
+                    ldb       MS_XL
+                    std       R$X,x
+                    lda       MS_YH
+                    ldb       MS_YL
+                    std       R$Y,x
+                    lda       V.MSButtons,u
+                    bra       RetA
+
+* GetStat SS.Joy - R$A = buttons (low 3 bits), R$X = 0/255 for left/right,
+* R$Y = 0/255 for up/down; a direction not pressed leaves that register.
+* vtio's version wrote these through U, into its own statics.
+GSJoy               ldb       VIA0.Base+VIA_ORA_IRA
+                    ldy       #255
+                    lsrb                          UP
+                    bcc       s1@
+                    clr       R$Y,x
+                    clr       R$Y+1,x
+s1@                 lsrb                          DOWN
+                    bcc       s2@
+                    sty       R$Y,x
+s2@                 lsrb                          LEFT
+                    bcc       s3@
+                    clr       R$X,x
+                    clr       R$X+1,x
+s3@                 lsrb                          RIGHT
+                    bcc       s4@
+                    sty       R$X,x
+s4@                 tfr       b,a
+                    bra       RetA
+
+* SetStat SS.DScrn - R$X+1 = MCR low byte, R$Y+1 = MCR high byte;
+* FX_OMIT/FT_OMIT leave that byte alone.  The mirror always, the register
+* only for the live terminal: PullBuf programs $FFC0-$FFCF from V.V_MCR
+* when a shadow terminal comes up.
+SSDScrn             lda       R$X+1,x
+                    ldb       R$Y+1,x
+                    ldy       #TXT.Base
+                    cmpa      #FX_OMIT
+                    beq       hi@
+                    sta       V.V_MCR,u
+                    tst       V.TermLive,u
+                    beq       hi@
+                    sta       MASTER_CTRL_REG_L,y
+hi@                 cmpb      #FT_OMIT
+                    beq       ok@
+                    stb       V.V_MCR+1,u
+                    tst       V.TermLive,u
+                    beq       ok@
+                    stb       MASTER_CTRL_REG_H,y
+ok@                 lbra      StatOK
+
+* SetStat SS.PScrn - R$X = layer 0-2, R$Y+1 = bitmap # 0-2 or tile map 4-6.
+* V.V_LayerCTL is both source and destination: the register never reads
+* back, and it holds the live terminal's layers.  Written only when live.
+SSPScrn             ldy       R$X,x
+                    lda       V.V_LayerCTL,u
+                    cmpy      #0
+                    bne       l1@
+                    anda      #%11110000          layer 0: low nibble
+                    adda      R$Y+1,x
+                    bra       st0@
+l1@                 cmpy      #1
+                    bne       l2@
+                    anda      #%00001111          layer 1: high nibble
+                    pshs      a
+                    lda       R$Y+1,x
+                    ldb       #16
+                    mul
+                    addb      ,s+
+                    tfr       b,a
+st0@                sta       V.V_LayerCTL,u
+                    tst       V.TermLive,u
+                    beq       ok@
+                    sta       VKY_LAYER_CTRL_0
+                    bra       ok@
+l2@                 cmpy      #2
+                    bne       ok@
+                    ldb       R$Y+1,x
+                    stb       V.V_LayerCTL+1,u
+                    tst       V.TermLive,u
+                    beq       ok@
+                    stb       VKY_LAYER_CTRL_1
+ok@                 lbra      StatOK
+
+* SetStat SS.Palet - R$Y = bitmap # 0-2, R$X+1 = CLUT # 0-3.  GF.BmPalet
+* rewrites the whole control byte, so the mirror takes the same value or
+* the next PullBuf undoes the assignment (and, with the enable bit in that
+* byte, turns the bitmap off).
+SSPalet             ldd       R$Y,x
+                    cmpd      #2
+                    bhi       BmBad
+                    stb       >gr.b2              bitmap # 0-2
+                    lslb                          two mirror bytes per bitmap
+                    leay      V.BM0Cl_En,u
+                    leay      b,y
+                    ldb       R$X+1,x             CLUT #
+                    orcc      #Carry
+                    rolb                          CLUT# | enable
+                    stb       >gr.b3
+                    stb       ,y                  V.BMxCl_En
+                    tst       V.TermLive,u
+                    lbne      GFBmPalet           live: program it now
+                    lbra      StatOK
+BmBad               comb
+                    ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
+
+* SetStat SS.FScrn - R$Y = bitmap # 0-2.  Frees its blocks - 8 with CLK_70
+* in V.V_MCR+1, else 10; the mirror, not the register - clears the
+* V.BMxCl_En/V.BMxBlk pair, and zeroes the bitmap registers if live.
+SSFScrn             ldd       R$Y,x
+                    cmpd      #2
+                    bhi       BmBad
+                    stb       >gr.b2              bitmap # 0-2
+                    lslb
+                    leay      V.BM0Cl_En,u
+                    leay      b,y                 Y -> V.BMxCl_En, V.BMxBlk at 1,y
+                    ldb       1,y
+                    bne       free@
+                    ldb       #E$WUndef           no bitmap allocated
+                    coma
+                    jmp       >GrfMod+SysRet
+free@               clra
+                    tfr       d,x                 X = first block
+                    lda       V.V_MCR+1,u
+                    bita      #CLK_70
+                    beq       ten@
+                    ldb       #8
+                    bra       del@
+ten@                ldb       #10
+del@                pshs      y
+                    os9       F$DelRAM
+                    lbsr      SetBlkC2C3          remap slot 5 and reload U
+                    puls      y
+                    clr       ,y                  both mirror bytes, or PullBuf
+                    clr       1,y                 re-enables a freed bitmap
+                    tst       V.TermLive,u
+                    lbne      GFBmFree            live: zero the registers
+                    lbra      StatOK
+
+
+*******************************************************************
 * GF.PSGInit (b12) - sound hardware setup, once from vtio's Init.
 *   Stereo bits in SYS1, the WM8776 CODEC, then silence the PSG at $C4.
 *   SYS1 and CODEC.Base are in the fixed $FExx I/O page.
@@ -1355,10 +1522,12 @@ GFBmFree            bsr       GFBmX
                     clr       1,x
                     clr       2,x
                     clr       3,x
+                    clrb
                     jmp       >GrfMod+SysRet
 GFBmPalet           bsr       GFBmX
                     lda       >gr.b3              CLUT# | enable
                     sta       ,x
+                    clrb
                     jmp       >GrfMod+SysRet
 * GFBmX - map $C0/$C1, return X = $3000 + b2*8 (b2 = bitmap #).
 GFBmX               lbsr      SetBlkC0C1
