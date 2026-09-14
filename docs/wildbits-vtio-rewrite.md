@@ -2002,10 +2002,13 @@ LUTs.  This one touches no LUT.
 - The registers are programmed at the end of the first `Init` instead of
   before the keyboard, mouse, grfdrv and PSG setup.  Nothing in between writes
   the display.
-- The first-terminal branch also runs when a terminal opens after every other
-  one has closed (`gr.TermCnt` back to 0).  That terminal now gets the seed too;
-  `InitDisplay` only ever ran on the very first `Init`.  This case can't be
-  reached in MAME, because `sysgo`'s shell holds `/term`.
+- The first-terminal branch also runs when a terminal opens after every
+  terminal, `/term` included, has closed (`gr.TermCnt` back to 0).  While
+  `/term` is open, new terminals take the `NotFirst` branch and inherit as
+  before.  In the all-closed case `GF.TermGone` has left `D.KbdSta` at 0, so
+  there is nothing to inherit from.  The new terminal now gets `GF.InitDisp`'s
+  seed; `InitDisplay` only ever ran on the very first `Init`.  This case can't
+  be reached in MAME, because `sysgo`'s shell holds `/term`.
 
 | | before | after |
 |---|---|---|

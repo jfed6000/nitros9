@@ -142,7 +142,15 @@ from Appendix A.
   move when vtio's size changes;
 - buffer-block sums that include Shell+ banner timestamps;
 - stale RAM in buffer blocks and in `T.CLUTn` a run never loaded (it begins
-  `bootos9 `).
+  `bootos9 `);
+- the version string (`Wildbits Jr2 - <date> (<commit>)`) in the screen and
+  `T0.TXT` row 9, which carries the commit a disk was built at;
+- `gr.TermBlk`, which follows the last terminal grfdrv was aimed at.  Since
+  item 2, status calls aim it too;
+- in `s3` (`display 1b 21 >/vt2`), whether `/term`'s buffer holds its screen and
+  the `$12E7` breadcrumb reads `$02`.  That depends on whether a clock tick
+  serves the switch before `/vt2` closes.  It is timing, not logic, and both
+  orders end the same (see item 2's section in the rewrite doc).
 
 Everything else should be identical unless the item intends a change.
 
