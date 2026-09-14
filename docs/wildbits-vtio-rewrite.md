@@ -37,11 +37,13 @@ forwarded to grfdrv, and `InitDisplay` moved into `GF.InitDisp` (vtio 3,232,
 margin 1,640).  Item 4 is done in MAME too: terminal setup and teardown moved
 into `GF.TermNew`/`GF.TermGone` (vtio 2,814, margin 2,058).  So is item 6, the
 final squeeze: breadcrumbs deleted and long branches shortened (vtio 2,769,
-margin 2,103).  Item 3, the escape parser into grfdrv, was skipped by the
+margin 2,103).  Three leftovers found during item 4 were removed afterwards
+(vtio 2,688, margin 2,184).  Item 3, the escape parser into grfdrv, was skipped by the
 user's decision.  The plan is finished.
 
 The sections below are in date order, oldest first; the newest is
-**Final squeeze: breadcrumbs deleted, long branches shortened** (2026-09-13), after
+**Three leftovers removed: `FindFreeTerm`, `ClearTermTbl`, `Init`'s statics writes** (2026-09-13), after
+**Final squeeze: breadcrumbs deleted, long branches shortened**, after
 **Terminal setup and teardown moved into grfdrv: `GF.TermNew`**, after
 **`InitDisplay` moved into grfdrv: `GF.InitDisp`**, after
 **GetStat/SetStat forwarded to grfdrv**, after
@@ -2171,6 +2173,46 @@ then `display 07 >/vt`, Alt+Right timed against `iniz /vt1`).  The same
 `LiveTerm`/`TermCnt` values, re-entry count 0, `echo ok` output, `ERROR #034`
 and `mfree` totals everywhere.  Apart from the version string and timestamps,
 the only dump difference is the four breadcrumb fields reading zero.
+
+### Three leftovers removed: `FindFreeTerm`, `ClearTermTbl`, `Init`'s statics writes  (2026-09-13, same day)
+
+Found while designing item 4, removed after item 6 at the user's request.
+Verified in MAME `wbjr2`; the K2 disk is built for the board.  No behaviour
+change is intended.
+
+- **`FindFreeTerm`** had no callers.  Its only other mention was a comment in
+  `Init`, also removed.  `SSOpen` has its own search, starting at id 1.
+- **`ClearTermTbl`** ran on the first `Init` but its result never survived.
+  It zeroed `gr.TermTbl` and `gr.TermCnt` and set `gr.LiveTerm` to `$FF`.  The
+  next call, `ClrGrfMem`, clears all of `$1100-$12FF`, which covers
+  `gr.TermCnt` (`$1143`), `gr.LiveTerm` (`$114C`) and the table
+  (`$114D-$1194`).  Then `InitGrfDrv` sets `gr.LiveTerm` to `$FF` itself.
+- **`Init`'s writes** of `V.WriteState`, `V.FBCol`, `V.CurRow`/`V.CurCol`,
+  `V.CurPos` and `V.TermLive` were rewritten by `GF.TermNew` before anything
+  read them: from `Init`'s own `InitTerm` for `/term`, or `SSOpen`'s for the
+  `/vt` factory.
+  - The keyboard and mouse drivers don't reference those fields.
+  - The AltISR reads other fields: the keydrv pointer, `V.LastCh`,
+    `V.KRTimer`, `V.MSTimer`.
+  - `GF.Init` and `GF.PSGInit` run before grfdrv is aimed at any static.
+
+Noticed and left: `Init`'s `lda >gr.TermCnt` before `HaveIdStart` is dead,
+because `A` is loaded again before anything reads it.
+
+| | before | after |
+|---|---|---|
+| `vtio` | 2,769 | 2,688 |
+| `grfdrv256` | 3,156 | 3,156 |
+| bootfile modules | 30,153 | 30,072 |
+| margin to 32,256 | 2,103 | 2,184 |
+
+**Verification**, on the item 6 disk and the new one side by side:
+- boot with no keys: identical `HW MCR` (`$0104`), `HW CURSOR` and screen;
+- the regression set, plus item 4's inherit runs through `iniz /vt1` and
+  through `shell i=/vt&`: the same `LiveTerm`/`TermCnt` values, re-entry count 0,
+  and `echo ok` output;
+- no dump differences apart from the version string and the timestamps inside
+  buffer sums.
 
 ## SUPERSEDED — see 2026-09-08 above.
 ## STATUS  (2026-09-07, continued session)  — four real bugs fixed and

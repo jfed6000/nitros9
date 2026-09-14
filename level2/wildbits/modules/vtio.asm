@@ -157,16 +157,7 @@ Init
                     cmpa      #$FF
                     beq       SkipHwInit
                     stu       >D.KbdSta pointer to this device's static
-		    lbsr      ClearTermTbl
 		    lbsr      ClrGrfMem
-                    clr       V.WriteState,u  escape collector idle
-                    ldb       #$10      assume this foreground/background
-                    stb       V.FBCol,u store it in our foreground/background color variable
-                    ldd	      #0	clear D
-                    std       V.CurRow,u set the current row and column
-                    std       V.CurPos,u and the cached linear cell offset
-                    lda       #1
-                    sta       V.TermLive,u first console writes Vicky $C2/$C3
                     clr       >gr.SwitchReq
                     bsr       InitSound initialize the sound
                     bsr       InitKeyboard initialize the keyboad
@@ -186,7 +177,7 @@ SkipHwInit
 HaveIdStart
                     ldb       IT.WND,y  Y is the device descriptor (IOMAN Attach)
                     bpl       HaveId
-* IT.WND=$FF is the /vt factory. Do not FindFreeTerm, do not InitTerm,
+* IT.WND=$FF is the /vt factory. Do not InitTerm,
 * never pass $FF into id*4. Slot is bound later by SS.Open.
                     bra       InitOk
 HaveId
@@ -536,43 +527,6 @@ TermTerm            ldb       V.TermID,u
 
 
 
-*******************************************************************
-* ClearTermTbl - zero gr.TermTbl and counts. First INIZ only.
-*******************************************************************
-ClearTermTbl        pshs      d,x
-                    ldx       #gr.TermTbl
-                    ldb       #G.TermMax*gr.TermSz
-		    clra
-ClrTT               sta       ,x+
-                    decb
-                    bne       ClrTT
-                    sta       >gr.TermCnt
-                    lda       #$FF
-                    sta       >gr.LiveTerm
-                    puls      d,x,pc
-
-*******************************************************************
-* FindFreeTerm - first table slot without T.Init. Returns B=id.
-*******************************************************************
-FindFreeTerm        clrb
-FindFreeLp          cmpb      #G.TermMax
-                    bhs       FindFreeFail
-                    pshs      b
-                    lda       #gr.TermSz
-                    mul
-                    ldx       #gr.TermTbl
-                    leax      d,x
-                    lda       T.Flags,x
-                    bita      #T.Init
-                    puls      b
-                    beq       FindFreeOk
-                    incb
-                    bra       FindFreeLp
-FindFreeOk          andcc     #^Carry
-                    rts
-FindFreeFail        comb
-                    ldb       #E$MNF
-                    rts
 
 * Term — glue #9: unlink keydrv/IRQ only when gr.TermCnt==0.
 *
