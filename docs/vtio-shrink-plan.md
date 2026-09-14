@@ -7,9 +7,9 @@ the user tested the K2 build on the board ("K2 looks good").
 
 **Progress:** items 1, 2, 5, 4 and 6 done in MAME 2026-09-13 (vtio 2,769, grfdrv256
 3,156, jr2 margin 2,103).  **Item 3 skipped** (the user's decision,
-2026-09-13).  **The plan is finished.**  Afterwards `FindFreeTerm`, `ClearTermTbl`
-and `Init`'s duplicate statics writes were removed too (vtio 2,688, jr2 margin
-2,184).
+2026-09-13).  **The plan is finished.**  Afterwards `FindFreeTerm`, `ClearTermTbl`,
+`Init`'s duplicate statics writes and a dead `lda` were removed too (vtio 2,685,
+jr2 margin 2,187).
 
 **Find code by label, not by line number.**  Line numbers go stale after the first edit.
 

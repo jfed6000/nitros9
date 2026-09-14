@@ -173,7 +173,6 @@ Init
 
 SkipHwInit
                     puls      y
-                    lda       >gr.TermCnt
 HaveIdStart
                     ldb       IT.WND,y  Y is the device descriptor (IOMAN Attach)
                     bpl       HaveId

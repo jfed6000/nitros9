@@ -38,7 +38,7 @@ margin 1,640).  Item 4 is done in MAME too: terminal setup and teardown moved
 into `GF.TermNew`/`GF.TermGone` (vtio 2,814, margin 2,058).  So is item 6, the
 final squeeze: breadcrumbs deleted and long branches shortened (vtio 2,769,
 margin 2,103).  Three leftovers found during item 4 were removed afterwards
-(vtio 2,688, margin 2,184).  Item 3, the escape parser into grfdrv, was skipped by the
+(vtio 2,685, margin 2,187).  Item 3, the escape parser into grfdrv, was skipped by the
 user's decision.  The plan is finished.
 
 The sections below are in date order, oldest first; the newest is
@@ -2196,8 +2196,12 @@ change is intended.
     `V.KRTimer`, `V.MSTimer`.
   - `GF.Init` and `GF.PSGInit` run before grfdrv is aimed at any static.
 
-Noticed and left: `Init`'s `lda >gr.TermCnt` before `HaveIdStart` is dead,
-because `A` is loaded again before anything reads it.
+**Follow-up, same day:** `Init`'s `lda >gr.TermCnt` before `HaveIdStart` was dead
+too, because `A` is loaded again before anything reads it (`InitTerm`'s
+`lda #GF.TermNew`, or `InitOk`'s return, which IOMan doesn't read).  It is
+removed as well: vtio 2,688 → 2,685, margin 2,184 → 2,187.  Boot, the
+regression set and the two inherit runs are again identical to the previous
+disk.
 
 | | before | after |
 |---|---|---|
