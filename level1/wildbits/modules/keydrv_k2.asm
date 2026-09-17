@@ -17,6 +17,11 @@
 *
 *  4       2025/09/12   John A. Federico
 * Modified driver for K2 Optical Keyboard
+*
+*  5       2026/09/14   John A. Federico
+* Key repeat is cleared on keyup by key position (V.RptKey) instead of by
+* character, so a Shift change between press and release no longer leaves
+* the repeat stuck.
 
 
                     use       defsfile
@@ -39,6 +44,7 @@ name                fcs       /keydrv/
                     org       V.KeyDrvStat
 V.META              rmb       1                 the state of the Wildbits "META" key
 DownRightStates     rmb       1                 the state of the down and right arrow keys during polling
+V.RptKey            rmb       1                 table index (row*8+col) of the key that armed the repeat
 
 * keydrv has three 3-byte entry points:
 *   - Init
@@ -60,19 +66,23 @@ ex@                 rts                          return to the caller
 * The key repeat timer (V.KRTimer) is decremented in vtio AltISR
 * If V.LastCh!=0 and V.KRTimer=0 then AltISR jumps to lbra KeyRepeat
 * in Start, above, which calls this routine.  This routine:
-* (1) Checks to make sure the keyboard buffer is empty, if not empty, then
-*     another key has been pressed
+* (1) Checks to make sure the keyboard FIFO is empty, if not empty, then
+*     another key has been pressed or released
 * (2) Checks that LastCh > 0, if >0 then repeat the key and call
 *     BufferChar to put in buffer, and HandleSignals to send the signal to
 *     vtio to process the repeated character.
-*  The timer/LastCh are set in BufferChar and reset on a keyup event in
-*  ProcessRow.  In BufferChar, the timer is set to KEYDELAY1 OR KEYDELAY
-*  based on whether this is the first keypress or a repeated keypress.
-*  puparrows also has some extra code to make sure the proper character is
-*  passed to ProcessRow to reset the key repeat for the arrows.
-*  The constants KEYDELAY (=30) and KEYDELAY1(=5) are defined in wildbits_vtio.d
-*  This is the number of ticks for the initial delay and repeat key delay.
-*  V.LastCh and V.KRTimer are also in wildbits_vtio.d.
+*  The timer/LastCh are set in BufferChar on a keydown, and ProcessRow
+*  records that key's table index (row*8+col) in V.RptKey.  A keyup clears
+*  the repeat only when its index matches V.RptKey.  Matching by position
+*  rather than by character matters because the key table follows Shift:
+*  a Shift change between press and release (or Shift lifted in the same
+*  FIFO frame as a key in a later row) used to look the key up as a
+*  different character and leave the repeat stuck.  It also keeps
+*  Backspace/Left ($08) and Tab/Right ($09) from cancelling each other.
+*  In BufferChar, the timer is set to KEYDELAY1 for a new key and KEYDELAY
+*  for a repeat.  KEYDELAY1 (=30) and KEYDELAY (=5) are defined in
+*  wildbits_vtio.d, in ticks.  V.LastCh and V.KRTimer are also in
+*  wildbits_vtio.d; V.RptKey is keydrv's own (V.KeyDrvStat).
 KeyRepeat           ldx       #OKB.Base          point to optical keyboard base
                     tst       OKB.Stat,x         check FIFO status
                     beq       exitkr@
@@ -140,6 +150,9 @@ row9end@	    lda	      V.CurLastCh,u
 * b=row a=eora changed bits
 * Process 1 bit at a time, if keydown, then buffer
 * If modifer key, handle keyup and keydown
+* In the loop X = start of the key table and B = the key's table index
+* (row*8+col), so b,x is the key and B identifies it for V.RptKey.
+* KeyDownTest masks B down to the column itself.
 
 ProcessRow          pshs      d,x,y
                     lda       D.KySns           check SHIFT to set correct key table
@@ -151,9 +164,7 @@ noshift@            leax      WBKKeys,pcr     get the current key index
 rowcomp@            lda       ,s                get the eora changed bits
                     lslb                        multiply row x8 to get the offset
                     lslb
-                    lslb        
-                    abx                         x now contains row offset for key table
-                    ldb       #0                loop through and process bits
+                    lslb                        b = index of the row's first key
 loop@               lsla
                     bcc       nextbit@          if bit is clear, move to next bit
                     pshs      a
@@ -164,17 +175,18 @@ loop@               lsla
                     bhi       processarrows
                     lbsr      KeyDownTest       check if key is down or up
                     bcc       rstkeyrpt@        keyup - ignore
-bufferit@           lbsr      BufferChar        keydown - buffer the character
+bufferit@           stb       V.RptKey,u        keydown - remember which key arms the repeat
+                    lbsr      BufferChar        buffer the character
                     lbsr      HandleSignals     signal key in buffer
 		    bra	      skipbuffer@
-rstkeyrpt@	    cmpa      V.CurLastCh,u	on key up cmp key to last char
-		    bne	      skipbuffer@       if not the same, skip 
+rstkeyrpt@          cmpb      V.RptKey,u        on key up, is this the key that armed the repeat?
+		    bne	      skipbuffer@       if not the same, skip
 		    clr	      V.CurLastCh,u        if same, clear for key up
 		    lda	      #KEYDELAY1	reset timer to initial key delay
 		    sta	      V.KRTimer,u
 skipbuffer@         puls      a
 nextbit@            incb
-                    cmpb      #8
+                    bitb      #7                low 3 bits wrap to 0 after column 7
                     bne       loop@
                     puls      d,x,y,pc
 ********************************************************************
@@ -276,16 +288,15 @@ puparrows           pshs      d,x
                     suba      #$E0              subtract to get index
                     andb      a,x               and KySns with up value to erase
                     stb       D.KySns           store KySns
-		    leax      ChrTbl,pcr        change to char table    (need this to reset key repeat)
-                    lda       a,x               get arrow character
-                    sta       ,s                replace stack value
 arrowupdone@        puls      d,x               
                     lbra      rstkeyrpt@       skip buffering on keyup
 ********************************************************************
 * KeyDown Test - check bit in original keypress
-* on entry b = bit to test, raw row value is stored in D.WBKKyDn
+* on entry b = key table index (low 3 bits = column to test),
+* raw row value is stored in D.WBKKyDn
 * Carry  1=keydown 0=keyup
 KeyDownTest         pshs      d,x
+                    andb      #7                column only
                     leax      keybits,pcr
                     lda       D.WBKKyDn
                     andcc     #$FE
