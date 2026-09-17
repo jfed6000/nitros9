@@ -858,6 +858,11 @@ GSEnter             pshs      a
                     ldd       T.StatPtr,x
                     std       >D.KbdSta
                     lbsr      PullCore            exits U = new statics (slot 5)
+* Drop any key repeat this terminal was left holding.  Repeat state is per
+* terminal but keydrv only services the live one, so a key pressed here
+* and released after a switch away never cleared it, and it fired on the
+* next switch back.
+                    clr       V.LastCh,u
                     lda       #1
                     sta       V.TermLive,u
                     puls      a
@@ -1092,6 +1097,8 @@ GetSttTbl           fcb       SS.ScSiz
                     fdb       GrfMod+GSScTyp
                     fcb       SS.KySns
                     fdb       GrfMod+GSKySns
+                    fcb       SS.KyLive
+                    fdb       GrfMod+GSKyLive
                     fcb       SS.Joy
                     fdb       GrfMod+GSJoy
                     fcb       SS.Mouse
@@ -1106,6 +1113,8 @@ GetSttTbl           fcb       SS.ScSiz
                     fdb       GrfMod+GSFBRgs
                     fcb       SS.DfPal
                     fdb       GrfMod+StatOK
+                    fcb       SS.BmBlk
+                    fdb       GrfMod+GSBmBlk
                     fcb       0
 SetSttTbl           fcb       SS.AScrn
                     fdb       GrfMod+GFAScrn
@@ -1123,6 +1132,14 @@ SetSttTbl           fcb       SS.AScrn
                     fdb       GrfMod+SSFScrn
                     fcb       SS.TermSel
                     fdb       GrfMod+SSTermSel
+                    fcb       SS.SprSet
+                    fdb       GrfMod+SSSprSet
+                    fcb       SS.TsSet
+                    fdb       GrfMod+SSTsSet
+                    fcb       SS.TmSet
+                    fdb       GrfMod+SSTmSet
+                    fcb       SS.ClutWrite
+                    fdb       GrfMod+SSClutWrite
                     fcb       0
 
 * GetStat SS.ScSiz - R$X = columns, R$Y = rows
@@ -1138,10 +1155,20 @@ StatOK              clrb
 * GetStat SS.ScTyp - R$A = screen type
 GSScTyp             lda       V.ScTyp,u
                     bra       RetA
-* GetStat SS.KySns - R$A = key sense bits
+* GetStat SS.KySns - R$A = key sense bits at the last character read
 GSKySns             lda       V.KySns,u
 RetA                sta       R$A,x
                     bra       StatOK
+
+* GetStat SS.KyLive - R$A = the key sense bits as the keyboard driver
+* holds them now (D.KySns: Shift, Ctrl, Alt, arrows, space), or 0 when
+* this terminal is not live.  SS.KySns stays as it is: it is buffered
+* with each character, and fm and hexed rely on that.
+GSKyLive            clra
+                    tst       V.TermLive,u
+                    beq       RetA
+                    lda       >D.KySns
+                    bra       RetA
 
 * GetStat SS.Palet, SS.FBRgs - R$A = foreground/background, R$X = 0 (border)
 GSFBRgs             lda       V.FBCol,u
@@ -1169,27 +1196,50 @@ GSMouse             lda       MS_XH
                     lda       V.MSButtons,u
                     bra       RetA
 
-* GetStat SS.Joy - R$A = buttons (low 3 bits), R$X = 0/255 for left/right,
-* R$Y = 0/255 for up/down; a direction not pressed leaves that register.
-* vtio's version wrote these through U, into its own statics.
-GSJoy               ldb       VIA0.Base+VIA_ORA_IRA
-                    ldy       #255
-                    lsrb                          UP
-                    bcc       s1@
-                    clr       R$Y,x
-                    clr       R$Y+1,x
-s1@                 lsrb                          DOWN
-                    bcc       s2@
-                    sty       R$Y,x
-s2@                 lsrb                          LEFT
-                    bcc       s3@
-                    clr       R$X,x
-                    clr       R$X+1,x
-s3@                 lsrb                          RIGHT
-                    bcc       s4@
-                    sty       R$X,x
-s4@                 tfr       b,a
-                    bra       RetA
+* GetStat SS.Joy - R$X = joystick 0 (header 0, VIA0 port B) or 1 (header 1,
+* port A).  Exit: R$A = buttons 0-2 in bits 0-2 (1 = pressed), R$X = 0 left,
+* 128 centered, 255 right, R$Y = 0 up, 128 centered, 255 down; all three
+* always set.  The switches read 0 when closed (F256 manual, chapter 12:
+* bit 0 up, 1 down, 2 left, 3 right, 4-6 buttons 0-2).  A terminal that is
+* not live reads centered with no buttons.  Joystick above 1: E$IllArg.
+GSJoy               ldd       R$X,x               joystick #
+                    cmpd      #1
+                    bhi       joyerr
+                    lda       #$FF                not live: all switches open
+                    tst       V.TermLive,u
+                    beq       j1@
+                    lda       VIA0.Base+VIA_ORB_IRB header 0
+                    tstb
+                    beq       j1@
+                    lda       VIA0.Base+VIA_ORA_IRA header 1
+j1@                 coma                          1 = closed
+                    ldb       #128                vertical
+                    bita      #%00000001
+                    beq       j2@
+                    clrb                          up
+j2@                 bita      #%00000010
+                    beq       j3@
+                    ldb       #255                down
+j3@                 clr       R$Y,x
+                    stb       R$Y+1,x
+                    ldb       #128                horizontal
+                    bita      #%00000100
+                    beq       j4@
+                    clrb                          left
+j4@                 bita      #%00001000
+                    beq       j5@
+                    ldb       #255                right
+j5@                 clr       R$X,x
+                    stb       R$X+1,x
+                    lsra
+                    lsra
+                    lsra
+                    lsra
+                    anda      #%00000111          buttons 0-2
+                    lbra      RetA
+joyerr              comb
+                    ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
 
 * SetStat SS.DScrn - R$X+1 = MCR low byte, R$Y+1 = MCR high byte;
 * FX_OMIT/FT_OMIT leave that byte alone.  The mirror always, the register
@@ -1544,30 +1594,78 @@ PSGInit             lda       SYS1                get the byte at SYS1
                     sta       SYS1                and save it back
                     ldx       #CODEC.Base
 
+* The two boards wire the WM8776 differently: one independent register sequence per machine,
+* never share or copy values.  Bits: [15:9] register, [8] update/zero-cross/LRBOTH, [7:0] value.
+* The recipe builds for one machine (PLATFORM=jr2 or k2 -> -Djr2 / -Dk2).
+* Tune by ear before touching this table: the wmset command writes any register live,
+* usage  wmset R# V#  (both hex, e.g. wmset 0E E7 = R14 to $E7).  A wmset write lasts only
+* until the next boot, when this runs again and rewrites every register below.
+                    ifne      jr2
+* ------------------- Jr2 InitCODEC -------------------
+* Knobs: DAC att R03/R04 ($FF = 0 dB, 0.5 dB/step) = the .mus/SID path; headphone att
+* R00/R01 ($79 = 0 dB, 1 dB/step) = the whole mix (the SAM2695 enters as analogue with no
+* gain of its own).  Jr2 line-out follows the headphone stage, so one setting serves both
+* jacks.  Tuned by ear 2026-08-29/30: DAC $FD (-1 dB), headphones $60 (-25 dB); this synth
+* runs ~12 dB hotter than the K2 one, hence the deep cut.
                     ldd       #%0010111000000000                    R23 - Reset chip
-                    bsr       SendToCODEC
+                    lbsr      SendToCODEC
                     ldd       #%0001010000000010                    R10 - DAC Interface Control 16-bit i2s
-                    bsr       SendToCODEC
-                    ldd       #%0010001100000001                    R17 - ALC Control 2 
-                    bsr       SendToCODEC
+                    lbsr      SendToCODEC
+                    ldd       #%0010001100000001                    R17 - ALC Control 2
+                    lbsr      SendToCODEC
                     ldd       #%0010101000000011                    R21 - ADC Mux Control   AIN
-                    bsr       SendToCODEC
-                    ldd       #%0010110000000111                    R22 - Output Mux MX[2:0] = "111" 
-                    bsr       SendToCODEC
+                    lbsr      SendToCODEC
+                    ldd       #%0010110000000111                    R22 - Output Mux MX[2:0] = "111"
+                    lbsr      SendToCODEC
                     ldd       #%0001101000000000                    R13 - PWR Down Control, Everything on
-                    bsr       SendToCODEC
-                    ldd       #%0000011111110000                    R03 - Left DAC Attenuation
-                    bsr       SendToCODEC
-                    ldd       #%0000100111110000                    R04 - Right DAC Attenuation
-                    bsr       SendToCODEC
-                    ldd       #%0000000101101100                    R00 - Left Headphone Attenuation Control
-                    bsr       SendToCODEC
-                    ldd       #%0000001101101100                    R01 - Right Headphone Attenuation Control
-                    bsr       SendToCODEC
-*                   ldd       #%0001011000000010                    R11 - ADC Interface Control 
-*                   bsr       SendToCODEC
+                    lbsr      SendToCODEC
+                    ldd       #%0000011111111101                    R03 - Left DAC Attenuation ($FD = -1.0dB)
+                    lbsr      SendToCODEC
+                    ldd       #%0000100111111101                    R04 - Right DAC Attenuation ($FD = -1.0dB)
+                    lbsr      SendToCODEC
+                    ldd       #%0000000101100000                    R00 - Left Headphone Attenuation ($60 = -25dB)
+                    lbsr      SendToCODEC
+                    ldd       #%0000001101100000                    R01 - Right Headphone Attenuation ($60 = -25dB)
+                    lbsr      SendToCODEC
+
+                    else
+* -------------- K2: independently tunable InitCODEC --------------
+* Knobs: DAC att R03/R04 = the .mus/SID path only; headphone att R00/R01 = headphone jack
+* only; ADC gain R14/R15 ($CF = 0 dB, 0.5 dB/step, $FF = +24 dB) = every analogue input on
+* BOTH jacks, because AINs reach VOUT (RCA) and the headphone PGA through the bypass (R22 MX
+* bit 2).  Tuned by ear on the headphone jack 2026-09-05: DAC $D7 (-20 dB), headphones $79
+* (0 dB); RCA not tuned.
+* Analogue inputs (R21 AMX bit n = AIN n+1; extend as sources are identified):
+*   AIN1, AIN2  SAM2695 MIDI synth (.lyr)      AIN4  VS1053 (wmset 15 08, 2026-09-07)
+*   AIN3, AIN5  not identified yet
+* R21 = $1F (all five in), the value the Level 1 deploy overlay codec_inputs writes: this tree
+* has no overlay, and without AIN4 the VS1053 is silent.  R21 bit 8 = LRBOTH (R14 then serves
+* both channels), bits 7/6 = mutes.
+                    ldd       #%0010111000000000                    R23 - Reset chip
+                    lbsr      SendToCODEC
+                    ldd       #%0001010000000010                    R10 - DAC Interface Control 16-bit i2s
+                    lbsr      SendToCODEC
+                    ldd       #%0010001100000001                    R17 - ALC Control 2
+                    lbsr      SendToCODEC
+                    ldd       #%0010101000011111                    R21 - ADC Mux Control   AIN1-AIN5
+                    lbsr      SendToCODEC
+                    ldd       #%0010110000000111                    R22 - Output Mux MX[2:0] = "111"
+                    lbsr      SendToCODEC
+                    ldd       #%0001101000000000                    R13 - PWR Down Control, Everything on
+                    lbsr      SendToCODEC
+                    ldd       #%0000011111010111                    R03 - Left DAC Attenuation ($D7 = -20dB)
+                    lbsr      SendToCODEC
+                    ldd       #%0000100111010111                    R04 - Right DAC Attenuation ($D7 = -20dB)
+                    lbsr      SendToCODEC
+                    ldd       #%0000000101111001                    R00 - Left Headphone Attenuation ($79 = 0dB)
+                    lbsr      SendToCODEC
+                    ldd       #%0000001101111001                    R01 - Right Headphone Attenuation ($79 = 0dB)
+                    lbsr      SendToCODEC
+                    endc
+*                   ldd       #%0001011000000010                    R11 - ADC Interface Control
+*                   lbsr      SendToCODEC
 *                   ldd       #%0001100111010101                    R12 - Master Mode Control
-*                   bsr       SendToCODEC
+*                   lbsr      SendToCODEC
 
                     lbsr      SetBlkC4
                     lda       #%10011111
@@ -1872,6 +1970,299 @@ bad@                comb
                     ldb       #E$IllArg
                     jmp       >GrfMod+SysRet
 
+*******************************************************************
+* SetStat SS.SprSet - write N sprite records from the caller's buffer.
+*   R$X = records, 8 bytes each: CTRL, ADDR hi/mid/lo, X hi/lo, Y hi/lo
+*   R$Y = first sprite # 0-127     R$U = N 1-128, first+N <= 128
+* Live terminal: the records go to $C0 $1300+8*first, with $C0 in slot 3.
+* Background terminal: only the shadowed records 0-31 may be written, into
+*   T.SPRITE0 of its switch buffer (slots 3-4), which PullBuf restores on
+*   the switch.  A record past 31, or no buffer yet, is E$IllArg with
+*   nothing written: only the live terminal writes unshadowed sprites.
+*******************************************************************
+SSSprSet            ldd       R$Y,x               first sprite #
+                    cmpd      #127
+                    bhi       SprBad
+                    ldd       R$U,x               N
+                    beq       SprBad
+                    cmpd      #128
+                    bhi       SprBad
+                    addd      R$Y,x               first + N
+                    cmpd      #128
+                    bhi       SprBad
+                    tst       V.TermLive,u
+                    bne       SprLive
+                    tst       V.TermBufBlk,u      background: switch buffer only
+                    beq       SprBad
+                    cmpd      #32                 past the shadowed records 0-31?
+                    bhi       SprBad
+                    ldd       #$6000+T.SPRITE0    records in the 16K buffer
+                    bra       SprCopy
+SprLive             pshs      cc
+                    orcc      #IntMasks
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    clra
+                    ldb       #$C0
+                    stb       MMU_SLOT_3          $C0 at $6000
+                    std       >gr.DATImg+6
+                    puls      cc
+                    ldd       #$6000+SPRITE_REC_OFF
+SprCopy             pshs      d                   destination base
+                    ldd       R$Y,x
+                    lslb
+                    rola
+                    lslb
+                    rola
+                    lslb
+                    rola                          D = 8*first
+                    addd      ,s
+                    std       ,s                  ,s = destination
+                    ldd       R$U,x
+                    lslb
+                    rola
+                    lslb
+                    rola
+                    lslb
+                    rola                          D = 8*N
+                    pshs      d                   ,s = length  2,s = destination
+                    tfr       d,y                 Y = length
+                    ldd       R$X,x               records in the caller's map
+                    lbsr      MapCallBuf          U = records through slot 1
+                    bcs       SprOff
+                    puls      d                   D = length
+                    puls      y                   Y = destination
+                    lbsr      CpyBlk
+                    clrb
+                    jmp       >GrfMod+SysRet
+SprOff              leas      4,s
+SprBad              comb
+                    ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* SetStat SS.TsSet - define tile set R$Y (0-7) from the caller's 4-byte
+*   record at R$X, in register order: CFG (bit 7 SQUARE), ADDR hi, ADDR mid,
+*   ADDR lo.  The V.TSn mirror bytes hold this register order (the
+*   AddrH/AddrM/AddrL/SQR field names predate it).
+* The mirror (V.TSn and V.TSnBlk = address / $2000) always; the registers
+*   at $C0 $1180+4*n only when live.  PullBuf reprograms the tile set
+*   registers from the mirror on a switch.
+*******************************************************************
+SSTsSet             ldd       R$Y,x               tile set #
+                    cmpd      #7
+                    bhi       TsBad
+                    lslb
+                    lslb                          B = 4*n
+                    pshs      b                   ,s = 4*n
+                    ldd       R$X,x
+                    ldy       #4
+                    lbsr      MapCallBuf          U = record through slot 1
+                    bcs       TsOff
+                    ldy       >gr.U5              this terminal's statics (slot 5)
+                    leay      V.TS0AddrH,y
+                    ldb       ,s
+                    leay      b,y                 Y -> V.TSnAddrH
+                    ldb       #4
+loop@               lda       ,u+
+                    sta       ,y+
+                    decb
+                    bne       loop@
+                    lda       -3,y                ADDR hi
+                    ldb       -2,y                ADDR mid
+                    lslb
+                    rola
+                    lslb
+                    rola
+                    lslb
+                    rola                          A = first block
+                    ldy       >gr.U5
+                    leay      V.TS0Blk,y
+                    ldb       ,s
+                    lsrb
+                    lsrb                          B = n
+                    sta       b,y
+                    ldu       >gr.U5
+                    tst       V.TermLive,u
+                    beq       done@
+                    lbsr      SetBlkC0C1          $C0 at $2000
+                    ldu       >gr.U5
+                    leau      V.TS0AddrH,u
+                    ldb       ,s
+                    leau      b,u
+                    ldy       #$3180
+                    leay      b,y
+                    ldd       #4
+                    lbsr      CpyBlk
+done@               leas      1,s
+                    clrb
+                    jmp       >GrfMod+SysRet
+TsOff               leas      1,s
+TsBad               comb
+                    ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* SetStat SS.TmSet - define tile map R$Y (0-2) from the caller's 12-byte
+*   record at R$X, in register order: CTRL (bit 0 enable, bit 4 TILE_SIZE
+*   1=8x8), ADDR hi/mid/lo, SIZE_X (2), SIZE_Y (2), X position (2), Y
+*   position (2); the 16-bit fields are high byte first.  The V.TMn mirror
+*   holds this order (its MapX/RSRV/MapY/RESRV field names predate it).
+* The mirror (V.TMn, same order, and V.TMnBlk = address / $2000) always;
+*   the registers at $C0 $1100+12*n only when live.  PullBuf reprograms the
+*   tile map registers from the mirror on a switch.
+*******************************************************************
+SSTmSet             ldd       R$Y,x               tile map #
+                    cmpd      #2
+                    bhi       TmBad
+                    pshs      b                   ,s = n
+                    ldd       R$X,x
+                    ldy       #12
+                    lbsr      MapCallBuf          U = record through slot 1
+                    bcs       TmOff
+                    ldy       >gr.U5              this terminal's statics (slot 5)
+                    leay      V.TM0,y
+                    lda       #12
+                    ldb       ,s
+                    mul                           B = 12*n
+                    leay      b,y                 Y -> V.TMn
+                    ldb       #12
+loop@               lda       ,u+
+                    sta       ,y+
+                    decb
+                    bne       loop@
+                    lda       -11,y               ADDR hi
+                    ldb       -10,y               ADDR mid
+                    lslb
+                    rola
+                    lslb
+                    rola
+                    lslb
+                    rola                          A = first block
+                    ldy       >gr.U5
+                    leay      V.TM0Blk,y
+                    ldb       ,s
+                    sta       b,y
+                    ldu       >gr.U5
+                    tst       V.TermLive,u
+                    beq       done@
+                    lbsr      SetBlkC0C1          $C0 at $2000
+                    lda       #12
+                    ldb       ,s
+                    mul                           B = 12*n
+                    ldu       >gr.U5
+                    leau      V.TM0,u
+                    leau      b,u
+                    ldy       #$3100
+                    leay      b,y
+                    ldd       #12
+                    lbsr      CpyBlk
+done@               leas      1,s
+                    clrb
+                    jmp       >GrfMod+SysRet
+TmOff               leas      1,s
+TmBad               comb
+                    ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* SetStat SS.ClutWrite - write CLUT entries from the caller's buffer.
+*   R$X = count x 4 bytes: blue, green, red, alpha
+*   R$Y = CLUT # 0-3 (high byte), first entry 0-255 (low byte)
+*   R$U = count 1-256, first+count <= 256
+* The SS.DfPal targets: T.CLUTn in the terminal's 16K switch buffer
+*   (slot 4, which PullBuf restores on a switch) when it has one, and the
+*   live CLUT at $C1 $1000+$400*n (in slot 3) when the terminal is live or
+*   has no buffer yet.  The entries come in through slots 1-2 (MapCallBuf).
+*******************************************************************
+SSClutWrite         lda       R$Y,x               CLUT #
+                    cmpa      #3
+                    lbhi      ClutBad
+                    ldd       R$U,x               count
+                    lbeq      ClutBad
+                    cmpd      #256
+                    lbhi      ClutBad
+                    addb      R$Y+1,x
+                    adca      #0                  D = first + count
+                    cmpd      #256
+                    lbhi      ClutBad
+                    ldd       R$U,x
+                    lslb
+                    rola
+                    lslb
+                    rola                          D = 4*count
+                    pshs      d                   ,s = length
+                    lda       R$Y,x
+                    lsla
+                    lsla                          A = high byte of n*$400
+                    pshs      a
+                    clra
+                    ldb       R$Y+1,x
+                    lslb
+                    rola
+                    lslb
+                    rola                          D = 4*first
+                    adda      ,s+                 D = n*$400 + 4*first
+                    pshs      d                   ,s = entry offset  2,s = length
+                    lda       V.TermLive,u
+                    ldb       V.TermBufBlk,u
+                    pshs      d                   ,s = live  1,s = buffer blk  2,s = offset  4,s = length
+                    ldd       R$X,x               entries in the caller's map
+                    ldy       4,s
+                    lbsr      MapCallBuf          U = entries through slot 1
+                    bcs       ClutOff
+                    tst       1,s
+                    beq       ClutLive            no buffer yet: live CLUT only
+                    ldd       2,s
+                    addd      #$6000+T.CLUT0      T.CLUTn entry in the buffer
+                    tfr       d,y
+                    pshs      u
+                    ldd       6,s                 length
+                    lbsr      CpyBlk
+                    puls      u
+                    tst       ,s                  live?
+                    beq       ClutDone            no - PullBuf programs it on the switch
+ClutLive            pshs      cc
+                    orcc      #IntMasks
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    clra
+                    ldb       #$C1
+                    stb       MMU_SLOT_3          $C1 at $6000
+                    std       >gr.DATImg+6
+                    puls      cc
+                    ldd       2,s
+                    addd      #$6000+GRPH_LUT0_OFF
+                    tfr       d,y
+                    ldd       4,s                 length
+                    lbsr      CpyBlk
+ClutDone            leas      6,s
+                    clrb
+                    jmp       >GrfMod+SysRet
+ClutOff             leas      6,s
+ClutBad             comb
+                    ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* GetStat SS.BmBlk - bitmap R$Y (0-2): R$X = first block (0 = not
+*   allocated), R$A = control byte (bits 2:1 CLUT, bit 0 enable).
+* From the V.BMxCl_En / V.BMxBlk mirror, so it answers for a background
+*   terminal too.
+*******************************************************************
+GSBmBlk             ldd       R$Y,x               bitmap #
+                    cmpd      #2
+                    lbhi      BmBad
+                    lslb                          two mirror bytes per bitmap
+                    leay      V.BM0Cl_En,u
+                    leay      b,y                 Y -> V.BMxCl_En, V.BMxBlk at 1,y
+                    lda       ,y
+                    sta       R$A,x
+                    clra
+                    ldb       1,y
+                    std       R$X,x
+                    lbra      StatOK
+
 
 *******************************************************************
 * SysRet - Return to System
@@ -1917,6 +2308,55 @@ GMapAddr2Blk        pshs      cc,d,x    x=address in process;y=Process DAT
                     clr       gr.DATImg+2
                     sta       gr.DATImg+3
                     puls      cc,d,x,pc
+
+
+*******************************************************************
+* MapCallBuf - map a caller buffer into slot 1 ($2000), plus the caller's
+*   next block into slot 2 ($4000) when the buffer runs into it.  The
+*   SS.DfPal mapping, for any length up to $2000.
+* Entry: D = buffer address in the caller's map, Y = length (1-$2000)
+*        gr.PDAT = the caller's DAT image (vtio's CallGrfDrv)
+* Exit:  U = buffer address as seen through slot 1
+*        carry set = the buffer runs off the top of the caller's map
+*******************************************************************
+MapCallBuf          pshs      d,x
+                    anda      #$1F
+                    addd      #$2000
+                    tfr       d,u                 U = buffer through slot 1
+                    ldb       ,s                  caller address high byte
+                    lsrb
+                    lsrb
+                    lsrb
+                    lsrb
+                    lsrb                          B = caller slot 0-7
+                    lslb
+                    ldx       #gr.PDAT+1          low byte of each 2-byte entry
+                    abx                           X -> caller's block for that slot
+                    pshs      cc
+                    orcc      #IntMasks
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    clra
+                    ldb       ,x
+                    stb       MMU_SLOT_1          $2000
+                    std       >gr.DATImg+2
+                    tfr       y,d                 D = length
+                    pshs      u
+                    addd      ,s++                D = end of buffer + 1
+                    cmpd      #$4000
+                    bls       mapped@             ends inside slot 1
+                    cmpx      #gr.PDAT+15         slot 7 has no next block
+                    beq       off@
+                    clra
+                    ldb       2,x
+                    stb       MMU_SLOT_2          $4000
+                    std       >gr.DATImg+4
+mapped@             puls      cc
+                    andcc     #^Carry
+                    puls      d,x,pc
+off@                puls      cc
+                    orcc      #Carry
+                    puls      d,x,pc
 
 
 * This is from L1 Coco vtio

@@ -125,6 +125,63 @@ SS.FntChar	    rmb	      1
 SS.SOLIRQ	    rmb	      1
 SS.SOLMUTE	    rmb	      1
 SS.TermSel          rmb       1                   $C5 R$X = terminal id: show it (vtio/grfdrv)
+SS.KyLive           equ       $C6                 GetStat: R$A = live key sense bits (D.KySns)
+
+* Graphics Get/SetStats for bitmaps, CLUTs, sprites, tile sets and tile maps
+* (grfdrv256).  Every code is assigned now so each group stays contiguous;
+* codes without a handler return E$UnkSvc.  The groups sit in the free holes:
+* $C7-$CB are VRN (os9.d), $D2 is sc16550's SS.DvrID, $E2 is SS.Fuji
+* (drivewire.d).  Spare: $D0-$D1, $E1, $FE-$FF.
+* CLUTs
+SS.ClutLoad         equ       $CC                 load a CLUT from a file
+SS.ClutCopy         equ       $CD                 load a whole CLUT from caller memory
+SS.ClutRead         equ       $CE                 GetStat: CLUT entries to a caller buffer
+SS.ClutWrite        equ       $CF                 CLUT entries from a caller buffer
+* Sprites
+SS.SprSet           equ       $D3                 R$X = records, R$Y = first sprite, R$U = count
+SS.SprAlloc         equ       $D4                 allocate sprite image memory
+SS.SprACfg          equ       $D5                 configure all sprites
+SS.SprCfg           equ       $D6                 configure one sprite
+SS.SprXY            equ       $D7                 move one sprite
+SS.SprOn            equ       $D8                 enable one sprite
+SS.SprOff           equ       $D9                 disable one sprite
+SS.SprLayer         equ       $DA                 set one sprite's layer
+SS.SprClut          equ       $DB                 set one sprite's CLUT
+SS.SprLoad          equ       $DC                 load one sprite image from a file
+SS.SprSave          equ       $DD                 save one sprite image to a file
+SS.SprSLoad         equ       $DE                 load a sprite sheet
+SS.SprSSave         equ       $DF                 save a sprite sheet
+SS.SprKill          equ       $E0                 clear sprites and free their memory
+* Bitmaps
+SS.BmAlloc          equ       $E3                 allocate a bitmap
+SS.BmBlk            equ       $E4                 GetStat: bitmap first block and control byte
+SS.BmClear          equ       $E5                 clear a bitmap to a color
+SS.BmLayer          equ       $E6                 put a bitmap on a layer
+SS.BmClut           equ       $E7                 set a bitmap's CLUT
+SS.BmOn             equ       $E8                 enable a bitmap
+SS.BmOff            equ       $E9                 disable a bitmap
+SS.BmKill           equ       $EA                 free a bitmap
+SS.BmLoad           equ       $EB                 load a bitmap from a file
+SS.BmSave           equ       $EC                 save a bitmap to a file
+SS.BmCfg            equ       $ED                 layer, CLUT and on/off in one call
+* Tile sets
+SS.TsSet            equ       $EE                 R$X = 4-byte record, R$Y = tile set #
+SS.TsAddr           equ       $EF                 GetStat: tile set address
+SS.TsAlloc          equ       $F0                 allocate tile set memory
+SS.TsLoad           equ       $F1                 load a tile set from a file
+SS.TsSave           equ       $F2                 save a tile set to a file
+SS.TsKill           equ       $F3                 clear a tile set and free its memory
+* Tile maps
+SS.TmSet            equ       $F4                 R$X = 12-byte record, R$Y = tile map #
+SS.TmAddr           equ       $F5                 GetStat: tile map address
+SS.TmAlloc          equ       $F6                 allocate a tile map
+SS.TmCell           equ       $F7                 set one tile map cell
+SS.TmScrl           equ       $F8                 R$X = X scroll, R$Y = tile map #, R$U = Y scroll
+SS.TmOn             equ       $F9                 enable a tile map
+SS.TmOff            equ       $FA                 disable a tile map
+SS.TmLoad           equ       $FB                 load a tile map from a file
+SS.TmSave           equ       $FC                 save a tile map to a file
+SS.TmKill           equ       $FD                 clear a tile map and free its memory
 
 ********************************************************************
 * System control definitions
