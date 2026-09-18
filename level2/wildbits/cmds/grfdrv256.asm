@@ -1657,7 +1657,20 @@ PSGInit             lda       SYS1                get the byte at SYS1
 * in R21 and the bypass kept in R22 ($07, MX bit 2).  AIN1+AIN2 are the SAM2695, leaving
 * AIN3/AIN4/AIN5 - bits 2/3/4, values $07/$0B/$13 - and at least one of those three is what
 * killed the keyboard at $1F, so they are tried ONE AT A TIME.
-* NOW TRYING: R21 = $0B, AIN1+AIN2+AIN4.  AIN4 first because it is the K2's VS1053 pin.
+* R21 = $0B (AIN1+AIN2+AIN4).  KEEP IT.  What the hardware said, on a Jr2 whose VS1053 strap
+* has been bridged (pins 33-34) so the chip boots as a stream decoder:
+*   $0B  keyboard fine, Joust has sound            (1 trial)
+*   $03  KEYBOARD STORMS - 9s until lockup          (2 trials, both after the mod; a power
+*        cycle and a keyboard replug did not clear it)
+* Before the mod, $03 was fine twice and $1F stormed once - which is why the storm was first
+* blamed on $1F and that reading has since been retracted.  Post-mod the correlation is the
+* other way round and it is now two trials against one, so $0B stays until something better
+* explains it.  No mechanism is known by which an ADC input mux setting reaches a PS/2
+* keyboard; that question belongs with the board's author, and it is the thing to ask about
+* before anyone "tidies" this value.
+* Sound on the Jr2 needed the strap mod first: a synth-mode chip decodes no stream at all, so
+* the PCM could never be heard whatever R21 held.  Whether $0B is also required for sound is
+* NOT established - it has never been tested against $03 on a boot that kept its keyboard.
 * Knobs, tuned by ear 2026-08-29/30: DAC $FD (-1 dB), headphones $60 (-25 dB); this synth
 * runs ~12 dB hotter than the K2 one, hence the deep cut.
                     ldd       #%0010111000000000                    R23 - Reset chip
