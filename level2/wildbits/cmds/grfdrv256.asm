@@ -1644,10 +1644,21 @@ PSGInit             lda       SYS1                get the byte at SYS1
 * until the next boot, when this runs again and rewrites every register below.
                     ifne      jr2
 * ------------------- Jr2 InitCODEC -------------------
-* Knobs: DAC att R03/R04 ($FF = 0 dB, 0.5 dB/step) = the .mus/SID path; headphone att
-* R00/R01 ($79 = 0 dB, 1 dB/step) = the whole mix (the SAM2695 enters as analogue with no
-* gain of its own).  Jr2 line-out follows the headphone stage, so one setting serves both
-* jacks.  Tuned by ear 2026-08-29/30: DAC $FD (-1 dB), headphones $60 (-25 dB); this synth
+* This is the sequence that is KNOWN GOOD on the Jr2 (bell audible, keyboard fine), with one
+* deliberate experiment in it: R21 (below).  History, all on Jr2 hardware 2026-09-18:
+*   R21 $03, R22 $07  bell works, keyboard fine, VS1053 silent   <- the baseline restored here
+*   R21 $1F, R22 $07  KEYBOARD DEAD, 99999999 until lockup       <- never do this
+*   the user's own InitCODEC (R21 $C0 muted, R22 $01 DAC-only, R10 $0A, R11/R12 added,
+*                             R13 dropped)  NO BELL, NO SOUND    <- kills the DAC path too,
+*     so it is not describing this machine; the suspects there are R10 bit 3 or the missing
+*     R13 "power down: everything on".  Do not re-apply it without splitting those apart.
+* R Taylor (2026-09-18): on the Jr2 the VS1053 and SAM2695 DO reach the output through the
+* codec's AIN analogue inputs (on the K2 they do not).  So the VS1053 needs its AMX bit set
+* in R21 and the bypass kept in R22 ($07, MX bit 2).  AIN1+AIN2 are the SAM2695, leaving
+* AIN3/AIN4/AIN5 - bits 2/3/4, values $07/$0B/$13 - and at least one of those three is what
+* killed the keyboard at $1F, so they are tried ONE AT A TIME.
+* NOW TRYING: R21 = $0B, AIN1+AIN2+AIN4.  AIN4 first because it is the K2's VS1053 pin.
+* Knobs, tuned by ear 2026-08-29/30: DAC $FD (-1 dB), headphones $60 (-25 dB); this synth
 * runs ~12 dB hotter than the K2 one, hence the deep cut.
                     ldd       #%0010111000000000                    R23 - Reset chip
                     lbsr      SendToCODEC
@@ -1655,7 +1666,7 @@ PSGInit             lda       SYS1                get the byte at SYS1
                     lbsr      SendToCODEC
                     ldd       #%0010001100000001                    R17 - ALC Control 2
                     lbsr      SendToCODEC
-                    ldd       #%0010101000000011                    R21 - ADC Mux Control   AIN
+                    ldd       #%0010101000001011                    R21 - ADC Mux Control   AIN1+AIN2+AIN4
                     lbsr      SendToCODEC
                     ldd       #%0010110000000111                    R22 - Output Mux MX[2:0] = "111"
                     lbsr      SendToCODEC
