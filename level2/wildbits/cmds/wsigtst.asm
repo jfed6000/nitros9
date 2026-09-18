@@ -127,9 +127,16 @@ ckkey@              lbsr      CkQuit
                     clrb
                     os9       F$Exit
 
+* E$DevBsy (250) means another process on this terminal already holds the
+* registration; E$UnkSvc (214) means the vtio in the bootfile predates
+* SS.WSig.
 Fatal               pshs      b
+                    leay      linebuf,u
                     leax      ErrTxt,pcr
-                    lbsr      PutLine
+                    lbsr      AppStr
+                    lda       ,s
+                    lbsr      AppDec
+                    lbsr      EndLine
                     puls      b
                     os9       F$Exit
 
@@ -267,8 +274,8 @@ SumTx2              fcc       /  foreground /
                     fcb       $00
 SumTx3              fcc       /  other /
                     fcb       $00
-ErrTxt              fcc       /wsigtst: the driver refused it - no SS.WSig in this vtio?/
-                    fcb       C$CR
+ErrTxt              fcc       /wsigtst: the driver refused it, error /
+                    fcb       $00
 
                     emod
 eom                 equ       *

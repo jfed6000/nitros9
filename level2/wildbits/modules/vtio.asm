@@ -114,17 +114,13 @@ HandleKeySwtchTrm   lda       >gr.SwitchReq
                     lda       >gr.SigBgID
                     beq       nobg@
                     ldb       >gr.SigBgCode
-                    clr       >gr.SigBgID         (clr sets Z, so test B itself)
-                    tstb                          signal 0 is S$Kill - never send it
-                    beq       nobg@
-                    os9       F$Send
+                    clr       >gr.SigBgID
+                    lbsr      SendWSig
 nobg@               lda       >gr.SigFgID
                     beq       nofg@
                     ldb       >gr.SigFgCode
-                    clr       >gr.SigFgID         (clr sets Z, so test B itself)
-                    tstb                          same here: 0 would abort the process
-                    beq       nofg@
-                    os9       F$Send
+                    clr       >gr.SigFgID
+                    lbsr      SendWSig
 nofg@               puls      x,y,u
 AltISRCont
 
@@ -152,6 +148,40 @@ AltSndWake          puls      cc
 AltSndBusy          inc       D.TnCnt            Flip1 held; retry next 1/60s
                     puls      cc
 AltSndEx            jmp       [D.OrgAlt]         branch to the original alternate IRQ routine
+
+********************************************************************
+* SendWSig - send signal B to process A for SS.WSig.
+*
+* Entry: A = process id, B = signal code.  Reached only from the switch
+*        above, and only for a terminal whose V.WSigID is non-zero -
+*        which no terminal has until a process asks for it with SS.WSig.
+*        A process that never registered is never sent anything.
+*
+* Two more guards, because an unexpected signal FORCE-QUITS a process
+* that has no intercept for it:
+*   - code 0 is S$Kill, a non-interceptable abort, and is never sent;
+*   - the process must still exist.  D.PrcDBT[id] holds the page of its
+*     descriptor and reads 0 once it is gone - the same test the CoCo 3
+*     vtio makes before handing a window to a process (vtio.asm 983).
+*
+* What is left: a process id can be REUSED between a registrant dying
+* WITHOUT deregistering and the next terminal switch, and the new owner
+* of that id would then be signalled.  SS.Relea, SS.WSig with R$X = 0,
+* and the registrant's own exit path are what close that; joust
+* deregisters in Cleanup on every exit path it has.
+*
+* Exit: A, B, X, Y, U preserved; CC clobbered.
+********************************************************************
+SendWSig            tstb                          signal 0 would abort, not notify
+                    beq       swx@
+                    pshs      a,x
+                    ldx       <D.PrcDBT           process descriptor table
+                    lda       a,x                 the page its descriptor lives on
+                    tsta                          0 = that process is gone
+                    puls      a,x                 (PULS does not touch CC)
+                    beq       swx@
+                    os9       F$Send
+swx@                rts
 
 
            
@@ -1829,22 +1859,52 @@ SendSig             puls      cc                  restore interrupts
 *        Either half 0 = do not signal that transition.  R$X = 0 both
 *        halves, which is the natural "stop" value, deregisters.
 *
-* The registrant is the calling process.  One registrant per terminal:
-* a second caller replaces the first, exactly as SS.SSig's V.SSigID does.
+* The registrant is the calling process.  One registrant per terminal
+* (each terminal is its own device with its own static, so terminals do
+* not interfere): a second caller gets E$DevBsy rather than stealing it,
+* unless the process holding it has exited.
 * A code below S$Window ($04) is accepted but is a poor choice - both
 * vtios abort a blocked read on anything lower, so a game asleep in a
 * read would be killed by its own notification.
 SSWSig              ldd       R$X,x               A = background code, B = forward code
-                    sta       V.WSigBg,u
-                    stb       V.WSigFg,u
                     tsta                          both codes 0 = deregister
                     bne       reg@
                     tstb
                     bne       reg@
+* Only the registrant may release it, so a stray call cannot cancel
+* somebody else's registration.  Releasing one nobody holds is not an
+* error - it is what a program's exit path does whether or not it ever
+* registered.
+                    lda       PD.CPR,y
+                    cmpa      V.WSigID,u
+                    bne       wsok@
                     clr       V.WSigID,u
-                    clrb
+                    clr       V.WSigBg,u
+                    clr       V.WSigFg,u
+wsok@               clrb
                     rts
-reg@                lda       PD.CPR,y            the calling process
+* One registrant per terminal, and it is NOT taken silently: the loser of
+* a silent overwrite would simply never be told again, with no error and
+* no way to find out.  A registrant that has exited does not keep the
+* terminal - D.PrcDBT[id] reads 0 once a process is gone, and its slot is
+* taken over.
+reg@                lda       V.WSigID,u
+                    beq       take@               nobody holds it
+                    cmpa      PD.CPR,y            ours already?  re-registering is fine
+                    beq       take@
+                    pshs      a,x
+                    ldx       <D.PrcDBT           is that process still alive?
+                    lda       a,x
+                    tsta
+                    puls      a,x                 (PULS does not touch CC)
+                    beq       take@               no - the slot is free after all
+                    comb
+                    ldb       #E$DevBsy           yes - it is not ours to take
+                    rts
+take@               ldd       R$X,x
+                    sta       V.WSigBg,u
+                    stb       V.WSigFg,u
+                    lda       PD.CPR,y            the calling process
                     sta       V.WSigID,u
                     clrb
                     rts
