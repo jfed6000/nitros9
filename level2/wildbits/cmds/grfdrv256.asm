@@ -1649,13 +1649,18 @@ PSGInit             lda       SYS1                get the byte at SYS1
 * gain of its own).  Jr2 line-out follows the headphone stage, so one setting serves both
 * jacks.  Tuned by ear 2026-08-29/30: DAC $FD (-1 dB), headphones $60 (-25 dB); this synth
 * runs ~12 dB hotter than the K2 one, hence the deep cut.
+* R21 was $03 (AIN1+AIN2, the SAM2695) until 2026-09-18, which left the VS1053 out of the mix
+* entirely and the Jr2 silent - the same fault the K2 had before AIN4 was found.  The Jr2's
+* VS1053 pin is not known, so R21 is now $1F (all five inputs), the K2's value: whichever AIN
+* it is on is now included.  If this brings in hiss from an unused input, narrow it by testing
+* one bit at a time.  UNTESTED on a Jr2 as of this edit.
                     ldd       #%0010111000000000                    R23 - Reset chip
                     lbsr      SendToCODEC
                     ldd       #%0001010000000010                    R10 - DAC Interface Control 16-bit i2s
                     lbsr      SendToCODEC
                     ldd       #%0010001100000001                    R17 - ALC Control 2
                     lbsr      SendToCODEC
-                    ldd       #%0010101000000011                    R21 - ADC Mux Control   AIN
+                    ldd       #%0010101000011111                    R21 - ADC Mux Control   AIN1-AIN5
                     lbsr      SendToCODEC
                     ldd       #%0010110000000111                    R22 - Output Mux MX[2:0] = "111"
                     lbsr      SendToCODEC
