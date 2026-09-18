@@ -29,8 +29,11 @@ atrv                set       ReEnt+rev
 rev                 set       $00
 edition             set       1
 
-BGCODE              equ       S$Window            $04 - this terminal went background
-FGCODE              equ       S$Window+1          $05 - it came forward
+* Both are above $80, where driver-defined signals belong: the system owns
+* $00-$80, and $05 in particular is S$Alarm.  Anything >= S$Window ($04)
+* also leaves a process blocked in a read alone rather than aborting it.
+BGCODE              equ       S$WinBg             $81 - this terminal went background
+FGCODE              equ       S$WinFg             $82 - it came forward
 
                     mod       eom,name,tylg,atrv,start,size
 

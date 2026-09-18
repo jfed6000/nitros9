@@ -129,6 +129,15 @@ SS.KyLive           equ       $C6                 GetStat: R$A = live key sense 
 SS.KyDwn            equ       $D0                 GetStat: R$X/R$Y/R$U = ordinary keys held now (gr.KeyLive)
 SS.WSig             equ       $E1                 SetStat: signal me when this terminal goes background/forward
 
+* Signal codes for SS.WSig.  The caller picks its own, but these are the
+* project's defaults and what wsigtst uses.  They are above $80 because
+* the system owns everything at or below it (os9.d: S$Kill $00 ... S$Alarm
+* $05, S$FS2Sig $80; level1/wildbits/modules/SOLdrv.asm: "Signals should
+* be > 128, system defines signals <= 128").  $05 is S$Alarm - the code
+* F$Alarm sends - and must never be used for this.
+S$WinBg             equ       $81                 this terminal went background
+S$WinFg             equ       $82                 this terminal came forward
+
 * Graphics Get/SetStats for bitmaps, CLUTs, sprites, tile sets and tile maps
 * (grfdrv256).  Every code is assigned now so each group stays contiguous;
 * codes without a handler return E$UnkSvc.  The groups sit in the free holes:
