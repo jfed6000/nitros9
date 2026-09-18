@@ -106,6 +106,26 @@ HandleKeySwtchTrm   lda       >gr.SwitchReq
 * The switch itself lives in grfdrv (GF.Switch); CallGrfDrv2 keeps U.
                     ldb       #GF.Switch
                     lbsr      CallGrfDrvNoPD
+* SS.WSig: the switch staged up to two signals in GrfMem (grfdrv256 makes
+* no OS-9 calls).  Send them here, where S$Wake for sound is already sent.
+* Each id is cleared BEFORE the send, so a failing F$Send - a process that
+* has exited - cannot leave the request pending for ever.
+                    pshs      x,y,u               F$Send's register use is not documented
+                    lda       >gr.SigBgID
+                    beq       nobg@
+                    ldb       >gr.SigBgCode
+                    clr       >gr.SigBgID         (clr sets Z, so test B itself)
+                    tstb                          signal 0 is S$Kill - never send it
+                    beq       nobg@
+                    os9       F$Send
+nobg@               lda       >gr.SigFgID
+                    beq       nofg@
+                    ldb       >gr.SigFgCode
+                    clr       >gr.SigFgID         (clr sets Z, so test B itself)
+                    tstb                          same here: 0 would abort the process
+                    beq       nofg@
+                    os9       F$Send
+nofg@               puls      x,y,u
 AltISRCont
 
 * Handle sound. PSG $C4 via GF.Write LUT 1. AltISR cannot F$Sleep, so
@@ -1676,6 +1696,8 @@ SetStat             ldx       PD.RGS,y            get caller's registers in X
                     lbeq      SSSig               yes, go process
                     cmpa      #SS.Relea           release signal on data ready?
                     lbeq      SSRelea             yes, go process
+                    cmpa      #SS.WSig            signal on a visibility change?
+                    lbeq      SSWSig              yes, go process
                     cmpa      #SS.Tone
                     lbeq      SSTone
                     cmpa      #SS.FntLoadF        blocks on file I/O, so not grfdrv's
@@ -1800,12 +1822,46 @@ SendSig             puls      cc                  restore interrupts
                     os9       F$Send              send the signal
                     rts                           return
 
-* SS.Relea - release a path from SS.SSig
+* SS.WSig ($E1) - signal me when this terminal's visibility changes.
+*
+* Entry: R$X MSB = the code to send when this terminal goes background
+*        R$X LSB = the code to send when it comes forward
+*        Either half 0 = do not signal that transition.  R$X = 0 both
+*        halves, which is the natural "stop" value, deregisters.
+*
+* The registrant is the calling process.  One registrant per terminal:
+* a second caller replaces the first, exactly as SS.SSig's V.SSigID does.
+* A code below S$Window ($04) is accepted but is a poor choice - both
+* vtios abort a blocked read on anything lower, so a game asleep in a
+* read would be killed by its own notification.
+SSWSig              ldd       R$X,x               A = background code, B = forward code
+                    sta       V.WSigBg,u
+                    stb       V.WSigFg,u
+                    tsta                          both codes 0 = deregister
+                    bne       reg@
+                    tstb
+                    bne       reg@
+                    clr       V.WSigID,u
+                    clrb
+                    rts
+reg@                lda       PD.CPR,y            the calling process
+                    sta       V.WSigID,u
+                    clrb
+                    rts
+
+* SS.Relea - release a path from SS.SSig and from SS.WSig
 SSRelea             lda       PD.CPR,y            get the current process ID
-                    cmpa      <V.SSigID,u         is it the same as the keyboard?
+                    cmpa      V.WSigID,u         is it the visibility registrant?
+                    bne       ckss@               branch if not
+                    clr       V.WSigID,u         else clear the process ID
+ckss@               cmpa      <V.SSigID,u         is it the same as the keyboard?
                     bne       ex@                 branch if not
                     clr       <V.SSigID,u         else clear process the ID
-ex@                 rts
+* cmpa leaves the carry set whenever A is below the stored id, which SCF
+* reads as an error with a junk code.  Nothing ever noticed because the
+* call is rare, but the exit has to be deliberate.
+ex@                 clrb
+                    rts
 
                     ifgt      Level-1
 ;;; SS.FntLoadF

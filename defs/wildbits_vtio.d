@@ -238,6 +238,13 @@ V.MapSav            RMB       1                   saved MMU map-window slot valu
 
 V.InBuf             RMB       KBufSz    the input buffer
 V.KSBuf             RMB       KBufSz
+* SS.WSig ($E1): who to signal when this terminal's visibility changes.
+* Kept here, not in a shadow block, because vtio reads it - see the design
+* note in docs/grfdrv256-api.md.  A code of 0 means "do not signal that
+* transition"; an id of 0 means nobody is registered.
+V.WSigID            RMB       1         registrant's process ID, 0 = none
+V.WSigBg            RMB       1         signal code for going background
+V.WSigFg            RMB       1         signal code for coming forward
 * grfdrv256 SetBlkC2C3 maps the DSS through ONE MMU slot (slot 5).
 * Safe only while the whole area fits a single 256-byte page: F$SRqMem
 * hands out page-aligned pages and 256 divides 8192, so <=256 bytes
@@ -319,6 +326,15 @@ gr.TermSz           equ       8         ; Size per entry (8 bytes to make idx ma
 gr.TermTbl          RMB       72        ; Screen table base
 KeyLiveSz           equ       6         ; slots in gr.KeyLive (SS.KyDwn returns R$X/R$Y/R$U)
 gr.KeyLive          RMB       KeyLiveSz ; unshifted codes of the ordinary keys held down; 0 = empty
+* SS.WSig staging.  grfdrv256 makes no OS-9 calls at all, so the switch
+* records who to tell here and vtio's AltISR does the F$Send - the same
+* AltISR that already sends S$Wake for sound.  Process id 0 = nothing
+* pending.  Two slots because one switch is both a background and a
+* foreground event, for two different processes.
+gr.SigBgID          rmb       1         ; process whose terminal just went background
+gr.SigBgCode        rmb       1         ; the signal code it registered
+gr.SigFgID          rmb       1         ; process whose terminal just came forward
+gr.SigFgCode        rmb       1         ; the signal code it registered
 *******************************************************************
 * GrfDrv parameter registers.
 *

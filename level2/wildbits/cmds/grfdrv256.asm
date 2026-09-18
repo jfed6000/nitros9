@@ -761,7 +761,15 @@ GSFound             pshs      d                   0,s = new id, 1,s = new offset
                     lbsr      GSTermPtrs
                     lbsr      PushCore            exits U = old statics (slot 5)
                     clr       V.TermLive,u
-                    puls      d
+* SS.WSig: stage "your terminal went background" for vtio's AltISR to send.
+* D is already on the stack here, so A and B are scratch.
+                    lda       V.WSigID,u
+                    beq       wsbg@
+                    ldb       V.WSigBg,u
+                    beq       wsbg@
+                    sta       >gr.SigBgID
+                    stb       >gr.SigBgCode
+wsbg@               puls      d
                     lbsr      GSEnter             then bring in the new one
 GSDone              clr       >gr.SwitchReq
                     puls      cc
@@ -865,6 +873,16 @@ GSEnter             pshs      a
                     clr       V.LastCh,u
                     lda       #1
                     sta       V.TermLive,u
+* SS.WSig: stage "your terminal came forward".  A is about to be pulled
+* back off the stack; B is saved because GSCalcPos follows.
+                    pshs      b
+                    lda       V.WSigID,u
+                    beq       wsfg@
+                    ldb       V.WSigFg,u
+                    beq       wsfg@
+                    sta       >gr.SigFgID
+                    stb       >gr.SigFgCode
+wsfg@               puls      b
                     puls      a
                     sta       >gr.LiveTerm
 * Clamp V.CurRow and resync V.CurPos (a DWSet can leave the row past the
