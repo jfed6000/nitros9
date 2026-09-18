@@ -9,4 +9,4 @@ include ../wildbits.mak
 # as a prerequisite, so editing one silently leaves a stale module behind.  That
 # already cost a hardware round trip: a TermSave* change appeared to build and
 # the .mods file was untouched.  (Same class as krn not depending on flink.asm.)
-$(MODDIR)/vtio $(MODDIR)/grfdrv256 $(MODDIR)/vtcmd: $(DEFSDIR)/wildbits_vtio.d $(DEFSDIR)/wildbits.d
+$(MODDIR)/vtio $(MODDIR)/grfdrv256 $(MODDIR)/vtcmd $(MODDIR)/$(KEYSUB): $(DEFSDIR)/wildbits_vtio.d $(DEFSDIR)/wildbits.d

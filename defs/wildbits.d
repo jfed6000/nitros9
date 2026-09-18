@@ -126,12 +126,13 @@ SS.SOLIRQ	    rmb	      1
 SS.SOLMUTE	    rmb	      1
 SS.TermSel          rmb       1                   $C5 R$X = terminal id: show it (vtio/grfdrv)
 SS.KyLive           equ       $C6                 GetStat: R$A = live key sense bits (D.KySns)
+SS.KyDwn            equ       $D0                 GetStat: R$X/R$Y/R$U = ordinary keys held now (gr.KeyLive)
 
 * Graphics Get/SetStats for bitmaps, CLUTs, sprites, tile sets and tile maps
 * (grfdrv256).  Every code is assigned now so each group stays contiguous;
 * codes without a handler return E$UnkSvc.  The groups sit in the free holes:
 * $C7-$CB are VRN (os9.d), $D2 is sc16550's SS.DvrID, $E2 is SS.Fuji
-* (drivewire.d).  Spare: $D0-$D1, $E1, $FE-$FF.
+* (drivewire.d).  Spare: $D1, $E1, $FE-$FF.
 * CLUTs
 SS.ClutLoad         equ       $CC                 load a CLUT from a file
 SS.ClutCopy         equ       $CD                 load a whole CLUT from caller memory

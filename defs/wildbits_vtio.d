@@ -317,6 +317,8 @@ SW.Goto		    equ	      $02       ; switch to the id in gr.SwitchTerm
 gr.LiveTerm         rmb       1         ; this is the active terminal
 gr.TermSz           equ       8         ; Size per entry (8 bytes to make idx math easier)
 gr.TermTbl          RMB       72        ; Screen table base
+KeyLiveSz           equ       6         ; slots in gr.KeyLive (SS.KyDwn returns R$X/R$Y/R$U)
+gr.KeyLive          RMB       KeyLiveSz ; unshifted codes of the ordinary keys held down; 0 = empty
 *******************************************************************
 * GrfDrv parameter registers.
 *

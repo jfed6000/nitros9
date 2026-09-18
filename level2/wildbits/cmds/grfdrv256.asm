@@ -1099,6 +1099,8 @@ GetSttTbl           fcb       SS.ScSiz
                     fdb       GrfMod+GSKySns
                     fcb       SS.KyLive
                     fdb       GrfMod+GSKyLive
+                    fcb       SS.KyDwn
+                    fdb       GrfMod+GSKyDwn
                     fcb       SS.Joy
                     fdb       GrfMod+GSJoy
                     fcb       SS.Mouse
@@ -1169,6 +1171,28 @@ GSKyLive            clra
                     beq       RetA
                     lda       >D.KySns
                     bra       RetA
+
+* GetStat SS.KyDwn - R$X/R$Y/R$U = the six gr.KeyLive slots: the unshifted
+* codes of the ordinary keys held down right now, unordered, 0 = an empty
+* slot.  All six read 0 when this terminal is not live, as SS.KyLive does.
+* Modifiers and the arrows are NOT here - they stay in D.KySns (SS.KyLive).
+* Y is free: StatDisp dispatched here with jmp [,y].
+GSKyDwn             ldy       #gr.KeyLive
+                    tst       V.TermLive,u
+                    bne       kdlive@
+                    clra                          not live: every slot reads empty
+                    clrb
+                    std       R$X,x
+                    std       R$Y,x
+                    std       R$U,x
+                    bra       StatOK
+kdlive@             ldd       ,y
+                    std       R$X,x
+                    ldd       2,y
+                    std       R$Y,x
+                    ldd       4,y
+                    std       R$U,x
+                    bra       StatOK
 
 * GetStat SS.Palet, SS.FBRgs - R$A = foreground/background, R$X = 0 (border)
 GSFBRgs             lda       V.FBCol,u

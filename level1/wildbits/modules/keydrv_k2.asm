@@ -120,6 +120,13 @@ exitkr@             rts
 ReadFIFOData        lda	      V.LastCh,u
 		    sta	      V.CurLastCh,u
 		    clr	      V.LastCh,u
+* gr.KeyLive is rebuilt from scratch here: the FIFO carries the whole
+* matrix on every event, so the array cannot drift or strand a key.
+                    ldx       #gr.KeyLive
+                    ldb       #KeyLiveSz
+clrlive@            clr       ,x+
+                    decb
+                    bne       clrlive@
                     ldx       #OKB.Base          point to optical keyboard
                     ldb       #0                 8 pairs to read
                     ldy       #D.RowState        historical column bits
@@ -135,6 +142,7 @@ doRow8@             sta       D.WBKKyDn        store in current column keys down
                     lbsr      ProcessRow         column is not zero, process keydown
 skipprocess@        lda       D.WBKKyDn        load raw column value
 cont@               sta       b,y                store as historical value
+                    lbsr      AddRowLive         record this row's held keys
                     incb                         increment to last row
                     cmpb      #8                 
                     bhi       row9end@           if 9, then end
@@ -308,6 +316,61 @@ end@                puls      d,x,pc
 keybits             fcb       $80,$40,$20,$10,$08,$04,$02,$01
 
 ********************************************************************
+* AddRowLive - add row B's held keys to gr.KeyLive
+*
+* Entry: A = the row's raw column bits (1 = down, column 0 = bit 7)
+*        B = the row number (0-8)
+* Exit:  A, B, X, Y preserved; CC clobbered
+*
+* Called for EVERY row, changed or not - that is the point.  ProcessRow
+* sees only rows and bits that CHANGED, so a key still held but unmoved
+* this event is invisible there.  Modifiers ($F0-$F4) and arrows
+* ($E0-$E3) are skipped; they live in D.KySns.  WBKKeys (unshifted) is
+* always used, so a key has one identity whatever Shift is doing.
+********************************************************************
+AddRowLive          pshs      d,x,y
+                    tsta                         nothing down in this row?
+                    beq       arldone@
+                    lslb                         B = row*8 = the row's first key index
+                    lslb
+                    lslb
+                    leay      WBKKeys,pcr
+arlbit@             lsla                         next column into the carry
+                    bcc       arlnext@
+                    pshs      a
+                    lda       b,y                 the key at this position
+                    beq       arlskip@            an unpopulated position
+                    cmpa      #$DF                modifier or arrow?
+                    bhi       arlskip@            yes - it is in D.KySns
+                    bsr       AddKeyLive
+arlskip@            puls      a
+arlnext@            incb
+                    bitb      #7                  low 3 bits wrap to 0 after column 7
+                    bne       arlbit@
+arldone@            puls      d,x,y,pc
+
+********************************************************************
+* AddKeyLive - put key code A in the first free gr.KeyLive slot
+*
+* Entry: A = an unshifted key code (never 0)
+* Exit:  A, B, X, Y preserved; CC clobbered.  A full array drops the
+*        key: the rebuild fills in scan order, so the lowest row and
+*        column win.  No duplicate check is needed - each matrix
+*        position is visited once per rebuild.
+********************************************************************
+AddKeyLive          pshs      b,x
+                    ldx       #gr.KeyLive
+                    ldb       #KeyLiveSz
+aklfind@            tst       ,x
+                    beq       aklput@
+                    leax      1,x
+                    decb
+                    bne       aklfind@
+                    puls      b,x,pc              no room - drop it
+aklput@             sta       ,x
+                    puls      b,x,pc
+
+********************************************************************
 * BufferChar - take the char in a and place in buffer
 * Advance the circular buffer one character.
 
@@ -446,6 +509,11 @@ Init                clr       V.CAPSLck,u
 l@                  clr       ,x+                set byte at X with $FF and increment X
                     decb                         decrement B
                     bne       l@                 keep doing until B is 0
+                    ldx       #gr.KeyLive        no keys are held yet
+                    ldb       #KeyLiveSz
+l2@                 clr       ,x+
+                    decb
+                    bne       l2@
 Term                rts                          return to the caller
 
 * WBK key table
