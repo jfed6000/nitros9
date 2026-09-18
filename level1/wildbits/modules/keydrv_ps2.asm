@@ -76,6 +76,7 @@ Init
                     lbsr      SendToPS2           send it to the keyboard
 
 		    clr	      D.KySns
+                    lbsr      KeyLiveClr          no key is held yet (SS.KyDwn $D0)
                     
                     leax      KCHandler,pcr       get the PS/2 key code handler routine
                     stx       V.KCVect,u          and store it as the current handler address
@@ -207,6 +208,11 @@ getcode             lda       KBD_IN              get the key code
 * This may be a hardware issue.
                     cmpa      #$FA                is it the acknowledge byte?
                     beq       IRQExit             branch if so
+                    cmpa      #$AA                self-test passed (reset or hot-plug)?
+                    bne       notaa@              branch if not
+                    lbsr      KeyLiveClr          no key can still be held
+                    bra       IRQExit
+notaa@
 
                     ifne      RAW_KEYBOARD
                     bsr       cvt2hex             convert the key code to hexadecimal
@@ -287,6 +293,7 @@ KCHandler
                     lbeq       DoRightShiftDown    branch if so                    
                     cmpa      #$14                is this the Left Ctrl byte?
                     lbeq       DoLeftCtrlDown      branch if so                    
+                    lbsr      KeyLiveAdd          record it as held (SS.KyDwn $D0)
                     lda       a,y                 else pull the key character from the scan code table
                     cmpa      #C$SPAC             is this space key?
                     bne       ctrlck@
@@ -323,6 +330,91 @@ BufferKSns          pshs      a
 		    puls      a
 bye@                clrb                          clear carry
                     rts                           return
+
+********************************************************************
+* gr.KeyLive - the ordinary keys held down now (SS.KyDwn $D0)
+*
+* PS/2 reports EVENTS, not state, so unlike keydrv_k2 - which clears the
+* array and rebuilds it from the whole matrix on every FIFO event, and
+* therefore cannot drift - this array is maintained incrementally and
+* has to be right about every make and every break.  Modifiers and the
+* arrows are not here; they stay in D.KySns.
+*
+* These are called from KCHandler's ordinary-key fall-through (before
+* the Ctrl fold and the CapsLock fold, so one physical key has one
+* identity), from F0Handler and DoSpaceUp, and from Init and the $AA
+* self-test byte.  A stranded entry is not cosmetic: Joust edge-detects
+* its flap from a level, so a key that never comes up disables that
+* player's flap for the rest of the game.
+********************************************************************
+
+* KeyLiveAdd - record the key whose make code is in A
+*
+* Entry: A = PS/2 make code
+* Exit:  all registers preserved; CC clobbered
+*
+* The code stored is ScanMap's - the UNSHIFTED one, looked up here and
+* deliberately not through Y, which is shift-selected on every byte
+* including break bytes: a key pressed with Shift and released without
+* it would otherwise remove the wrong entry, or none.
+KeyLiveAdd          pshs      d,x
+                    tsta                          CC here is the caller's compare
+                    bmi       kladn@              a scan code past the map
+                    leax      ScanMap,pcr         never Y - see above
+                    lda       a,x
+                    beq       kladn@              an unpopulated scan code
+                    ldx       #gr.KeyLive
+                    ldb       #KeyLiveSz
+klafnd@             cmpa      ,x                  already down?
+                    beq       kladn@              yes - typematic repeat sends
+                    leax      1,x                 make codes with no break, and
+                    decb                          would fill every slot
+                    bne       klafnd@
+                    ldx       #gr.KeyLive         not there: first free slot
+                    ldb       #KeyLiveSz
+klafre@             tst       ,x
+                    beq       klaput@
+                    leax      1,x
+                    decb
+                    bne       klafre@
+kladn@              puls      d,x,pc              no room - drop it
+klaput@             sta       ,x
+                    puls      d,x,pc
+
+* KeyLiveDel - the key whose break code is in A is no longer held
+*
+* Entry: A = PS/2 break code (the byte after $F0)
+* Exit:  all registers preserved; CC clobbered
+*
+* Harmless for anything that is not in the array: every modifier break
+* code ($11, $12, $14, $58, $59) looks up 0 in ScanMap.
+KeyLiveDel          pshs      d,x
+                    tsta                          CC here is the caller's compare
+                    bmi       kldn@
+                    leax      ScanMap,pcr
+                    lda       a,x
+                    beq       kldn@
+                    ldx       #gr.KeyLive
+                    ldb       #KeyLiveSz
+kldfnd@             cmpa      ,x
+                    beq       kldclr@
+                    leax      1,x
+                    decb
+                    bne       kldfnd@
+kldn@               puls      d,x,pc
+kldclr@             clr       ,x
+                    puls      d,x,pc
+
+* KeyLiveClr - nothing is held
+*
+* Exit:  all registers preserved; CC clobbered
+KeyLiveClr          pshs      b,x
+                    ldx       #gr.KeyLive
+                    ldb       #KeyLiveSz
+klc@                clr       ,x+
+                    decb
+                    bne       klc@
+                    puls      b,x,pc
 
 
 * Named for the KEY, not the direction.  SwitchTerm's SW.Next walks UP
@@ -452,6 +544,7 @@ F0Handler
                     beq       DoLeftAltUp
                     cmpa      #$29                is this space key?
                     beq       DoSpaceUp           if so, handle it
+                    lbsr      KeyLiveDel          it is no longer held
                     bra       SetDefaultHandler
                     
 DoLeftCtrlUp
@@ -469,6 +562,7 @@ StoreKySns          stb       D.KySns
                     bra       SetDefaultHandler   and branch to set the default handler
 DoSpaceUp
                     andb      #^SPACEBIT
+                    lbsr      KeyLiveDel          space is in gr.KeyLive too
                     bra       StoreKySns
 DoUpArrowUp         andb      #^UPBIT
                     bra       StoreKySns
