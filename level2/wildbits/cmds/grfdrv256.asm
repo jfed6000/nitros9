@@ -1647,7 +1647,7 @@ PSGInit             lda       SYS1                get the byte at SYS1
 * This is the sequence that is KNOWN GOOD on the Jr2 (bell audible, keyboard fine), with one
 * deliberate experiment in it: R21 (below).  History, all on Jr2 hardware 2026-09-18:
 *   R21 $03, R22 $07  bell works, keyboard fine, VS1053 silent   <- the baseline restored here
-*   R21 $1F, R22 $07  KEYBOARD DEAD, 99999999 until lockup       <- never do this
+*   R21 $1F, R22 $07  KEYBOARD DEAD, 99999999 until lockup       <- the dying keyboard (below)
 *   the user's own InitCODEC (R21 $C0 muted, R22 $01 DAC-only, R10 $0A, R11/R12 added,
 *                             R13 dropped)  NO BELL, NO SOUND    <- kills the DAC path too,
 *     so it is not describing this machine; the suspects there are R10 bit 3 or the missing
@@ -1655,22 +1655,17 @@ PSGInit             lda       SYS1                get the byte at SYS1
 * R Taylor (2026-09-18): on the Jr2 the VS1053 and SAM2695 DO reach the output through the
 * codec's AIN analogue inputs (on the K2 they do not).  So the VS1053 needs its AMX bit set
 * in R21 and the bypass kept in R22 ($07, MX bit 2).  AIN1+AIN2 are the SAM2695, leaving
-* AIN3/AIN4/AIN5 - bits 2/3/4, values $07/$0B/$13 - and at least one of those three is what
-* killed the keyboard at $1F, so they are tried ONE AT A TIME.
-* R21 = $0B (AIN1+AIN2+AIN4).  KEEP IT.  What the hardware said, on a Jr2 whose VS1053 strap
-* has been bridged (pins 33-34) so the chip boots as a stream decoder:
-*   $0B  keyboard fine, Joust has sound            (1 trial)
-*   $03  KEYBOARD STORMS - 9s until lockup          (2 trials, both after the mod; a power
-*        cycle and a keyboard replug did not clear it)
-* Before the mod, $03 was fine twice and $1F stormed once - which is why the storm was first
-* blamed on $1F and that reading has since been retracted.  Post-mod the correlation is the
-* other way round and it is now two trials against one, so $0B stays until something better
-* explains it.  No mechanism is known by which an ADC input mux setting reaches a PS/2
-* keyboard; that question belongs with the board's author, and it is the thing to ask about
-* before anyone "tidies" this value.
+* AIN3/AIN4/AIN5 - bits 2/3/4, values $07/$0B/$13, which were tried one at a time.
+* R21 = $0B (AIN1+AIN2+AIN4).  ESTABLISHED 2026-09-19: the VS1053 is on AIN4.  On a Jr2 whose
+* VS1053 strap has been bridged (pins 33-34) so the chip boots as a stream decoder, and with a
+* working keyboard, the same boot and game with only this byte changed:
+*   $0B  Joust has sound
+*   $03  Joust silent, keyboard fine
+* The earlier "$03 storms the keyboard" trials were a dying keyboard, not this register (see
+* the joust docs/status.md); no ADC mux setting has ever been shown to affect the keyboard.
+* $1F (all five inputs) is still untried on a good keyboard and not needed.
 * Sound on the Jr2 needed the strap mod first: a synth-mode chip decodes no stream at all, so
-* the PCM could never be heard whatever R21 held.  Whether $0B is also required for sound is
-* NOT established - it has never been tested against $03 on a boot that kept its keyboard.
+* the PCM could never be heard whatever R21 held.
 * Knobs, tuned by ear 2026-08-29/30: DAC $FD (-1 dB), headphones $60 (-25 dB); this synth
 * runs ~12 dB hotter than the K2 one, hence the deep cut.
                     ldd       #%0010111000000000                    R23 - Reset chip
