@@ -76,7 +76,7 @@ Init
                     lbsr      SendToPS2           send it to the keyboard
 
 		    clr	      D.KySns
-                    lbsr      KeyLiveClr          no key is held yet (SS.KyDwn $D0)
+                    lbsr      KeyLiveClr          no key is held yet (SS.LiveKeys $C6)
                     
                     leax      KCHandler,pcr       get the PS/2 key code handler routine
                     stx       V.KCVect,u          and store it as the current handler address
@@ -293,7 +293,7 @@ KCHandler
                     lbeq       DoRightShiftDown    branch if so                    
                     cmpa      #$14                is this the Left Ctrl byte?
                     lbeq       DoLeftCtrlDown      branch if so                    
-                    lbsr      KeyLiveAdd          record it as held (SS.KyDwn $D0)
+                    lbsr      KeyLiveAdd          record it as held (SS.LiveKeys $C6)
                     lda       a,y                 else pull the key character from the scan code table
                     cmpa      #C$SPAC             is this space key?
                     bne       ctrlck@
@@ -332,7 +332,7 @@ bye@                clrb                          clear carry
                     rts                           return
 
 ********************************************************************
-* gr.KeyLive - the ordinary keys held down now (SS.KyDwn $D0)
+* gr.KeyLive - the ordinary keys held down now (SS.LiveKeys $C6)
 *
 * PS/2 reports EVENTS, not state, so unlike keydrv_k2 - which clears the
 * array and rebuilds it from the whole matrix on every FIFO event, and

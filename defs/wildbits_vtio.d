@@ -324,7 +324,7 @@ SW.Goto		    equ	      $02       ; switch to the id in gr.SwitchTerm
 gr.LiveTerm         rmb       1         ; this is the active terminal
 gr.TermSz           equ       8         ; Size per entry (8 bytes to make idx math easier)
 gr.TermTbl          RMB       72        ; Screen table base
-KeyLiveSz           equ       6         ; slots in gr.KeyLive (SS.KyDwn returns R$X/R$Y/R$U)
+KeyLiveSz           equ       6         ; slots in gr.KeyLive (SS.LiveKeys returns R$X/R$Y/R$U)
 gr.KeyLive          RMB       KeyLiveSz ; unshifted codes of the ordinary keys held down; 0 = empty
 * SS.WSig staging.  grfdrv256 makes no OS-9 calls at all, so the switch
 * records who to tell here and vtio's AltISR does the F$Send - the same

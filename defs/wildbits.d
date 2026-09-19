@@ -125,8 +125,28 @@ SS.FntChar	    rmb	      1
 SS.SOLIRQ	    rmb	      1
 SS.SOLMUTE	    rmb	      1
 SS.TermSel          rmb       1                   $C5 R$X = terminal id: show it (vtio/grfdrv)
-SS.KyLive           equ       $C6                 GetStat: R$A = live key sense bits (D.KySns)
-SS.KyDwn            equ       $D0                 GetStat: R$X/R$Y/R$U = ordinary keys held now (gr.KeyLive)
+SS.LiveKeys         equ       $C6                 GetStat: R$A = live key sense bits, R$X/R$Y/R$U = keys held now; empties the input buffer
+* SS.Joy ($13) modes, in R$X on entry (joust docs/grfdrv256-api.md)
+JOY.Stick0          equ       0                   stick 0, compatibility: R$X/R$Y = 0/128/255, R$A = buttons
+JOY.Stick1          equ       1                   stick 1, compatibility
+JOY.Sticks          equ       2                   R$X = stick 0, R$Y = stick 1, as JY bits
+JOY.NES2            equ       3                   R$X, R$Y = NES pads 0 and 1
+JOY.SNES2           equ       4                   R$X, R$Y = SNES pads 0 and 1
+JOY.NES4            equ       5                   R$Y = 8-byte buffer: NES pads 0-3
+JOY.SNES4           equ       6                   R$Y = 8-byte buffer: SNES pads 0-3
+* The SS.Joy word, 1 = pressed.  The low byte alone is stick-compatible.
+JY.Up               equ       %00000001
+JY.Down             equ       %00000010
+JY.Left             equ       %00000100
+JY.Right            equ       %00001000
+JY.Btn0             equ       %00010000           stick button 0; NES A; SNES B
+JY.Btn1             equ       %00100000           stick button 1; NES B; SNES Y
+JY.Btn2             equ       %01000000           stick button 2; SNES A
+JY.X                equ       %10000000           SNES X
+JY.Select           equ       %00000001           high byte
+JY.Start            equ       %00000010           high byte
+JY.L                equ       %00000100           high byte, SNES
+JY.R                equ       %00001000           high byte, SNES
 SS.WSig             equ       $E1                 SetStat: signal me when this terminal goes background/forward
 
 * Signal codes for SS.WSig.  The caller picks its own, but these are the
@@ -980,6 +1000,24 @@ VS_AICTRL0          equ       $C        application control 0
 VS_AICTRL1          equ       $D        application control 1
 VS_AICTRL2          equ       $E        application control 2
 VS_AICTRL3          equ       $F        application control 3
+
+******************************************************************
+* NES/SNES pad port (the FNX4N4S connector; core block TinyVKY_NES_SNES,
+* CPU fixed decode $FF80-$FF8F, identical on the K2 and Jr2).  Four pads,
+* all NES or all SNES (one MODE bit for the port).  Write NES_TRIG to
+* shift a reading in; NES_DONE is set when it is complete and cleared by
+* the next trigger.  The pad registers shift in place, so read them only
+* while NES_DONE is set.  Data reads 0 = pressed.  Pad n at NES_PAD0+2n:
+* NES mode, the first byte = A B Select Start Up Down Left Right (bit 7
+* first); SNES mode, the first byte = B Y Select Start Up Down Left Right
+* and the second byte's low nibble = A X L R.
+NES.Base            equ       $FF80
+NES_CTRL            equ       0         write: EN, MODE, TRIG; read: the same with DONE in bit 6
+NES_PAD0            equ       4
+NES_EN              equ       %00000001 port on
+NES_MODE            equ       %00000100 1 = SNES (12 bits), 0 = NES (8 bits)
+NES_DONE            equ       %01000000 read only: a reading is complete
+NES_TRIG            equ       %10000000 start a reading; the core clears it when it latches
 
 * DIP Switches for Jr/Jr2/K2.. 
 K2_DIP_SW.Base      equ       $FF90

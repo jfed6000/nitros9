@@ -1115,10 +1115,8 @@ GetSttTbl           fcb       SS.ScSiz
                     fdb       GrfMod+GSScTyp
                     fcb       SS.KySns
                     fdb       GrfMod+GSKySns
-                    fcb       SS.KyLive
-                    fdb       GrfMod+GSKyLive
-                    fcb       SS.KyDwn
-                    fdb       GrfMod+GSKyDwn
+                    fcb       SS.LiveKeys
+                    fdb       GrfMod+GSLiveKeys
                     fcb       SS.Joy
                     fdb       GrfMod+GSJoy
                     fcb       SS.Mouse
@@ -1180,37 +1178,36 @@ GSKySns             lda       V.KySns,u
 RetA                sta       R$A,x
                     bra       StatOK
 
-* GetStat SS.KyLive - R$A = the key sense bits as the keyboard driver
-* holds them now (D.KySns: Shift, Ctrl, Alt, arrows, space), or 0 when
-* this terminal is not live.  SS.KySns stays as it is: it is buffered
-* with each character, and fm and hexed rely on that.
-GSKyLive            clra
+* GetStat SS.LiveKeys - the keyboard as a game sees it.  R$A = the key
+* sense bits as the keyboard driver holds them now (D.KySns: Shift, Ctrl,
+* Alt, arrows, space); R$X/R$Y/R$U = the six gr.KeyLive slots: the
+* unshifted codes of the ordinary keys held down now, unordered, 0 = an
+* empty slot.  All read 0 when this terminal is not live.  It also empties
+* the terminal's input buffer, live or not: a program reading live keys
+* does not want queued characters, and they would reach the shell when it
+* exits.  Moving the tail to the head is safe unmasked - the keyboard ISR
+* moves only the head, so a key that lands in between simply stays queued.
+* SS.KySns stays as it is: it is buffered with each character, and fm and
+* hexed rely on that.  Y is free: StatDisp dispatched here with jmp [,y].
+GSLiveKeys          lda       V.IBufH,u           empty the input buffer
+                    sta       V.IBufT,u
                     tst       V.TermLive,u
-                    beq       RetA
-                    lda       >D.KySns
-                    bra       RetA
-
-* GetStat SS.KyDwn - R$X/R$Y/R$U = the six gr.KeyLive slots: the unshifted
-* codes of the ordinary keys held down right now, unordered, 0 = an empty
-* slot.  All six read 0 when this terminal is not live, as SS.KyLive does.
-* Modifiers and the arrows are NOT here - they stay in D.KySns (SS.KyLive).
-* Y is free: StatDisp dispatched here with jmp [,y].
-GSKyDwn             ldy       #gr.KeyLive
-                    tst       V.TermLive,u
-                    bne       kdlive@
-                    clra                          not live: every slot reads empty
+                    bne       lklive@
+                    clra                          not live: nothing held
                     clrb
                     std       R$X,x
                     std       R$Y,x
                     std       R$U,x
-                    bra       StatOK
-kdlive@             ldd       ,y
+                    bra       RetA
+lklive@             ldy       #gr.KeyLive
+                    ldd       ,y
                     std       R$X,x
                     ldd       2,y
                     std       R$Y,x
                     ldd       4,y
                     std       R$U,x
-                    bra       StatOK
+                    lda       >D.KySns
+                    bra       RetA
 
 * GetStat SS.Palet, SS.FBRgs - R$A = foreground/background, R$X = 0 (border)
 GSFBRgs             lda       V.FBCol,u
@@ -1238,15 +1235,25 @@ GSMouse             lda       MS_XH
                     lda       V.MSButtons,u
                     bra       RetA
 
-* GetStat SS.Joy - R$X = joystick 0 (header 0, VIA0 port B) or 1 (header 1,
-* port A).  Exit: R$A = buttons 0-2 in bits 0-2 (1 = pressed), R$X = 0 left,
-* 128 centered, 255 right, R$Y = 0 up, 128 centered, 255 down; all three
-* always set.  The switches read 0 when closed (F256 manual, chapter 12:
-* bit 0 up, 1 down, 2 left, 3 right, 4-6 buttons 0-2).  A terminal that is
-* not live reads centered with no buttons.  Joystick above 1: E$IllArg.
-GSJoy               ldd       R$X,x               joystick #
-                    cmpd      #1
-                    bhi       joyerr
+* GetStat SS.Joy - R$X = the mode (JY.* modes, wildbits.d; spec in joust
+*   docs/grfdrv256-api.md).  Above 6: E$IllArg.
+*   0, 1  one Atari stick, compatibility: R$X = 0 left, 128 centered, 255
+*         right, R$Y = 0 up, 128 centered, 255 down, R$A = buttons 0-2 in
+*         bits 0-2 (1 = pressed); all three always set.
+*   2     both sticks: R$X = stick 0, R$Y = stick 1, as JY.* bits.
+*   3, 4  NES / SNES pads 0 and 1: R$X, R$Y = their JY.* words.
+*   5, 6  NES / SNES pads 0-3: four JY.* words (big-endian) into the
+*         8-byte buffer at R$Y; E$IllArg if it runs off the caller's map.
+* The sticks: VIA0 port B = header 0, port A = header 1, bits 0-6 = up,
+* down, left, right, buttons 0-2, 0 = closed (F256 manual, chapter 12) -
+* already the JY.* order, so a coma and a mask.  A terminal that is not
+* live reads nothing held (modes 0 and 1: centered) and leaves the pad
+* port alone.  Y is free: StatDisp dispatched here with jmp [,y].
+GSJoy               ldd       R$X,x               the mode
+                    cmpd      #JOY.SNES4
+                    lbhi      joyerr
+                    cmpb      #JOY.Sticks
+                    lbhs      JoyNew
                     lda       #$FF                not live: all switches open
                     tst       V.TermLive,u
                     beq       j1@
@@ -1282,6 +1289,160 @@ j5@                 clr       R$X,x
 joyerr              comb
                     ldb       #E$IllArg
                     jmp       >GrfMod+SysRet
+
+* Modes 2-6.  The words are built in an 8-byte frame, zero unless live,
+*   then go to R$X/R$Y or the caller's buffer.  B = the mode.
+JoyNew              leas      -8,s                ,s = the four words
+                    clra
+                    sta       ,s
+                    sta       1,s
+                    sta       2,s
+                    sta       3,s
+                    sta       4,s
+                    sta       5,s
+                    sta       6,s
+                    sta       7,s
+                    tst       V.TermLive,u
+                    beq       jnout@              not live: nothing held, the port untouched
+                    cmpb      #JOY.Sticks
+                    bne       jnpad@
+                    lda       VIA0.Base+VIA_ORB_IRB stick 0
+                    coma
+                    anda      #%01111111
+                    sta       1,s
+                    lda       VIA0.Base+VIA_ORA_IRA stick 1
+                    coma
+                    anda      #%01111111
+                    sta       3,s
+                    bra       jnout@
+jnpad@              pshs      b
+                    lbsr      PadRead             the words at 1,s
+                    puls      b
+jnout@              cmpb      #JOY.NES4
+                    bhs       jnbuf@
+                    ldd       ,s                  modes 2-4: registers
+                    std       R$X,x
+                    ldd       2,s
+                    std       R$Y,x
+                    leas      8,s
+                    lbra      StatOK
+jnbuf@              ldd       R$Y,x               modes 5 and 6: the caller's buffer
+                    ldy       #8
+                    lbsr      MapCallBuf          U = the buffer through slot 1
+                    bcs       jnbad@
+                    tfr       u,y
+                    tfr       s,u
+                    ldd       #8
+                    lbsr      CpyBlk
+                    leas      8,s
+                    lbra      StatOK
+jnbad@              leas      8,s
+                    bra       joyerr
+
+* PadRead - read the pad port into the 8-byte word frame at 3,s (the
+*   caller's 1,s under this return address).  B = mode 3-6: 3 and 5 NES,
+*   4 and 6 SNES.  If the port is off or set to the other type it is set
+*   and triggered, and the words stay zero: the first reading after a
+*   change is empty.  Otherwise the reading is taken once NES_DONE is set
+*   (it takes microseconds, so a frame apart it always is; the loop is for
+*   callers faster than that), then the next reading is triggered, so no
+*   call waits for its own.  Uses A, B, Y, U.
+PadRead             lda       #NES_EN
+                    andb      #1                  3, 5 odd = NES; 4, 6 even = SNES
+                    bne       nes@
+                    ora       #NES_MODE
+nes@                pshs      a                   ,s = the control byte wanted
+                    lda       NES.Base+NES_CTRL
+                    anda      #NES_EN+NES_MODE
+                    cmpa      ,s
+                    bne       trig@               off or the wrong type
+                    ldy       #256                about 600 us at most
+wait@               lda       NES.Base+NES_CTRL
+                    bita      #NES_DONE
+                    bne       done@
+                    leay      -1,y
+                    bne       wait@
+                    bra       trig@               no reading: leave them zero
+done@               ldu       #NES.Base+NES_PAD0
+                    leay      4,s                 Y = the frame (4,s under ,s and the return)
+                    lda       #4
+                    pshs      a,y                 ,s = pads left, 1,s = the frame
+pad@                lda       ,u                  the first byte
+                    coma                          1 = pressed
+                    ldb       1,u                 SNES: A X L R in the low nibble
+                    comb
+                    andb      #%00001111
+                    pshs      a
+                    lda       4,s                 the control byte wanted
+                    bita      #NES_MODE
+                    puls      a
+                    bne       snes@
+                    clrb                          NES: the second byte is not a pad's
+snes@               bsr       PadWord
+                    ldy       1,s
+                    std       ,y++
+                    sty       1,s
+                    leau      2,u
+                    dec       ,s
+                    bne       pad@
+                    leas      3,s
+trig@               puls      a
+                    ora       #NES_TRIG           start the next reading
+                    sta       NES.Base+NES_CTRL
+                    rts
+
+* PadWord - one pad's port bytes as a JY.* word.
+* Entry: A = the first byte, B = the second byte's low nibble (0 for NES),
+*        both already 1 = pressed.
+* Exit:  D = the word (A = high byte).  Uses Y.
+* The port sends the directions reversed (up in bit 3), and the buttons in
+* serial order; Rev4 turns a nibble round and the shifts place the rest:
+*   rev(A >> 4) = button 0, button 1, Select, Start in bits 0-3
+*   rev(A & $F) = up, down, left, right
+*   rev(B)      = SNES A, X, L, R
+PadWord             pshs      d                   ,s = first byte, 1,s = nibble
+                    leay      Rev4,pcr
+                    lsra
+                    lsra
+                    lsra
+                    lsra
+                    lda       a,y                 buttons 0, 1, Select, Start
+                    tfr       a,b
+                    lsrb
+                    lsrb                          B = Select, Start: high byte bits 0-1
+                    anda      #%00000011
+                    lsla
+                    lsla
+                    lsla
+                    lsla                          buttons 0, 1: bits 4-5
+                    pshs      a                   ,s = low byte so far
+                    lda       1,s
+                    anda      #%00001111
+                    lda       a,y                 up, down, left, right: bits 0-3
+                    ora       ,s
+                    sta       ,s
+                    lda       2,s
+                    lda       a,y                 SNES A, X, L, R in bits 0-3
+                    pshs      a
+                    anda      #%00000011          A, X: low byte bits 6-7
+                    lsla
+                    lsla
+                    lsla
+                    lsla
+                    lsla
+                    lsla
+                    ora       1,s
+                    sta       1,s
+                    puls      a
+                    anda      #%00001100          L, R: already high byte bits 2-3
+                    pshs      b
+                    ora       ,s+
+                    ldb       ,s                  the low byte
+                    leas      3,s
+                    rts
+
+Rev4                fcb       %0000,%1000,%0100,%1100,%0010,%1010,%0110,%1110
+                    fcb       %0001,%1001,%0101,%1101,%0011,%1011,%0111,%1111
 
 * SetStat SS.DScrn - R$X+1 = MCR low byte, R$Y+1 = MCR high byte;
 * FX_OMIT/FT_OMIT leave that byte alone.  The mirror always, the register
