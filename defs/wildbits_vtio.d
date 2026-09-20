@@ -96,6 +96,10 @@ V.V_MCR             RMB       2         2 bytes for Vicky Control Register
 * | - |   LAYER1  | - |  LAYER 0  |
 * |       ------      |  LAYER 2  |
 * 000=BM0 001=BM1 010=BM2 100=TM0 101=TM1 110=TM2
+* 011 and 111 = NOTHING: the core's default arm clears both the bitmap and
+*   the tile map enable for that layer (TinyVickyCoreModule.v:775-782), so
+*   either value blanks a layer.  Undocumented until 2026-09-20 and the only
+*   way to hide a bitmap without freeing it.
 * $FFC2 VKY_RESERVED_00, VKY_RESERVED_01
 * See SS.PScrn in vtio
 

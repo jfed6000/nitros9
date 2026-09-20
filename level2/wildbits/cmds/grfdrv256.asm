@@ -1480,6 +1480,13 @@ ok@                 lbra      StatOK
 * SetStat SS.PScrn - R$X = layer 0-2, R$Y+1 = bitmap # 0-2 or tile map 4-6.
 * V.V_LayerCTL is both source and destination: the register never reads
 * back, and it holds the live terminal's layers.  Written only when live.
+*
+* SOURCE 3 OR 7 BLANKS THE LAYER, and that is worth knowing because it is
+* the only way to hide a bitmap today.  The core decodes the source as
+* {Slot_Type, Plane_2_Render} and 3'b011 / 3'b111 fall to the default arm,
+* which sets Actual_BM_Enabled = 0 AND Actual_TM_Enabled = 0
+* (TinyVickyCoreModule.v:775-782).  wildbits_vtio.d documents only 000-110,
+* so nobody has used it.  Layer 0 is in FRONT; layer 2 is furthest back.
 SSPScrn             ldy       R$X,x
                     lda       V.V_LayerCTL,u
                     cmpy      #0
@@ -2812,9 +2819,33 @@ ClutBad             comb
 
 *******************************************************************
 * GetStat SS.BmBlk - bitmap R$Y (0-2): R$X = first block (0 = not
-*   allocated), R$A = control byte (bits 2:1 CLUT, bit 0 enable).
+*   allocated), R$A = the control byte.
 * From the V.BMxCl_En / V.BMxBlk mirror, so it answers for a background
 *   terminal too.
+*
+* THE CONTROL BYTE, corrected 2026-09-20 from the rc16 RTL.  This comment
+* and docs/grfdrv256-api.md both used to say "bits 2:1 CLUT, bit 0 enable",
+* which is wrong in a way that matters: it implies bit 3 is free, and it is
+* not.  The live decode is TinyVickyCoreModule.v:484-495 feeding
+* TyVky_BitMap_State_Machine.v:136-147 (NOT the X-offset/priority block in
+* TinyVicky_BM_Registers.v, which is inside a /* */ comment and is dead):
+*
+*   bit  0   layer enable
+*   bits 3:1 CLUT number.  THREE bits, but the LUT BRAM address is only
+*            [9:0], so LUT 4-7 alias 0-3 - there are just 4 CLUTs.
+*   bit  4   HIRES4: this plane is 640x240 4bpp, one byte = two dots,
+*            high nibble the LEFT dot, nibble 0 transparent per dot.
+*   bits 7:5 palette GROUP, used when HIRES4 is set: the colour is
+*            entry (LUT mod 4)*256 + GROUP*16 + nibble.
+*
+* So there are NO spare bits in this byte.  The global equivalent of bits
+* 4 and 7:5 is $FFCB (TinyVickyControl_Registers.v:138, "GFX MODE"), which
+* wildbits.d still calls VKY_RESERVED_03; setting the global bit forces
+* ALL THREE planes to 4bpp, while the per-plane bit turns one plane hi-res
+* on its own, so per-plane is strictly more capable and $FFCB is best left
+* alone.  A hi-res bitmap is the same 76,800 bytes as a 320x240 8bpp one -
+* the per-line stride is a hard-wired 320 - so the mode costs no extra
+* memory and is a display attribute, not an allocation parameter.
 *******************************************************************
 GSBmBlk             ldd       R$Y,x               bitmap #
                     cmpd      #2

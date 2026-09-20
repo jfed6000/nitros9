@@ -198,19 +198,50 @@ SS.SprReg           equ       $D3                 R$X = the table (auto: R$Y = 0
 * SprSSave, SprKill - reserved in 2026-03 for a per-sprite API that the
 * registered table made unnecessary: a program moves, shows, hides and
 * re-images a sprite by writing its own record and pushing the range.
-* None of them ever had a handler.  They are free (user, 2026-09-20).
-* Bitmaps
-SS.BmAlloc          equ       $E3                 allocate a bitmap
+* None of them ever had a handler.  They are free, except $D4/$D5 which the
+* graphics allocator below now uses (user, 2026-09-20).
+* Graphics memory.  NOT bitmap-specific: one allocator serves bitmaps, tile
+* sets and tile maps alike, which is why it is here rather than in any of
+* the three groups.  It exists at all because F$AlHRAM is registered
+* F$AlHRAM+SysState in krnp2.asm's svctab, so an application cannot call it
+* and the driver can - and the convention says graphics allocate from the
+* top of the block map down.  The blocks it returns belong to the PROGRAM,
+* which frees them with SS.GfxFree; contrast SS.BmAlloc below, whose blocks
+* belong to the driver.  Blocks are physically consecutive, so an object may
+* run past the end of one.
+SS.GfxAlloc         equ       $D4                 R$X = block count; returns R$X = first block
+SS.GfxFree          equ       $D5                 R$X = first block, R$U = count
+* Bitmaps.  Two ways in, and the difference is who owns the memory:
+*   SS.BmDef   - the program allocated the blocks (SS.GfxAlloc or F$AllRAM)
+*                and says where the bitmap is.  The driver never frees them.
+*   SS.BmAlloc - the driver allocates AND defines in one call, and owns the
+*                blocks: SS.BmKill and a terminal close free them.  This is
+*                what lets shellbg put up a wallpaper and exit.
+* Whoever allocated, frees.  The driver records which it was, so no caller
+* has to pass a flag.
+* NEITHER ENABLES THE BITMAP.  Visibility needs three independent things -
+* the enable bit (SS.BmCfg), a layer pointing at it (SS.Layer), and FX_BM in
+* the MCR - and newly allocated blocks hold whatever was there before, so
+* enabling on allocate means showing garbage.  SS.AScrn, the compatibility
+* shim, supplies the enable to keep its old contract.
+SS.BmAlloc          equ       $E3                 R$Y = bitmap #, R$X = screen type; returns R$X = first block
 SS.BmBlk            equ       $E4                 GetStat: bitmap first block and control byte
-SS.BmClear          equ       $E5                 clear a bitmap to a color
-SS.BmLayer          equ       $E6                 put a bitmap on a layer
-SS.BmClut           equ       $E7                 set a bitmap's CLUT
-SS.BmOn             equ       $E8                 enable a bitmap
-SS.BmOff            equ       $E9                 disable a bitmap
-SS.BmKill           equ       $EA                 free a bitmap
-SS.BmLoad           equ       $EB                 load a bitmap from a file
-SS.BmSave           equ       $EC                 save a bitmap to a file
-SS.BmCfg            equ       $ED                 layer, CLUT and on/off in one call
+SS.BmClear          equ       $E5                 clear a bitmap to a color (reserved, no handler)
+SS.BmDef            equ       $E6                 R$Y = mode/bitmap #, R$X = block (0 = clear), R$U = offset
+SS.BmLine           equ       $E7                 draw a line into a bitmap (reserved, no handler)
+SS.BmKill           equ       $EA                 R$Y = bitmap #: undefine, and free if the driver allocated
+SS.BmCfg            equ       $ED                 R$Y = bitmap #, R$X = enable/CLUT, R$U = HIRES4/GROUP
+* $E8, $E9, $EB and $EC are free (user, 2026-09-20).  They were SS.BmOn,
+* SS.BmOff, SS.BmLoad and SS.BmSave, and none ever had a handler.  On and
+* Off are two fields of SS.BmCfg, which can also leave every other field
+* alone, so a hide is one call and costs no more than a dedicated one would.
+* Load and Save the architecture forbids outright - "no file I/O in
+* grfdrv256" - and a program does them with I$Open/I$Read into the blocks
+* SS.BmBlk reports, which is what pixview and shellbg already do.
+* $E6 was SS.BmLayer, a THIRD name for SS.PScrn/SS.Layer, and $E7 was
+* SS.BmClut, a second name for SS.Palet's SetStat whose GetStat means
+* something unrelated.  Both are now better served by SS.BmCfg and SS.Layer,
+* so the numbers went to SS.BmDef and to the line engine.
 * Tile sets and tile maps.  A program owns the tile pixels and the map
 * cells, in its own F$AllRAM blocks, and the hardware reads them there:
 * the address in the register record IS the registration, so there is
@@ -896,54 +927,93 @@ PSGR.Base           equ       SND.Base+$0210
 ********************************************************************
 * Direct Memory Access (DMA) definitions
 *
+* CORRECTED 2026-09-20 against the rc16 RTL (fpga-6809-cores-staging/source/
+* TinyVKY_DMA_Reg_Block.v).  Everything from $FEC4 on was WRONG: the address
+* fields were one byte low and there is no dedicated 1D size register at all.
+* Nothing in the tree referenced these, so correcting them changes no built
+* byte - which is exactly why it had to be done before anyone wrote code
+* from them.  The RTL's write path is "VDMA_REG[Bus_A_i[4:0]] <= Bus_D_i"
+* (:66) and CS_DMA covers $FEC0-$FEDF (TinyVKY2K2_IO_Page0_Devices.v:631),
+* so the register index IS the offset from DMA.Base.
+*
+* READ BACK NOTHING EXCEPT $FEC1.  The read path (:73-100) reverses each
+* group of four registers, so reading $FEC4 returns what was written to
+* $FEC7.  The two halves of the RTL were written to different conventions
+* and never reconciled; the write layout below is the one the engine uses.
+*
 DMA.Base            equ       $FEC0
 
                     org       0
 DMA_CTRL_REG        rmb       1         fec0
-DMA_STATUS_REG      rmb       1         fec1 read only
-DMA_DATA_2_WRITE    equ       DMA_STATUS_REG write only
-DMA_RESERVED_0      rmb       1         fec2
-DMA_RESERVED_1      rmb       1         fec3
-* Source address.
-DMA_SOURCE_ADDR_H   rmb       1         fec4
-DMA_SOURCE_ADDR_M   rmb       1         fec5
-DMA_SOURCE_ADDR_L   rmb       1         fec6
-DMA_RESERVED_2      rmb       1         fec7
-* Destination address.
-DMA_DEST_ADDR_H     rmb       1         fec8
-DMA_DEST_ADDR_M     rmb       1         fec9
-DMA_DEST_ADDR_L     rmb       1         feca
-DMA_RESERVED_3      rmb       1         fecb
-DMA_RESERVED_4      rmb       1         fecc
-* Size in 1D mode.
-DMA_SIZE_1D_H       rmb       1         fecd
-DMA_SIZE_1D_M       rmb       1         fece
-DMA_SIZE_1D_L       rmb       1         fecf
-* Size in 2D mode.
-DMA_SIZE_X_H        rmb       1         fed0
-DMA_SIZE_X_L        rmb       1         fed1
-DMA_SIZE_Y_H        rmb       1         fed2
-DMA_SIZE_Y_L        rmb       1         fed3
-* Stride in 2D mode.
-DMA_SRC_STRIDE_X_H  rmb       1         fed4
-DMA_SRC_STRIDE_X_L  rmb       1         fed5
-DMA_DST_STRIDE_Y_H  rmb       1         fed6
-DMA_DST_STRIDE_Y_L  rmb       1         fed7
-
-DMA_RESERVED_5      rmb       1
-DMA_RESERVED_6      rmb       1
-DMA_RESERVED_7      rmb       1
-DMA_RESERVED_8      rmb       1
+DMA_STATUS_REG      rmb       1         fec1 read: bit 7 = busy
+DMA_DATA_2_WRITE    equ       DMA_STATUS_REG write: the 8-bit fill byte
+* 16-bit fill value, used when DMA_CTRL_16Bit is set.  Was RESERVED_0/1.
+DMA_FILL_16_H       rmb       1         fec2
+DMA_FILL_16_L       rmb       1         fec3
+DMA_RESERVED_0      equ       DMA_FILL_16_H  old name, wrong meaning
+DMA_RESERVED_1      equ       DMA_FILL_16_L  old name, wrong meaning
+* Source address.  NOTE: $FEC4 is unused - the field starts at $FEC5.
+DMA_UNUSED_0        rmb       1         fec4
+DMA_SOURCE_ADDR_H   rmb       1         fec5
+DMA_SOURCE_ADDR_M   rmb       1         fec6
+DMA_SOURCE_ADDR_L   rmb       1         fec7
+* Destination address.  $FEC8 is unused - the field starts at $FEC9.
+DMA_UNUSED_1        rmb       1         fec8
+DMA_DEST_ADDR_H     rmb       1         fec9
+DMA_DEST_ADDR_M     rmb       1         feca
+DMA_DEST_ADDR_L     rmb       1         fecb
+* Size.  X and Y are the 2D block size; in 1D mode the SAME registers carry
+* a 24-bit byte count, assembled by the core as
+*     Count1D = { Y_Size[7:0], X_Size[15:0] }     (TinyVKY_DMA_Controller.v:210)
+* so the 1D count's three bytes are NOT contiguous and NOT in address order.
+* The DMA_SIZE_1D_* names below are kept, and now point at the right bytes.
+DMA_SIZE_X_H        rmb       1         fecc
+DMA_SIZE_X_L        rmb       1         fecd
+DMA_SIZE_Y_H        rmb       1         fece
+DMA_SIZE_Y_L        rmb       1         fecf
+DMA_SIZE_1D_H       equ       DMA_SIZE_Y_L   count bits 23:16 -> fecf
+DMA_SIZE_1D_M       equ       DMA_SIZE_X_H   count bits 15:8  -> fecc
+DMA_SIZE_1D_L       equ       DMA_SIZE_X_L   count bits 7:0   -> fecd
+* Y_Size high must be 0 in 1D mode: it is not part of Count1D, but in 2D
+* mode the whole 16-bit Y_Size is compared against the stride counter.
+* Stride in 2D mode.  Source and destination have independent strides.
+DMA_SRC_STRIDE_H    rmb       1         fed0
+DMA_SRC_STRIDE_L    rmb       1         fed1
+DMA_DST_STRIDE_H    rmb       1         fed2
+DMA_DST_STRIDE_L    rmb       1         fed3
+DMA_SRC_STRIDE_X_H  equ       DMA_SRC_STRIDE_H  old name
+DMA_SRC_STRIDE_X_L  equ       DMA_SRC_STRIDE_L  old name
+DMA_DST_STRIDE_Y_H  equ       DMA_DST_STRIDE_H  old name
+DMA_DST_STRIDE_Y_L  equ       DMA_DST_STRIDE_L  old name
+* $FED4-$FED7 decode but are unused by the engine.
+DMA_UNUSED_2        rmb       4         fed4-fed7
+DMA_RESERVED_2      equ       DMA_UNUSED_2   old name, wrong position
+DMA_RESERVED_3      equ       DMA_UNUSED_2+1 old name, wrong position
+DMA_RESERVED_4      equ       DMA_UNUSED_2+2 old name, wrong position
+* $FED8-$FEDF are decoded by CS_DMA but the register file is only 24 entries
+* (VDMA_REG[0:23]), so writes there are discarded and reads return $FF.
+DMA_RESERVED_5      rmb       1         fed8
+DMA_RESERVED_6      rmb       1         fed9
+DMA_RESERVED_7      rmb       1         feda
+DMA_RESERVED_8      rmb       1         fedb
 
 * DMA_CTRL_REG bit definitions
-DMA_CTRL_Enable     equ       $01
-DMA_CTRL_1D_2D      equ       $02
-DMA_CTRL_Fill       equ       $04
-DMA_CTRL_Int_En     equ       $08
-DMA_CTRL_NotUsed0   equ       $10
-DMA_CTRL_NotUsed1   equ       $20
-DMA_CTRL_NotUsed2   equ       $40
-DMA_CTRL_Start_Trf  equ       $80
+* Bits 4 and 5 are NOT spare.  The RTL's own comment calls them reserved and
+* the RTL's own logic disagrees: VMDA_Data_Mask_o = VDMA_Control_Reg[5:4]
+* (TinyVKY_DMA_Controller.v:261) drives the SRAM byte-lane enables through
+* TinyVicky_MemoryManagementBlock.v:193-194.  Setting either one silently
+* suppresses half of every transfer.  They must be written 0.
+DMA_CTRL_Enable     equ       $01       required - without it start is ignored
+DMA_CTRL_1D_2D      equ       $02       0 = 1D linear, 1 = 2D block
+DMA_CTRL_Fill       equ       $04       0 = copy src->dst, 1 = fill dst
+DMA_CTRL_Int_En     equ       $08       interrupt on completion
+DMA_CTRL_MaskLSB    equ       $10       suppress even byte lane - keep 0
+DMA_CTRL_MaskMSB    equ       $20       suppress odd byte lane - keep 0
+DMA_CTRL_16Bit      equ       $40       16-bit transfer: twice the bytes a clock
+DMA_CTRL_Start_Trf  equ       $80       rising edge starts; clear before the next
+DMA_CTRL_NotUsed0   equ       DMA_CTRL_MaskLSB   old name, wrong meaning
+DMA_CTRL_NotUsed1   equ       DMA_CTRL_MaskMSB   old name, wrong meaning
+DMA_CTRL_NotUsed2   equ       DMA_CTRL_16Bit     old name, wrong meaning
 
 * DMA_STATUS_REG bit definitions
 DMA_STATUS_TRF_IP   equ       $80       transfer in progress
