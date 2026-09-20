@@ -162,14 +162,21 @@ S$WinFg             equ       $82                 this terminal came forward
 * (grfdrv256).  Every code is assigned now so each group stays contiguous;
 * codes without a handler return E$UnkSvc.  The groups sit in the free holes:
 * $C7-$CB are VRN (os9.d), $D2 is sc16550's SS.DvrID, $E2 is SS.Fuji
-* (drivewire.d).  Spare: $D1, $FE-$FF ($E1 is SS.WSig, above).
+* (drivewire.d).  Spare: $FE-$FF ($E1 is SS.WSig, above).
 * CLUTs
 SS.ClutLoad         equ       $CC                 load a CLUT from a file
 SS.ClutCopy         equ       $CD                 load a whole CLUT from caller memory
 SS.ClutRead         equ       $CE                 GetStat: CLUT entries to a caller buffer
 SS.ClutWrite        equ       $CF                 CLUT entries from a caller buffer
 * Sprites
-SS.SprSet           equ       $D3                 R$X = records, R$Y = first sprite, R$U = count
+* A program that draws sprites REGISTERS its own 128-record table with
+* SS.SprReg and then pushes ranges of it with SS.SprPush; the driver keeps
+* no copy of the records at all and restores the screen from that table on
+* a terminal switch (docs/sprite-registration-plan.md in the joust tree).
+* SS.SprSet ($D3, records from a caller buffer) is GONE: it was a second
+* writer the driver could not reproduce on a switch.
+SS.SprPush          equ       $D1                 R$Y = first record, R$U = count: that range of the registered table to the screen
+SS.SprReg           equ       $D3                 R$X = the caller's record table (0 = deregister), R$U = records 1-128
 SS.SprAlloc         equ       $D4                 allocate sprite image memory
 SS.SprACfg          equ       $D5                 configure all sprites
 SS.SprCfg           equ       $D6                 configure one sprite

@@ -395,12 +395,11 @@ PushCore            lbsr      SetBlkC2C3
                     ldd       #128
                     lbsr      CpyBlk
                     endc
-                    ifne      TermSaveSprite0
-                    ldy       #$6000+T.SPRITE0 sprite bank 0 only
-                    ldu       #$2000+SPRITE_REC_OFF  $C0+$1300
-                    ldd       #$100           bank 1 at $1400 deliberately not carried
-                    lbsr      CpyBlk
-                    endc
+* Sprite records are NOT captured here, and nothing replaces the capture:
+* the program that draws them holds the only copy and has registered where
+* it is (gr.SprTbl), so the terminal coming forward fills the registers
+* from its own table and clears what that table does not cover.  The
+* outgoing terminal's records are simply left alone until then.
                     ifne      TermSaveFont0
                     ldy       #$6000+T.FONT0  font memory bank 0
                     ldu       #$4000+FONT_0_OFFSET   $C1+$0000
@@ -489,12 +488,9 @@ PullCore            lbsr      SetBlkC2C3
                     ldd       #128
                     lbsr      CpyBlk
                     endc
-                    ifne      TermSaveSprite0
-                    ldu       #$6000+T.SPRITE0 sprite bank 0 only
-                    ldy       #$2000+SPRITE_REC_OFF  $C0+$1300
-                    ldd       #$100
-                    lbsr      CpyBlk
-                    endc
+* The sprite registers are filled from this terminal's REGISTERED table,
+* not from a shadow - see SprRestore, called at the end of PullCore where
+* the 16K buffer is finished with and slots 3/4 are free.
                     ifne      TermSaveFont0
                     ldu       #$6000+T.FONT0  font memory bank 0
                     ldy       #$4000+FONT_0_OFFSET   $C1+$0000
@@ -551,6 +547,9 @@ PullCore            lbsr      SetBlkC2C3
                     ldd       #32
                     lbsr      CpyBlk
                     puls      y,u
+* The sprite registers last: SprRestore takes slots 3 and 4, which the 16K
+* buffer had until now, and it needs $C0 where SetBlkC0C1 left it.
+                    lbsr      SprRestore
 end@                clrb
                     rts
 
@@ -840,7 +839,16 @@ GTFree              puls      x
                     ldb       #2
                     os9       F$DelRAM
                     puls      x
-GTClear             clr       T.Block,x
+* The registration dies with the terminal.  It names blocks the program
+* owned, and a stale row would copy whatever owns them now onto the screen
+* as sprite records.
+GTClear             lda       >gr.b1
+                    ldb       #SB.Size
+                    mul
+                    ldy       #gr.SprTbl
+                    leay      d,y
+                    clr       SB.Flags,y
+                    clr       T.Block,x
                     clra
                     clrb
                     std       T.StatPtr,x
@@ -1150,8 +1158,10 @@ SetSttTbl           fcb       SS.AScrn
                     fdb       GrfMod+SSFScrn
                     fcb       SS.TermSel
                     fdb       GrfMod+SSTermSel
-                    fcb       SS.SprSet
-                    fdb       GrfMod+SSSprSet
+                    fcb       SS.SprReg
+                    fdb       GrfMod+SSSprReg
+                    fcb       SS.SprPush
+                    fdb       GrfMod+SSSprPush
                     fcb       SS.TsSet
                     fdb       GrfMod+SSTsSet
                     fcb       SS.TmSet
@@ -1587,6 +1597,13 @@ seed@               lda       ,x+
                     std       VKY_TXT_CURSOR_X_REG_H,x
                     lda       #'_
                     sta       VKY_TXT_CURSOR_CHAR_REG,x
+* Every sprite record off, once, so gr.SprDirty's "they are all clear" is
+* true from the start rather than a guess about what the core left behind.
+                    lbsr      SprMapC0            $C0 in slot 1
+                    ldx       #$2000+SPRITE_REC_OFF
+                    clrb
+                    lbsr      SprClrFrom
+                    clr       >gr.SprDirty
                     clrb
                     jmp       >GrfMod+SysRet
 
@@ -1664,6 +1681,14 @@ GFTermNew           lda       >gr.b1
                     lbsr      SetBlkC2C3          U = the new statics, slots 3/4 = its buffer
                     ldb       T.Block,x
                     stb       V.TermBufBlk,u
+* It has registered no sprite table.  A row is never inherited: it names
+* another process's memory.
+                    lda       >gr.b1
+                    ldb       #SB.Size
+                    mul
+                    ldy       #gr.SprTbl
+                    leay      d,y
+                    clr       SB.Flags,y
 * Defaults.  80x60 is also what GF.InitDisp's DispRegs program.
                     clr       V.WriteState,u      escape collector idle
                     ldb       #$10
@@ -2193,74 +2218,279 @@ bad@                comb
                     jmp       >GrfMod+SysRet
 
 *******************************************************************
-* SetStat SS.SprSet - write N sprite records from the caller's buffer.
-*   R$X = records, 8 bytes each: CTRL, ADDR hi/mid/lo, X hi/lo, Y hi/lo
-*   R$Y = first sprite # 0-127     R$U = N 1-128, first+N <= 128
-* Live terminal: the records go to $C0 $1300+8*first, with $C0 in slot 3.
-* Background terminal: only the shadowed records 0-31 may be written, into
-*   T.SPRITE0 of its switch buffer (slots 3-4), which PullBuf restores on
-*   the switch.  A record past 31, or no buffer yet, is E$IllArg with
-*   nothing written: only the live terminal writes unshadowed sprites.
+* The sprite calls.  A program keeps the ONLY copy of its records and
+* registers where it is; the driver keeps no copy at all, and a terminal
+* switch fills the registers from the incoming terminal's own table
+* (gr.SprTbl, defs/wildbits_vtio.d).  SS.SprSet - records pushed from a
+* caller's buffer - is gone: it was a second writer the switch could not
+* reproduce, so a switch away and back silently undid it.
+*
+* One mapping convention throughout, so the same base serves every path:
+*   slot 1  $C0, records at $2000+SPRITE_REC_OFF (PullCore's SetBlkC0C1
+*           already leaves $C0 there; SprMapC0 puts it there otherwise)
+*   slots 3, 4  the registered table, at $6000 - consecutive, so a table
+*           that crosses a block boundary is still one straight copy
+* Both pairs are scratch in the paths that use them: a SetStat handler has
+* finished with $C2/$C3 and the 16K buffer, and PullCore has finished with
+* the buffer by the time the sprites are restored.
+*
+* SetStat SS.SprReg - register this terminal's record table.
+*   R$X = the table in the caller's map; 0 deregisters
+*   R$U = records, 1-128 (the table is records 0 to R$U-1)
+* The address becomes block numbers through the caller's DAT image
+* (gr.PDAT), the way MapCallBuf does it, so the program may unmap the
+* memory afterwards and the driver still finds it.  The row holds a block,
+* the next block when the table crosses into it, the offset WITHIN the
+* block, and the count.
+* On a LIVE terminal it also turns off the records the table does not
+* cover, so the last program's sprites do not outlive it; deregistering on
+* a live terminal turns them all off.
+* Exit: B = 0, or carry + E$IllArg (a count of 0 or above 128, or a table
+*   that runs off the top of the caller's map).
 *******************************************************************
-SSSprSet            ldd       R$Y,x               first sprite #
-                    cmpd      #127
-                    bhi       SprBad
-                    ldd       R$U,x               N
-                    beq       SprBad
-                    cmpd      #128
-                    bhi       SprBad
-                    addd      R$Y,x               first + N
-                    cmpd      #128
-                    bhi       SprBad
+SSSprReg            ldd       R$X,x               the table, 0 = deregister
+                    lbne      SRSet
+                    lbsr      SprRow              Y = this terminal's row
+                    clr       SB.Flags,y
                     tst       V.TermLive,u
-                    bne       SprLive
-                    tst       V.TermBufBlk,u      background: switch buffer only
-                    beq       SprBad
-                    cmpd      #32                 past the shadowed records 0-31?
-                    bhi       SprBad
-                    ldd       #$6000+T.SPRITE0    records in the 16K buffer
-                    bra       SprCopy
-SprLive             pshs      cc
-                    orcc      #IntMasks
-                    lda       #EDIT_LUT_1+ACT_LUT_1
-                    sta       MMU_MEM_CTRL
+                    beq       SROK
+                    lbsr      SprMapC0            $C0 in slot 1
+                    ldx       #$2000+SPRITE_REC_OFF
+                    clrb                          every record off
+                    lbsr      SprClrFrom
+                    clr       >gr.SprDirty
+SROK                clrb
+                    jmp       >GrfMod+SysRet
+SRSet               ldd       R$U,x               the record count
+                    beq       SRBad
+                    cmpd      #SPR.Max
+                    bhi       SRBad
+                    pshs      b                   ,s = the count
+                    ldd       R$X,x               the table's address
+                    pshs      d                   ,s = address  2,s = count
+                    lsra
+                    lsra
+                    lsra
+                    lsra
+                    lsra                          A = the caller's slot 0-7
+                    lsla
+                    ldx       #gr.PDAT+1          low byte of each 2-byte entry
+                    leax      a,x                 X -> the block for that slot
+                    lbsr      SprRow              Y = this terminal's row
+                    lda       ,x
+                    sta       SB.Blk0,y           the block holding the table
+                    ldd       ,s                  the address again
+                    anda      #$1F
+                    std       SB.Off,y            the offset within that block
+                    ldb       2,s
+                    stb       SB.Cnt,y            the count
+                    lda       #SPR.RecL
+                    mul
+                    addd      SB.Off,y            D = where the table ends
+                    ldb       #SB.Reg
+                    cmpd      #$2000
+                    bls       SRStore             it ends inside the one block
+                    cmpx      #gr.PDAT+15
+                    beq       SRBad2              slot 7 has no next block
+                    lda       2,x
+                    sta       SB.Blk1,y           the block it crosses into
+                    ldb       #SB.Reg+SB.Span
+SRStore             stb       SB.Flags,y
+                    leas      3,s
+* The live terminal's leftover records - the ones this table does not
+* cover - go off now, so the program that had the terminal before this one
+* does not keep its sprites on screen.
+                    tst       V.TermLive,u
+                    beq       SROK
+                    lbsr      SprMapC0            $C0 in slot 1
+                    lbsr      SprRow
+                    ldx       #$2000+SPRITE_REC_OFF
+                    ldb       SB.Cnt,y
+                    lbsr      SprClrFrom
+                    lda       #1
+                    sta       >gr.SprDirty
+                    clrb
+                    jmp       >GrfMod+SysRet
+SRBad2              leas      3,s
+SRBad               comb
+                    ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* SetStat SS.SprPush - put part of the registered table on screen.
+*   R$Y = first record     R$U = count, first + count <= SB.Cnt
+* No caller buffer: the records come from the registered table.
+* On a BACKGROUND terminal it does nothing and returns clean - the table
+* already holds the truth and the switch back copies all of it.
+* Exit: B = 0, or carry + E$NotRdy (nothing registered) / E$IllArg (a
+*   range outside the registered count).
+*******************************************************************
+SSSprPush           lbsr      SprRow              Y = this terminal's row
+                    lda       SB.Flags,y
+                    bita      #SB.Reg
+                    beq       SPNone
+* Both ends are checked before they are added: a first or a count large
+* enough to wrap the addition would otherwise pass a check on the sum and
+* copy from somewhere else entirely.
+                    ldd       R$Y,x               first record
+                    cmpd      #SPR.Max-1
+                    bhi       SPBad
+                    ldd       R$U,x               the count
+                    beq       SPBad
+                    cmpd      #SPR.Max
+                    bhi       SPBad
+                    addd      R$Y,x               first + count, which cannot wrap now
+                    pshs      d
                     clra
-                    ldb       #$C0
-                    stb       MMU_SLOT_3          $C0 at $6000
-                    std       >gr.DATImg+6
-                    puls      cc
-                    ldd       #$6000+SPRITE_REC_OFF
-SprCopy             pshs      d                   destination base
-                    ldd       R$Y,x
+                    ldb       SB.Cnt,y
+                    cmpd      ,s++                past the end of the table?
+                    blo       SPBad
+                    tst       V.TermLive,u
+                    beq       SPOK                not on screen: the table is the truth
+                    ldd       R$Y,x               first record
                     lslb
                     rola
                     lslb
                     rola
                     lslb
-                    rola                          D = 8*first
-                    addd      ,s
-                    std       ,s                  ,s = destination
+                    rola                          D = 8 * first
+                    pshs      d                   ,s = it, twice over
+                    pshs      d
+                    lbsr      SprMapTbl           slots 3/4 = the table, U = record 0
+                    puls      d
+                    leau      d,u                 U = the first record to send
+                    lbsr      SprMapC0            $C0 in slot 1
+                    puls      d
+                    addd      #$2000+SPRITE_REC_OFF
+                    tfr       d,y                 Y = where it lands in Vicky
+                    ldx       #gr.PDRGS
                     ldd       R$U,x
                     lslb
                     rola
                     lslb
                     rola
                     lslb
-                    rola                          D = 8*N
-                    pshs      d                   ,s = length  2,s = destination
-                    tfr       d,y                 Y = length
-                    ldd       R$X,x               records in the caller's map
-                    lbsr      MapCallBuf          U = records through slot 1
-                    bcs       SprOff
-                    puls      d                   D = length
-                    puls      y                   Y = destination
+                    rola                          D = 8 * count
                     lbsr      CpyBlk
-                    clrb
+                    lda       #1
+                    sta       >gr.SprDirty
+SPOK                clrb
                     jmp       >GrfMod+SysRet
-SprOff              leas      4,s
-SprBad              comb
+SPBad               comb
                     ldb       #E$IllArg
                     jmp       >GrfMod+SysRet
+SPNone              comb
+                    ldb       #E$NotRdy
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* SprRestore - a terminal is coming forward (GSEnter, after PullCore):
+*   the sprite registers get its registered table, and the records that
+*   table does not cover are turned off.  A terminal with no registration
+*   has every record turned off - and nothing done at all when
+*   gr.SprDirty says they are already clear.
+* Entry: U = the incoming terminal's statics, $C0 at $2000 (PullCore's
+*   SetBlkC0C1 leaves it there).
+* Exit: U as it was.  D, X and Y are destroyed.
+*******************************************************************
+SprRestore          pshs      u                   the statics, for the exit
+                    lbsr      SprRow              Y = its row
+                    lda       SB.Flags,y
+                    bita      #SB.Reg
+                    bne       SRSTbl
+                    tst       >gr.SprDirty        nothing registered
+                    beq       SRSX                and nothing on screen either
+                    ldx       #$2000+SPRITE_REC_OFF
+                    clrb                          every record off
+                    lbsr      SprClrFrom
+                    clr       >gr.SprDirty
+SRSX                puls      u,pc
+SRSTbl              ldb       SB.Cnt,y
+                    pshs      b                   ,s = the count  1,s = the statics
+                    lbsr      SprMapTbl           slots 3/4 = the table, U = record 0
+                    ldb       ,s
+                    lda       #SPR.RecL
+                    mul                           D = the table's length
+                    ldy       #$2000+SPRITE_REC_OFF
+                    lbsr      CpyBlk
+                    ldx       #$2000+SPRITE_REC_OFF
+                    ldb       ,s+
+                    lbsr      SprClrFrom          the records it does not cover, off
+                    lda       #1
+                    sta       >gr.SprDirty
+                    puls      u,pc
+
+*******************************************************************
+* SprRow - Y = this terminal's gr.SprTbl row, from V.TermID.  U must be
+*   the terminal's statics.  Only Y changes.
+*******************************************************************
+SprRow              pshs      d
+                    lda       V.TermID,u
+                    ldb       #SB.Size
+                    mul
+                    ldy       #gr.SprTbl
+                    leay      d,y
+                    puls      d,pc
+
+*******************************************************************
+* SprMapTbl - the registered table of the row at Y into slots 3 and 4
+*   ($6000 and $8000, consecutive, so a table that crosses a block
+*   boundary stays one run of bytes).  Exit U = its record 0.
+*   D, X and Y are kept.
+*******************************************************************
+SprMapTbl           pshs      cc,d,x
+                    orcc      #IntMasks
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    ldx       #gr.DATImg+6
+                    clra
+                    ldb       SB.Blk0,y
+                    stb       MMU_SLOT_3          $6000
+                    std       ,x++
+                    ldb       SB.Blk1,y
+                    stb       MMU_SLOT_4          $8000
+                    std       ,x
+                    ldd       SB.Off,y
+                    addd      #$6000
+                    tfr       d,u                 U = the table through slot 3
+                    puls      cc,d,x,pc
+
+*******************************************************************
+* SprMapC0 - $C0 in slot 1, so the sprite records are at
+*   $2000+SPRITE_REC_OFF - where SetBlkC0C1 leaves them, so the restore
+*   and the push share one base.  Every register is kept.
+*******************************************************************
+SprMapC0            pshs      cc,d
+                    orcc      #IntMasks
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    clra
+                    ldb       #$C0
+                    stb       MMU_SLOT_1          $2000
+                    std       >gr.DATImg+2
+                    puls      cc,d,pc
+
+*******************************************************************
+* SprClrFrom - turn off sprite records B..127: the control byte of each,
+*   stride 8.  B = 128 or more does nothing.
+*   Entry: B = the first record to clear
+*          X = the mapped address of record 0's control byte
+*   Every register is kept.
+*******************************************************************
+SprClrFrom          pshs      cc,d,x
+                    cmpb      #SPR.Max
+                    bhs       SCFX
+                    pshs      b                   the first record
+                    lda       #SPR.RecL
+                    mul                           D = 8 * first
+                    leax      d,x                 X = its control byte
+                    ldb       #SPR.Max
+                    subb      ,s+                 B = records left
+SCF1                clr       ,x
+                    leax      SPR.RecL,x
+                    decb
+                    bne       SCF1
+SCFX                puls      cc,d,x,pc
 
 *******************************************************************
 * SetStat SS.TsSet - define tile set R$Y (0-7) from the caller's 4-byte

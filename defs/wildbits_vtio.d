@@ -285,6 +285,44 @@ D.WBKKyDn           RMB       1
 
 GrfMem              equ       $1100     ; GrfDrv data area (256 bytes)
 F256Gfx             equ       $1200     ; F256-specific graphics data (256 bytes)
+*******************************************************************
+* The sprite registration page.
+*
+* A program that draws sprites keeps the ONLY copy of its 8-byte
+* records and registers where it is (SS.SprReg); the driver keeps no
+* copy at all.  A terminal switch copies straight out of the program's
+* memory, so what is on screen is always what some terminal's
+* registered table says.  See docs/sprite-registration-plan.md in the
+* joust tree.
+*
+* It lives here, in the driver's globals, rather than in a terminal's
+* device static storage because a switch needs the INCOMING terminal's
+* registration BEFORE it has mapped anything of that terminal's.  Rows
+* are 8 bytes so the index gr.TermTbl already computes (id * 8)
+* addresses this table too.
+*
+* The blocks are the program's own.  The row therefore dies with the
+* terminal (GF.TermGone) and a program deregisters before it frees or
+* reuses the memory; a stale row would put a stranger's memory on
+* screen as sprite records.
+*******************************************************************
+                    org       F256Gfx
+gr.SprTbl           rmb       G.TermMax*8   ; one row per terminal, below
+gr.SprDirty         rmb       1         ; 0 = every sprite control byte is known clear
+* Row layout (org 0, like the terminal table's T.*)
+                    org       0
+SB.Flags            rmb       1         ; SB.Reg, SB.Span
+SB.Blk0             rmb       1         ; block holding the start of the table
+SB.Blk1             rmb       1         ; the next block, when the table crosses into it
+SB.Off              rmb       2         ; offset WITHIN SB.Blk0, $0000-$1FFF - not a logical address
+SB.Cnt              rmb       1         ; records 1-128; the table is records 0 to SB.Cnt-1
+                    rmb       2         ; spare, keeps the row at 8
+SB.Size             equ       8
+
+SB.Reg              equ       %00000001 ; this terminal has registered a table
+SB.Span             equ       %00000010 ; it crosses into SB.Blk1
+SPR.Max             equ       128       ; hardware sprite records
+SPR.RecL            equ       8         ; bytes each
 GrfMod              equ       $C000     ; Logical location of module in task 1
 
 *******************************************************************
@@ -480,12 +518,12 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 *   ----------------- ------------------------- ------------ -----
 *   TermSaveFont0     font memory bank 0        $C1+$0000     2048
 *   TermSaveTextLUT   text LUT foreground+bg    $C0+$1700      128
-*   TermSaveSprite0   sprite bank 0             $C0+$1300      256
 *   TermSaveCLUT      graphics LUT0-3           $C1+$1000     4096
 *
-* Sprite bank 1 ($C0+$1400) is deliberately NOT carried, so the sprite
-* copy is 256 bytes even though T.SPRITE0 reserves 512 in the buffer.
-* Banks 2 and 3 ($1500/$1600) are FUTURE on Revision E.
+* Sprite records are NOT in this list any more.  They are not shadowed
+* and never read back: PullBuf fills $C0+$1300 from the incoming
+* terminal's own registered table (gr.SprTbl) and clears the records that
+* table does not cover, and PushBuf does nothing with sprites at all.
 *
 * Each byte here costs twice per switch: GF.Switch runs PushBuf on the
 * terminal it leaves and PullBuf on the one it enters.  All four on is
@@ -529,7 +567,9 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 * you control which bitstream the board is running.
 TermSaveFont0       equ       1         font bank 0     - CONFIRMED works
 TermSaveTextLUT     equ       0         text LUT fg/bg  - BROKEN before the FPGA fix
-TermSaveSprite0     equ       1         sprite bank 0   - CONFIRMED, text mode
+* TermSaveSprite0 is gone with T.SPRITE0: PushBuf no longer reads the
+* sprite registers back, and PullBuf fills them from the incoming
+* terminal's registered table.
 TermSaveCLUT        equ       1         graphics LUT0-3 - CONFIRMED, text mode
 * PullBuf's graphics-CLUT restore, split out from PushBuf's capture so the
 * two can disagree.  They only need to disagree if the board says the
@@ -548,7 +588,9 @@ T.TXT               rmb       4800      ; 80x60 text screen
 T.TXTCOLOR          rmb       4800      ; 80x60 color matrix
 T.FLUT              rmb       64        ; foreground LUT
 T.BLUT              rmb       64        ; background LUT
-T.SPRITE0           rmb       512       ; Sprite Register Copy
+* T.SPRITE0 (512 bytes) was here.  Sprite records are no longer shadowed
+* per terminal: the program owns the only copy and registers it
+* (gr.SprTbl above).  The 512 bytes are free at the end of the buffer.
 T.FONT0             rmb       2048
 T.CLUT0             rmb       1024      ; CLUT 0 Copy
 T.CLUT1             rmb       1024      ; CLUT 1 Copy

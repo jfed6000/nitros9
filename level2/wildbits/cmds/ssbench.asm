@@ -12,14 +12,20 @@
 * where rate is the printed calls/s, one sixteenth of a batch each.
 *
 * Run it on the live terminal and leave it there: a background terminal
-* takes other paths (SS.LiveKeys and SS.Joy return zeros at once,
-* SS.SprSet refuses N > 32).
+* takes other paths (SS.LiveKeys and SS.Joy return zeros at once, and
+* SS.SprPush does nothing at all).
 * SS.LiveKeys empties the input buffer, so keys typed during the run are
-* dropped.  SS.SprSet writes zero records - every sprite off - to records 0-79 and
-* 127, so run it from the shell, not over a game.  The calls go to path 2,
-* which is the terminal even when stdout is redirected to a file.  The
-* last line, SS.SprSet with N=200, must end "error 187": it proves that
-* errors come back, so a silent line above really did succeed.
+* dropped.  The sprite lines push zero records - every sprite off - to
+* records 0-79 and 127, so run it from the shell, not over a game.  The
+* calls go to path 2, which is the terminal even when stdout is
+* redirected to a file.  The last line, SS.SprPush with N=200, must end
+* "error 187": it proves that errors come back, so a silent line above
+* really did succeed.
+*
+* The sprite calls need a registered table (SS.SprReg): the driver keeps
+* no copy of the records, so start-up registers `recs` and the exit gives
+* it back.  That registration is itself the "did the new driver load"
+* check - it fails on any grfdrv256 that predates the sprite work.
 *
 * Edt/Rev  YYYY/MM/DD  Modified by
 * Comment
@@ -41,7 +47,9 @@ edition             set       1
 
 BATCH               equ       16        calls per F$Time read
 SECS                equ       4         seconds per test (calls/s = batches * 16 / 4)
-UNKCODE             equ       $D1       a spare SetStat code: the whole table is searched
+UNKCODE             equ       $FE       a spare SetStat code: the whole table is searched
+*                               ($D1 was this until it became SS.SprPush, and
+*                                the line then reported E$IllArg, not E$UnkSvc)
 TPATH               equ       2         stderr: still the terminal when stdout is redirected,
 *                                         and unlike stdin when run from a script
 
@@ -55,7 +63,7 @@ blk                 rmb       2         F$AllRAM's block, for the F$MapBlk test
 tstptr              rmb       2         the current test's routine
 linebuf             rmb       80        the line being built
 padbuf              rmb       8         SS.Joy mode 6's four words
-recs                rmb       640       80 zero sprite records for SS.SprSet
+recs                rmb       1024      128 zero sprite records, registered with the driver
                     rmb       300       stack
 size                equ       .
 
@@ -63,10 +71,21 @@ name                fcs       /ssbench/
                     fcb       edition
 
 start               leax      recs,u              zero the records
-                    ldd       #640
+                    ldd       #1024
 clr@                clr       ,x+
                     subd      #1
                     bne       clr@
+
+* Register them: SS.SprPush sends a range of THIS table, so there is
+* nothing to time without it.
+                    leax      recs,u
+                    pshs      u
+                    ldu       #128
+                    lda       #TPATH
+                    ldb       #SS.SprReg
+                    os9       I$SetStt
+                    puls      u
+                    lbcs      Fatal
 
                     ldb       #1                  one block for the F$MapBlk test
                     os9       F$AllRAM
@@ -86,7 +105,13 @@ tloop@              ldd       ,y                  offset of the routine, 0 ends
                     puls      y
                     leay      4,y
                     bra       tloop@
-done@               ldx       blk,u
+done@               pshs      u                   the table goes back before we do
+                    ldx       #0
+                    lda       #TPATH
+                    ldb       #SS.SprReg
+                    os9       I$SetStt
+                    puls      u
+                    ldx       blk,u
                     ldb       #1
                     os9       F$DelRAM
                     clrb
@@ -166,22 +191,19 @@ TUnk                lda       #TPATH
 ex@                 rts
 
 TSpr1               pshs      u
-                    leax      recs,u
                     ldy       #127
                     ldu       #1
                     bra       SprCall
 TSpr80              pshs      u
-                    leax      recs,u
                     ldy       #0
                     ldu       #80
 SprCall             lda       #TPATH
-                    ldb       #SS.SprSet
+                    ldb       #SS.SprPush
                     os9       I$SetStt
                     puls      u,pc
 
 * TBad is the check that errors come back: it must print error 187.
 TBad                pshs      u
-                    leax      recs,u
                     ldy       #0
                     ldu       #200
                     bra       SprCall
@@ -210,13 +232,13 @@ NJoy4               fcc       /SS.Joy 4 (2 SNES pads)  /
                     fcb       0
 NJoy6               fcc       /SS.Joy 6 (4 SNES, buf)  /
                     fcb       0
-NUnk                fcc       /SetStt unknown $D1      /
+NUnk                fcc       /SetStt unknown $FE      /
                     fcb       0
-NSpr1               fcc       /SetStt SS.SprSet N=1    /
+NSpr1               fcc       /SetStt SS.SprPush N=1   /
                     fcb       0
-NSpr80              fcc       /SetStt SS.SprSet N=80   /
+NSpr80              fcc       /SetStt SS.SprPush N=80  /
                     fcb       0
-NBad                fcc       /SprSet N=200 (error 187)/
+NBad                fcc       /SprPush N=200 (err 187) /
                     fcb       0
 NMap                fcc       /F$MapBlk + F$ClrBlk     /
                     fcb       0
