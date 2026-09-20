@@ -2234,40 +2234,46 @@ bad@                comb
 * finished with $C2/$C3 and the 16K buffer, and PullCore has finished with
 * the buffer by the time the sprites are restored.
 *
-* SetStat SS.SprReg - register this terminal's record table.
-*   R$X = the table in the caller's map; 0 deregisters
-*   R$U = records, 1-128 (the table is records 0 to R$U-1)
-* The address becomes block numbers through the caller's DAT image
-* (gr.PDAT), the way MapCallBuf does it, so the program may unmap the
-* memory afterwards and the driver still finds it.  The row holds a block,
-* the next block when the table crosses into it, the offset WITHIN the
-* block, and the count.
-* On a LIVE terminal it also turns off the records the table does not
-* cover, so the last program's sprites do not outlive it; deregistering on
-* a live terminal turns them all off.
-* Exit: B = 0, or carry + E$IllArg (a count of 0 or above 128, or a table
-*   that runs off the top of the caller's map).
+* SetStat SS.SprReg - register this terminal's record table, or give it up.
+*   R$U = records, 1-128; 0 gives the table up, whatever else is passed.
+*   R$Y = 0    AUTO: R$X is the table's address in the caller's own map,
+*                    and the blocks come from its DAT image (gr.PDAT) -
+*                    the one moment that image is there to read.
+*   R$Y <> 0   MANUAL: R$Y = the first block in the high byte, the block
+*                    the table crosses into in the low byte, and R$X is
+*                    the offset WITHIN the first block, $0000-$1FFF.
+*                    For a table in memory the program owns but has not
+*                    mapped - an F$AllRAM block it maps only to edit -
+*                    which auto cannot see.  A program with no window to
+*                    spare should not have to open one just to register.
+* The two are told apart by R$Y alone, which is sound because the high
+* byte is a block number and block 0 is the system block: no table can
+* ever live there, so R$Y = 0 is never a legitimate manual call.
+* R$A is not a parameter - in a SetStat it is the path.
+*
+* Nothing is checked about the blocks themselves.  The driver cannot: the
+* kernel's block map records allocated/free, not WHO owns a block.  It is
+* no new exposure either - F$MapBlk maps any block a caller names with no
+* ownership check at all (fmapblk.asm) - and the driver only ever READS
+* these blocks, so the worst a wrong registration does is draw rubbish.
+*
+* On a LIVE terminal registering also turns off the records the table does
+* not cover, so the last program's sprites do not outlive it; giving the
+* table up on a live terminal turns them all off.
+* Exit: B = 0, or carry + E$IllArg (a count above 128; a manual offset
+*   past $1FFF or first block 0; or a table that crosses into a block the
+*   call did not name - slot 7 in auto, a zero low byte in manual).
 *******************************************************************
-SSSprReg            ldd       R$X,x               the table, 0 = deregister
-                    lbne      SRSet
-                    lbsr      SprRow              Y = this terminal's row
-                    clr       SB.Flags,y
-                    tst       V.TermLive,u
-                    beq       SROK
-                    lbsr      SprMapC0            $C0 in slot 1
-                    ldx       #$2000+SPRITE_REC_OFF
-                    clrb                          every record off
-                    lbsr      SprClrFrom
-                    clr       >gr.SprDirty
-SROK                clrb
-                    jmp       >GrfMod+SysRet
-SRSet               ldd       R$U,x               the record count
-                    beq       SRBad
+SSSprReg            ldd       R$U,x               records, 0 = give the table up
+                    lbeq      SRDereg
                     cmpd      #SPR.Max
-                    bhi       SRBad
+                    lbhi      SRBad
                     pshs      b                   ,s = the count
-                    ldd       R$X,x               the table's address
-                    pshs      d                   ,s = address  2,s = count
+                    lbsr      SprRow              Y = this terminal's row
+                    ldd       R$Y,x               0 = auto, otherwise the blocks
+                    bne       SRMan
+                    ldd       R$X,x               auto: the table's address
+                    pshs      d                   ,s = the address  2,s = the count
                     lsra
                     lsra
                     lsra
@@ -2275,14 +2281,27 @@ SRSet               ldd       R$U,x               the record count
                     lsra                          A = the caller's slot 0-7
                     lsla
                     ldx       #gr.PDAT+1          low byte of each 2-byte entry
-                    leax      a,x                 X -> the block for that slot
-                    lbsr      SprRow              Y = this terminal's row
+                    leax      a,x                 X -> its block for that slot
                     lda       ,x
-                    sta       SB.Blk0,y           the block holding the table
-                    ldd       ,s                  the address again
+                    sta       SB.Blk0,y
+                    clra                          slot 7 has no next block
+                    cmpx      #gr.PDAT+15
+                    beq       SRAuto1
+                    lda       2,x
+SRAuto1             sta       SB.Blk1,y
+                    puls      d                   the address again
                     anda      #$1F
                     std       SB.Off,y            the offset within that block
-                    ldb       2,s
+                    bra       SRSpan
+SRMan               tsta                          block 0 is the system block
+                    beq       SRBad1
+                    sta       SB.Blk0,y
+                    stb       SB.Blk1,y
+                    ldd       R$X,x               the offset within the first block
+                    cmpd      #$2000
+                    bhs       SRBad1
+                    std       SB.Off,y
+SRSpan              ldb       ,s
                     stb       SB.Cnt,y            the count
                     lda       #SPR.RecL
                     mul
@@ -2290,13 +2309,11 @@ SRSet               ldd       R$U,x               the record count
                     ldb       #SB.Reg
                     cmpd      #$2000
                     bls       SRStore             it ends inside the one block
-                    cmpx      #gr.PDAT+15
-                    beq       SRBad2              slot 7 has no next block
-                    lda       2,x
-                    sta       SB.Blk1,y           the block it crosses into
+                    tst       SB.Blk1,y
+                    beq       SRBad1              it crosses into a block we were not given
                     ldb       #SB.Reg+SB.Span
 SRStore             stb       SB.Flags,y
-                    leas      3,s
+                    leas      1,s
 * The live terminal's leftover records - the ones this table does not
 * cover - go off now, so the program that had the terminal before this one
 * does not keep its sprites on screen.
@@ -2309,9 +2326,20 @@ SRStore             stb       SB.Flags,y
                     lbsr      SprClrFrom
                     lda       #1
                     sta       >gr.SprDirty
+SROK                clrb
+                    jmp       >GrfMod+SysRet
+SRDereg             lbsr      SprRow              Y = this terminal's row
+                    clr       SB.Flags,y
+                    tst       V.TermLive,u
+                    beq       SROK
+                    lbsr      SprMapC0            $C0 in slot 1
+                    ldx       #$2000+SPRITE_REC_OFF
+                    clrb                          every record off
+                    lbsr      SprClrFrom
+                    clr       >gr.SprDirty
                     clrb
                     jmp       >GrfMod+SysRet
-SRBad2              leas      3,s
+SRBad1              leas      1,s
 SRBad               comb
                     ldb       #E$IllArg
                     jmp       >GrfMod+SysRet

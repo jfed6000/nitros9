@@ -23,9 +23,17 @@
 * really did succeed.
 *
 * The sprite calls need a registered table (SS.SprReg): the driver keeps
-* no copy of the records, so start-up registers `recs` and the exit gives
-* it back.  That registration is itself the "did the new driver load"
-* check - it fails on any grfdrv256 that predates the sprite work.
+* no copy of the records, so start-up registers one and the exit gives it
+* back.  That registration is itself the "did the new driver load" check -
+* it fails on any grfdrv256 that predates the sprite work.
+*
+* Start-up registers BOTH ways, which is also the only test either form
+* has: first `recs`, in our own map, the automatic way (R$Y = 0); then the
+* F$AllRAM block, zeroed and then UNMAPPED, by naming the block outright.
+* The timing runs use that second one, so every sprite line below is also
+* proof that the driver reads a registered table out of memory the program
+* does not have mapped - which is the whole reason the manual form
+* exists.  Either registration failing is fatal and says which.
 *
 * Edt/Rev  YYYY/MM/DD  Modified by
 * Comment
@@ -76,10 +84,11 @@ clr@                clr       ,x+
                     subd      #1
                     bne       clr@
 
-* Register them: SS.SprPush sends a range of THIS table, so there is
-* nothing to time without it.
+* Register them the automatic way: SS.SprPush sends a range of THIS
+* table, so there is nothing to time without a registration.
                     leax      recs,u
                     pshs      u
+                    ldy       #0                  R$Y = 0: our own map
                     ldu       #128
                     lda       #TPATH
                     ldb       #SS.SprReg
@@ -91,6 +100,40 @@ clr@                clr       ,x+
                     os9       F$AllRAM
                     lbcs      Fatal
                     std       blk,u
+
+* Now the other form, on that block: map it, zero a table's worth, let the
+* window go again, and register the BLOCK ITSELF.  Every sprite line below
+* then reads a table out of memory this program has no window on, which is
+* the whole reason the manual form exists.
+                    pshs      u                   our data area
+                    ldx       blk,u
+                    ldb       #1
+                    os9       F$MapBlk            U = where it landed
+                    bcs       mfail@
+                    tfr       u,x
+                    ldd       #1024
+mclr@               clr       ,x+
+                    subd      #1
+                    bne       mclr@
+                    ldb       #1
+                    os9       F$ClrBlk            and the window goes away again
+                    puls      u
+                    ldx       #0                  offset 0 within that block
+                    ldb       blk+1,u             the block number
+                    tfr       b,a
+                    clrb                          1K at offset 0 cannot span
+                    tfr       d,y                 R$Y <> 0: name the blocks outright
+                    pshs      u
+                    ldu       #128
+                    lda       #TPATH
+                    ldb       #SS.SprReg
+                    os9       I$SetStt
+                    puls      u
+                    lbcs      Fatal
+                    bra       reg@
+mfail@              puls      u
+                    lbra      Fatal
+reg@                equ       *
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -106,7 +149,7 @@ tloop@              ldd       ,y                  offset of the routine, 0 ends
                     leay      4,y
                     bra       tloop@
 done@               pshs      u                   the table goes back before we do
-                    ldx       #0
+                    ldu       #0                  a count of 0 gives it up
                     lda       #TPATH
                     ldb       #SS.SprReg
                     os9       I$SetStt
