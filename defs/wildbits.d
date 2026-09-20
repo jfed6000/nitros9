@@ -211,24 +211,39 @@ SS.BmKill           equ       $EA                 free a bitmap
 SS.BmLoad           equ       $EB                 load a bitmap from a file
 SS.BmSave           equ       $EC                 save a bitmap to a file
 SS.BmCfg            equ       $ED                 layer, CLUT and on/off in one call
+* Tile sets and tile maps.  A program owns the tile pixels and the map
+* cells, in its own F$AllRAM blocks, and the hardware reads them there:
+* the address in the register record IS the registration, so there is
+* nothing else to tell the driver.  What the driver keeps per terminal is
+* only the register image (V.TMn, V.TSn), which PullBuf reprograms on a
+* terminal switch.  See docs/tile-api.md in the joust tree for the
+* interface and docs/tile-plan.md for why these are the only codes left.
 * Tile sets
 SS.TsSet            equ       $EE                 R$X = 4-byte record, R$Y = tile set #
-SS.TsAddr           equ       $EF                 GetStat: tile set address
-SS.TsAlloc          equ       $F0                 allocate tile set memory
-SS.TsLoad           equ       $F1                 load a tile set from a file
-SS.TsSave           equ       $F2                 save a tile set to a file
-SS.TsKill           equ       $F3                 clear a tile set and free its memory
+SS.TsAlloc          equ       $F0                 allocate tile set memory (reserved, no handler)
+SS.TsKill           equ       $F3                 clear a tile set and free its memory (reserved, no handler)
 * Tile maps
 SS.TmSet            equ       $F4                 R$X = 12-byte record, R$Y = tile map #
-SS.TmAddr           equ       $F5                 GetStat: tile map address
-SS.TmAlloc          equ       $F6                 allocate a tile map
-SS.TmCell           equ       $F7                 set one tile map cell
-SS.TmScrl           equ       $F8                 R$X = X scroll, R$Y = tile map #, R$U = Y scroll
-SS.TmOn             equ       $F9                 enable a tile map
-SS.TmOff            equ       $FA                 disable a tile map
-SS.TmLoad           equ       $FB                 load a tile map from a file
-SS.TmSave           equ       $FC                 save a tile map to a file
-SS.TmKill           equ       $FD                 clear a tile map and free its memory
+SS.TmAlloc          equ       $F6                 allocate a tile map (reserved, no handler)
+SS.TmScrl           equ       $F8                 R$X = X scroll, R$Y = tile map #, R$U = Y scroll (reserved, no handler)
+SS.TmKill           equ       $FD                 clear a tile map and free its memory (reserved, no handler)
+* $EF, $F1, $F2, $F5, $F7, $F9-$FC are FREE (user, 2026-09-20).  They were
+* TsAddr, TsLoad, TsSave, TmAddr, TmCell, TmOn, TmOff, TmLoad and TmSave -
+* nine codes reserved in 2026-03 that never had a handler and that nothing
+* in either tree ever referenced.  A program does each of them without a
+* call: it keeps the block and offset it registered rather than reading an
+* address back; it loads and saves with ordinary I$Read/I$Write, because
+* grfdrv256 does no file I/O; it maps the map block and stores the 2-byte
+* cell itself, which is what Joust's gfx.a TmRemove/TmClrBr already do; and
+* it turns a map on or off with bit 0 of the CTRL byte in a record it
+* already holds.  The four Alloc/Kill codes above stay reserved because
+* asset allocation is meant to move into the driver - only it can reach
+* F$AlHRAM, which is registered F$AlHRAM+SysState - and SS.TmScrl stays
+* because scrolling is the one tile operation with no program-owned buffer
+* behind it: the scroll position lives only in these registers.
+* The four tile maps in the rc16 registers are NOT four usable layers: the
+* core enables tile maps 0-2 only, and there is no scan address for a
+* fourth, so SS.TmSet's limit of 2 matches the hardware.
 
 ********************************************************************
 * System control definitions
