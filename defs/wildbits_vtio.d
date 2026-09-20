@@ -122,6 +122,32 @@ V.BM1Blk            RMB       1         bitmap1 block
 V.BM2Cl_En          RMB       1         bitmap2 |clut|enable|
 V.BM2Blk            RMB       1         bitmap2 block
 
+* One byte recording, per bitmap, HOW BIG it is and WHO OWNS it.
+*
+* The size half fixes a real defect.  SS.AScrn chose 10 blocks or 8 from
+* the CALLER'S screen type while SS.FScrn chose it from the CURRENT
+* display mode's CLK_70 bit - two sources of truth for one number.  A
+* program that changed the display mode between allocating and freeing
+* therefore freed the wrong count: too few leaked, and too many handed
+* live blocks back to the free pool while their real owner was still
+* using them.  src/gfx.a and jstview/jstview.asm both carry the same
+* compensating comment and deliberately free their bitmaps BEFORE
+* restoring the display mode.  Recording the count removes the need.
+*
+* The ownership half tells a bitmap the driver allocated (SS.BmAlloc, and
+* SS.AScrn through it) from one a program merely pointed at its own blocks
+* with SS.BmDef.  Whoever allocated, frees: SS.BmKill and a terminal close
+* free the driver's blocks and never touch the program's.
+*
+* It sits inside the span GF.TermNew wipes (V.BM0Cl_En..V.GCX), so a new
+* terminal starts with every bitmap unowned and 10-block by default.
+V.BMFlags           RMB       1         bits 0-2 size, bits 4-6 ownership
+
+BM.Small            equ       %00000001 bitmap 0's "8 blocks, not 10" bit
+BM.Owned            equ       %00010000 bitmap 0's "the driver allocated it" bit
+BmBlk240            equ       10        blocks in a 320x240 bitmap (76,800 bytes)
+BmBlk200            equ       8         blocks in a 320x200 bitmap (64,000 bytes)
+
 
 * CLUT - need to store mirror of CLUT data so switching windows will work
 * Store block# where high 4k is CLUT mirror.  Could store in last 4k of BM blocks.

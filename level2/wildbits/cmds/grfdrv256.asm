@@ -831,6 +831,7 @@ GTSkip              inca
 * switch can pick it, and gr.Busy keeps the AltISR out of grfdrv anyway.
 GTFree              puls      x
                     puls      cc
+                    lbsr      GTFreeBms           bitmaps the driver owns die with it
                     ldb       T.Block,x
                     beq       GTClear
                     pshs      x
@@ -858,6 +859,88 @@ GTClear             lda       >gr.b1
 GTDone              puls      cc
                     clrb
                     jmp       >GrfMod+SysRet
+
+*******************************************************************
+* GTFreeBms - free the bitmaps the DRIVER allocated for this closing
+*   terminal.  Entry X = its gr.TermTbl entry, interrupts ENABLED (the
+*   os9 calls need them).  Exit X kept; D clobbered.
+*
+* Without this the blocks leak, permanently and unrecoverably: a bitmap
+* is recorded only in its own terminal's statics, and those go away with
+* the device.  A program killed by a signal it cannot trap, or a /vt
+* simply closed, took up to 30 blocks - 240 KB of the ~2 MB - with it.
+* GF.TermGone was thorough about the 16K switch buffer and the sprite
+* registration and never looked at V.BM0Blk-V.BM2Blk.
+*
+* This is the ONE lifetime hole the driver can close on its own, and the
+* reason is worth keeping: a bitmap belongs to the TERMINAL, not to the
+* process.  SS.AScrn is addressed to a path, the blocks are recorded in
+* that terminal's statics, PullBuf reprograms them on a switch, and
+* shellbg deliberately allocates one and exits so the shell keeps the
+* wallpaper.  So "the terminal closed" is exactly the right moment, and
+* GF.TermGone is exactly the right hook.  The tile and sprite lifetime
+* hole is NOT like this - there the PROCESS owns the memory and the
+* terminal outlives it, which is why that one still has no answer.
+*
+* Blocks a program owns (SS.BmDef) are left strictly alone: only the
+* ownership bit in V.BMFlags says free these, and only SS.BmAlloc sets it.
+*******************************************************************
+* gr.VBlk and gr.U5 are SAVED AND PUT BACK.  By the time GTFree reaches
+* here GSEnter may already have run and aimed them at whichever terminal
+* took over the screen; leaving them pointing at the one that just closed
+* would hand the next caller a dead terminal's statics.
+GTFreeBms           pshs      x
+                    ldd       >gr.U5
+                    pshs      d
+                    lda       >gr.VBlk
+                    pshs      a
+                    ldx       3,s                 the closing entry back
+                    lda       T.VBlk,x            aim slot 5 at the CLOSING
+                    sta       >gr.VBlk            terminal's statics
+                    ldd       T.grU5,x
+                    std       >gr.U5
+                    clra                          bitmap # 0
+GTFBlp              lbsr      SetBlkC2C3          U = its statics (keeps D and X)
+                    pshs      a                   ,s = bitmap #
+                    lbsr      BmFlagMask          A = BM.Small << bitmap #
+                    pshs      a                   ,s = size bit, 1,s = bitmap #
+                    lsla
+                    lsla
+                    lsla
+                    lsla                          A = its ownership bit
+                    anda      V.BMFlags,u
+                    beq       GTFBnx              a program's blocks: not ours to free
+                    lda       1,s                 bitmap #
+                    lsla                          two mirror bytes each
+                    leay      V.BM0Cl_En,u
+                    leay      a,y                 Y -> V.BMxCl_En, block at 1,y
+                    clra
+                    ldb       1,y
+                    beq       GTFBnx              nothing allocated
+                    tfr       d,x                 X = first block
+                    ldb       ,s                  its size bit
+                    andb      V.BMFlags,u
+                    beq       GTFBten
+                    ldb       #BmBlk200
+                    bra       GTFBdel
+GTFBten             ldb       #BmBlk240
+* Clear the mirror BEFORE the free: Y reaches it through slot 5, which the
+* os9 call may disturb, and a switch must never reprogram a freed bitmap.
+GTFBdel             clr       ,y
+                    clr       1,y
+                    os9       F$DelRAM
+GTFBnx              leas      1,s                 drop the size bit
+                    puls      a                   bitmap #
+                    inca
+                    cmpa      #3
+                    blo       GTFBlp
+                    puls      a                   gr.VBlk and gr.U5 back, so the
+                    sta       >gr.VBlk            terminal GSEnter just brought in
+                    puls      d                   is still what slot 5 reaches
+                    std       >gr.U5
+                    lbsr      SetBlkC2C3
+                    puls      x,pc
+
 * GSEnter - make a terminal live: pull its buffer, point the keyboard and
 * gr.* at it, put the hardware cursor where it was.  Shared by GFSwitch
 * and GFTermGone.  Entry A = id, B = its table offset.  Exit U = its
@@ -1054,21 +1137,29 @@ GFAScrn             ldd       >gr.PDRGS+R$Y       bitmap #
                     bra       AScrnErr
 AScrnNew            ldb       >gr.PDRGS+R$X+1     screen type
                     beq       ten@
-                    ldb       #8
+                    ldb       #BmBlk200
                     bra       alloc@
-ten@                ldb       #10
-alloc@              pshs      x
+ten@                ldb       #BmBlk240
+* The block count is kept on the stack across the allocation because
+* SS.FScrn now frees exactly this number instead of re-deriving it from
+* the display mode, which may have changed in between.  ,s = the count,
+* 1,s = the mirror pointer.  PULS does not touch CC, and SetBlkC2C3 keeps
+* it, so the carry from F$AlHRAM survives to the test below.
+alloc@              pshs      b,x
                     os9       F$AlHRAM            D = first block
                     lbsr      SetBlkC2C3          remap slot 5 and reload U (keeps D, X, CC)
-                    puls      x
                     bcc       got@
+                    leas      3,s
                     ldb       #E$MFull
                     bra       AScrnErr
-got@                clra
+got@                ldx       1,s                 the mirror pointer back
+                    clra
                     std       >gr.PDRGS+R$X       return the block
                     stb       1,x                 V.BMxBlk
                     lda       #%00000001
                     sta       ,x                  V.BMxCl_En = enable, CLUT 0
+                    lbsr      AScrnRec            record the size and the ownership
+                    leas      3,s                 done with the count and the pointer
                     tst       V.TermLive,u
                     beq       ok@                 shadow: PullBuf programs it on the switch
                     sta       >gr.b3              control byte (enable)
@@ -1084,6 +1175,39 @@ ok@                 clrb
 AScrnBad            ldb       #E$IllArg
 AScrnErr            coma
                     jmp       >GrfMod+SysRet
+
+*******************************************************************
+* AScrnRec - record in V.BMFlags what GFAScrn just allocated: the block
+*   count, so SS.FScrn frees exactly this many rather than re-deriving
+*   the number from a display mode that may have changed since, and the
+*   ownership, so a bitmap the DRIVER allocated is told apart from one
+*   SS.BmDef merely points at.
+* Entry: U = this terminal's statics, gr.PDRGS+R$Y+1 = the bitmap #, and
+*   the block count at 4,s (2 for this bsr's return address, 2 for the D
+*   saved below, then GFAScrn's own pshs b,x).
+* PRESERVES A AND B, which GFAScrn still needs: A is the control byte it
+*   is about to put in gr.b3 and B is the first block it feeds Blk2Addr.
+*******************************************************************
+AScrnRec            pshs      d
+                    lda       >gr.PDRGS+R$Y+1     bitmap #
+                    lbsr      BmFlagMask          A = its size bit
+                    tfr       a,b                 keep the size bit in B
+                    lsla
+                    lsla
+                    lsla
+                    lsla                          A = its ownership bit
+                    ora       V.BMFlags,u
+                    sta       V.BMFlags,u         the driver owns these blocks
+                    lda       4,s                 the block count asked for
+                    cmpa      #BmBlk200
+                    beq       ARsml@
+                    comb                          the 10-block size: bit clear
+                    andb      V.BMFlags,u
+                    stb       V.BMFlags,u
+                    puls      d,pc
+ARsml@              orb       V.BMFlags,u         the 8-block size: bit set
+                    stb       V.BMFlags,u
+                    puls      d,pc
 
 
 *******************************************************************
@@ -1540,9 +1664,20 @@ BmBad               comb
                     ldb       #E$IllArg
                     jmp       >GrfMod+SysRet
 
-* SetStat SS.FScrn - R$Y = bitmap # 0-2.  Frees its blocks - 8 with CLK_70
-* in V.V_MCR+1, else 10; the mirror, not the register - clears the
-* V.BMxCl_En/V.BMxBlk pair, and zeroes the bitmap registers if live.
+* SetStat SS.FScrn - R$Y = bitmap # 0-2.  Frees its blocks, clears the
+* V.BMxCl_En/V.BMxBlk mirror pair (the mirror, not the register) and
+* zeroes the bitmap registers if the terminal is live.
+*
+* IT NOW FREES EXACTLY WHAT WAS ALLOCATED.  It used to take the count
+* from the CURRENT display mode's CLK_70 bit while GFAScrn took it from
+* the CALLER'S screen type - two sources of truth for one number.  A
+* program that changed the display mode in between freed the wrong count:
+* too few leaked two blocks, and too many handed two LIVE blocks back to
+* the free pool while their owner was still using them, which is memory
+* corruption rather than a leak.  src/gfx.a and jstview both worked around
+* it by freeing their bitmaps before restoring the display mode, in a
+* comment that explained the symptom and not the cause.  The count now
+* comes from V.BMFlags, where GFAScrn recorded it.
 SSFScrn             ldd       R$Y,x
                     cmpd      #2
                     bhi       BmBad
@@ -1557,18 +1692,20 @@ SSFScrn             ldd       R$Y,x
                     jmp       >GrfMod+SysRet
 free@               clra
                     tfr       d,x                 X = first block
-                    lda       V.V_MCR+1,u
-                    bita      #CLK_70
-                    beq       ten@
-                    ldb       #8
+                    lda       >gr.b2              bitmap #
+                    lbsr      BmFlagMask          A = its size bit in V.BMFlags
+                    anda      V.BMFlags,u
+                    beq       ten@                clear = the 10-block size
+                    ldb       #BmBlk200
                     bra       del@
-ten@                ldb       #10
+ten@                ldb       #BmBlk240
 del@                pshs      y
                     os9       F$DelRAM
                     lbsr      SetBlkC2C3          remap slot 5 and reload U
                     puls      y
                     clr       ,y                  both mirror bytes, or PullBuf
                     clr       1,y                 re-enables a freed bitmap
+                    lbsr      BmFlagClr           no longer owned, no longer small
                     tst       V.TermLive,u
                     lbne      GFBmFree            live: zero the registers
                     lbra      StatOK
@@ -2142,6 +2279,41 @@ GFBmX               lbsr      SetBlkC0C1
                     mul
                     addd      #$3000
                     tfr       d,x
+                    rts
+
+*******************************************************************
+* V.BMFlags helpers.  One byte holds, per bitmap, its size (bits 0-2,
+* set = the 8-block 320x200 size) and its ownership (bits 4-6, set =
+* the DRIVER allocated the blocks and must free them).  See the comment
+* beside V.BMFlags in wildbits_vtio.d for why both are needed.
+*
+* BmFlagMask - A = bitmap # (0-2) in, A = BM.Small shifted left by it out.
+*   Shift left another four for the ownership bit.  B, X, Y, U kept.
+*******************************************************************
+BmFlagMask          pshs      b
+                    ldb       #BM.Small
+                    tsta
+                    beq       bfmx@
+bfml@               lslb
+                    deca
+                    bne       bfml@
+bfmx@               tfr       b,a
+                    puls      b,pc
+
+* BmFlagClr - clear BOTH of bitmap gr.b2's bits, so a freed bitmap is
+*   neither owned nor remembered as the small size.  U = the statics.
+BmFlagClr           lda       >gr.b2              bitmap #
+                    bsr       BmFlagMask          A = its size bit
+                    tfr       a,b
+                    lsla
+                    lsla
+                    lsla
+                    lsla                          A = its ownership bit
+                    pshs      a
+                    orb       ,s+                 B = both bits
+                    comb
+                    andb      V.BMFlags,u
+                    stb       V.BMFlags,u
                     rts
 
 SetBlkC0C1          pshs      cc
