@@ -2521,34 +2521,66 @@ SCF1                clr       ,x
 SCFX                puls      cc,d,x,pc
 
 *******************************************************************
-* SetStat SS.TsSet - define tile set R$Y (0-7) from the caller's 4-byte
-*   record at R$X, in register order: CFG (bit 7 SQUARE), ADDR hi, ADDR mid,
-*   ADDR lo.  The V.TSn mirror bytes hold this register order (the
-*   AddrH/AddrM/AddrL/SQR field names predate it).
-* The mirror (V.TSn) always; the registers
-*   at $C0 $1180+4*n only when live.  PullBuf reprograms the tile set
-*   registers from the mirror on a switch.
+* SetStat SS.TsSet - define tile set R$Y from REGISTERS.  No caller
+*   buffer: three values need no record, so this call maps nothing.
+*   R$Y  high byte = CFG (bit 3 SQUARE - bits 7:4 are wired to nothing
+*        in the core), low byte = the tile set number 0-7
+*   R$X  the block holding the start of the tile set, 1-255.  Block 0
+*        clears the tile set, and the offset is then ignored.
+*   R$U  the offset WITHIN that block, $0000-$1FFF.  Any offset is
+*        legal: TyVKY_TileMap_SM.v adds the base at full width with no
+*        alignment.
+* No program holds a 24-bit physical address - it holds a block and an
+*   offset - so this is the only place the conversion happens.  The
+*   V.TSn mirror keeps the four bytes in REGISTER order (CFG, ADDR
+*   hi/mid/lo) so PullBuf's straight copy is unchanged; the registers at
+*   $C0 $1180+4*n are written only when live.  See docs/tile-api.md.
 *******************************************************************
-SSTsSet             ldd       R$Y,x               tile set #
-                    cmpd      #7
+SSTsSet             ldb       R$Y+1,x             tile set #
+                    cmpb      #7
                     bhi       TsBad
                     lslb
                     lslb                          B = 4*n
                     pshs      b                   ,s = 4*n
-                    ldd       R$X,x
-                    ldy       #4
-                    lbsr      MapCallBuf          U = record through slot 1
-                    bcs       TsOff
+                    ldd       R$U,x               the offset
+                    cmpd      #$1FFF
+                    bhi       TsOff
+                    ldd       R$X,x               the block
+                    cmpd      #$FF
+                    bhi       TsOff
                     ldy       >gr.U5              this terminal's statics (slot 5)
                     leay      V.TS0AddrH,y
                     ldb       ,s
-                    leay      b,y                 Y -> V.TSnAddrH
-                    ldb       #4
-loop@               lda       ,u+
-                    sta       ,y+
-                    decb
-                    bne       loop@
-                    ldu       >gr.U5
+                    leay      b,y                 Y -> V.TSn
+                    lda       R$Y,x               CFG
+                    sta       ,y
+                    ldb       R$X+1,x             B = block
+                    bne       tsad@
+                    clr       1,y                 block 0 clears the set
+                    clr       2,y
+                    clr       3,y
+                    bra       tslv@
+* address = block * $2000 + offset, so ADDR hi = block >> 3, ADDR mid =
+* (block & 7) << 5 with the offset's high byte (<= $1F) in the low bits,
+* and ADDR lo is the offset's low byte unchanged.
+tsad@               tfr       b,a
+                    lsra
+                    lsra
+                    lsra                          A = block >> 3
+                    sta       1,y                 ADDR hi
+                    andb      #7
+                    lslb
+                    lslb
+                    lslb
+                    lslb
+                    lslb                          B = (block & 7) << 5
+                    lda       R$U,x               the offset's high byte
+                    pshs      a
+                    orb       ,s+
+                    stb       2,y                 ADDR mid
+                    lda       R$U+1,x
+                    sta       3,y                 ADDR lo
+tslv@               ldu       >gr.U5
                     tst       V.TermLive,u
                     beq       done@
                     lbsr      SetBlkC0C1          $C0 at $2000
@@ -2570,10 +2602,14 @@ TsBad               comb
 
 *******************************************************************
 * SetStat SS.TmSet - define tile map R$Y (0-2) from the caller's 12-byte
-*   record at R$X, in register order: CTRL (bit 0 enable, bit 4 TILE_SIZE
-*   1=8x8), ADDR hi/mid/lo, SIZE_X (2), SIZE_Y (2), X position (2), Y
-*   position (2); the 16-bit fields are high byte first.  The V.TMn mirror
-*   holds this order (its MapX/RSRV/MapY/RESRV field names predate it).
+*   record at R$X: CTRL (bit 0 enable, bit 4 TILE_SIZE 1=8x8), then
+*   BLOCK and a 2-byte OFFSET within it, SIZE_X (2), SIZE_Y (2), X
+*   position (2), Y position (2); the 16-bit fields are high byte first.
+*   No program holds a 24-bit physical address, so bytes 1-3 are a block
+*   and an offset and this handler converts them.  The V.TMn mirror keeps
+*   the REGISTER order (its MapX/RSRV/MapY/RESRV names predate it), so
+*   PullBuf's straight copy is unchanged.  SIZE_X/Y are 10-bit fields,
+*   up to 1024 tiles.  See docs/tile-api.md.
 * The mirror (V.TMn, same order) always; the registers at $C0 $1100+12*n
 *   only when live.  PullBuf reprograms the
 *   tile map registers from the mirror on a switch.
@@ -2597,7 +2633,33 @@ loop@               lda       ,u+
                     sta       ,y+
                     decb
                     bne       loop@
-                    ldu       >gr.U5
+* Y is now past V.TMn+12.  Bytes 1-3 arrived as block, offset hi, offset
+* lo; turn them into the address the hardware wants.  ADDR lo needs no
+* work - the offset's low byte IS the address's low byte.
+                    ldd       -10,y               the offset
+                    cmpd      #$1FFF
+                    bhi       TmOff
+                    ldb       -11,y               B = block
+                    beq       tmz@
+                    tfr       b,a
+                    lsra
+                    lsra
+                    lsra                          A = block >> 3
+                    andb      #7
+                    lslb
+                    lslb
+                    lslb
+                    lslb
+                    lslb                          B = (block & 7) << 5
+                    orb       -10,y               in the offset's high byte
+                    std       -11,y               ADDR hi and ADDR mid
+                    bra       tmlv@
+* Block 0 is address 0.  A record of twelve zeroes is how a program turns
+* a map off, so this must not be an error.
+tmz@                clr       -11,y
+                    clr       -10,y
+                    clr       -9,y
+tmlv@               ldu       >gr.U5
                     tst       V.TermLive,u
                     beq       done@
                     lbsr      SetBlkC0C1          $C0 at $2000

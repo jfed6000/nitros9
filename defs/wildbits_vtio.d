@@ -130,15 +130,18 @@ V.CLUT              RMB       1         which CLUTs are active 00001111
 * So only need 8 bytes per tile map.  In the Map each tile is 2 bytes
 * byte0=Tile number, byte1=CLUT+Tile Set. So relationship between Tile Map
 * and Tile Set is set in the actual tile map data, not here.
-* A tile map could be 2.4K (40x30) to 132K (256x256)
+* A tile map could be 2.4K (40x30) to 132K (256x256).  The size fields
+* are 10 bits wide in the core (TinyVicky_TL_Registers.v), not 8, so a
+* map may be up to 1024 tiles on a side; the RSRV/RESRV bytes beside
+* MapX/MapY are the high halves, not padding.
 
 V.TM0               RMB       1         bit4 is yile size (1=8x8,0=16x16) bit0 is enable
 V.TM0AddrH          RMB       1
 V.TM0AddrM          RMB       1
 V.TM0AddrL          RMB       1
-V.TM0MapX           RMB       1         map size X (max 255)
+V.TM0MapX           RMB       1         map size X low byte (the field is 10-bit: max 1024)
 V.TM0RSRV1          RMB       1
-V.TM0MapY           RMB       1         map size Y (max 255)
+V.TM0MapY           RMB       1         map size Y low byte (10-bit: max 1024)
 V.TM0RESRV2         RMB       1
 V.TM0ScrlX          RMB       2         2 bytes for scroll X info
 V.TM0ScrlY          RMB       2         2 bytes for scroll Y info
@@ -147,9 +150,9 @@ V.TM1               RMB       1         bit4 is yile size (1=8x8,0=16x16) bit0 i
 V.TM1AddrH          RMB       1
 V.TM1AddrM          RMB       1
 V.TM1AddrL          RMB       1
-V.TM1MapX           RMB       1         map size X (max 255)
+V.TM1MapX           RMB       1         map size X low byte (10-bit: max 1024)
 V.TM1RSRV1          RMB       1
-V.TM1MapY           RMB       1         map size Y (max 255)
+V.TM1MapY           RMB       1         map size Y low byte (10-bit: max 1024)
 V.TM1RESRV2         RMB       1
 V.TM1ScrlX          RMB       2         2 bytes for scroll X info
 V.TM1ScrlY          RMB       2         2 bytes for scroll Y info
@@ -158,9 +161,9 @@ V.TM2               RMB       1         bit4 is yile size (1=8x8,0=16x16) bit0 i
 V.TM2AddrH          RMB       1
 V.TM2AddrM          RMB       1
 V.TM2AddrL          RMB       1
-V.TM2MapX           RMB       1         map size X (max 255)
+V.TM2MapX           RMB       1         map size X low byte (10-bit: max 1024)
 V.TM2RSRV1          RMB       1
-V.TM2MapY           RMB       1         map size Y (max 255)
+V.TM2MapY           RMB       1         map size Y low byte (10-bit: max 1024)
 V.TM2RESRV2         RMB       1
 V.TM2ScrlX          RMB       2         2 bytes for scroll X info
 V.TM2ScrlY          RMB       2         2 bytes for scroll Y info
