@@ -225,7 +225,7 @@ SS.TsKill           equ       $F3                 clear a tile set and free its 
 * Tile maps
 SS.TmSet            equ       $F4                 R$X = 12-byte record, R$Y = tile map #
 SS.TmAlloc          equ       $F6                 allocate a tile map (reserved, no handler)
-SS.TmScrl           equ       $F8                 R$X = X scroll, R$Y = tile map #, R$U = Y scroll (reserved, no handler)
+SS.TmScrl           equ       $F8                 R$Y = tile map #, R$X = X scroll, R$U = Y scroll
 SS.TmKill           equ       $FD                 clear a tile map and free its memory (reserved, no handler)
 * $EF, $F1, $F2, $F5, $F7, $F9-$FC are FREE (user, 2026-09-20).  They were
 * TsAddr, TsLoad, TsSave, TmAddr, TmCell, TmOn, TmOff, TmLoad and TmSave -
@@ -238,9 +238,10 @@ SS.TmKill           equ       $FD                 clear a tile map and free its 
 * it turns a map on or off with bit 0 of the CTRL byte in a record it
 * already holds.  The four Alloc/Kill codes above stay reserved because
 * asset allocation is meant to move into the driver - only it can reach
-* F$AlHRAM, which is registered F$AlHRAM+SysState - and SS.TmScrl stays
-* because scrolling is the one tile operation with no program-owned buffer
-* behind it: the scroll position lives only in these registers.
+* F$AlHRAM, which is registered F$AlHRAM+SysState.  SS.TmScrl is
+* implemented (2026-09-20): scrolling is the one tile operation with no
+* program-owned buffer behind it, because the scroll position lives only in
+* these registers.
 * The four tile maps in the rc16 registers are NOT four usable layers: the
 * core enables tile maps 0-2 only, and there is no scan address for a
 * fourth, so SS.TmSet's limit of 2 matches the hardware.

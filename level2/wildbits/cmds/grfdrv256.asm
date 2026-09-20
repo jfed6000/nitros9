@@ -1166,6 +1166,8 @@ SetSttTbl           fcb       SS.AScrn
                     fdb       GrfMod+SSTsSet
                     fcb       SS.TmSet
                     fdb       GrfMod+SSTmSet
+                    fcb       SS.TmScrl
+                    fdb       GrfMod+SSTmScrl
                     fcb       SS.ClutWrite
                     fdb       GrfMod+SSClutWrite
                     fcb       0
@@ -2679,6 +2681,54 @@ done@               leas      1,s
 TmOff               leas      1,s
 TmBad               comb
                     ldb       #E$IllArg
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* SetStat SS.TmScrl - scroll tile map R$Y (0-2).
+*   R$Y = tile map # 0-2
+*   R$X = X scroll, the layout of record bytes 8-9
+*   R$U = Y scroll, record bytes 10-11
+* This is the ONE tile operation with no program-owned buffer behind
+*   it.  Everything else a program does to a tile map - the cells, the
+*   pixels, the size - it does to its own memory, and the call only
+*   says where that memory is.  The scroll position exists nowhere but
+*   these registers, so without this call a scrolling game has to
+*   re-send the whole 12-byte SS.TmSet record through MapCallBuf, 60
+*   times a second, to change two bytes.  tmtest2 in the joust tree
+*   measured that at about 660 us a frame for three layers.
+* The mirror (V.TMnScrlX/Y) always; the registers at $C0 $1108+12*n
+*   only when live.  PullBuf reprograms the whole 36-byte tile map
+*   image from the mirror on a switch, so the scroll comes back with
+*   everything else and nothing extra is needed there.
+*******************************************************************
+SSTmScrl            ldd       R$Y,x               tile map #
+                    cmpd      #2
+                    bhi       TmBad
+                    lda       #12
+                    mul                           B = 12*n, n is 0-2
+                    pshs      b                   ,s = 12*n
+                    ldy       >gr.U5              this terminal's statics
+                    leay      V.TM0ScrlX,y
+                    ldb       ,s
+                    leay      b,y                 Y -> V.TMnScrlX
+                    ldd       R$X,x               X scroll
+                    std       ,y
+                    ldd       R$U,x               Y scroll
+                    std       2,y
+                    ldu       >gr.U5
+                    tst       V.TermLive,u
+                    beq       tscx@
+                    lbsr      SetBlkC0C1          $C0 at $2000
+                    ldu       >gr.U5
+                    leau      V.TM0ScrlX,u
+                    ldb       ,s
+                    leau      b,u
+                    ldy       #$3108
+                    leay      b,y
+                    ldd       #4
+                    lbsr      CpyBlk
+tscx@               leas      1,s
+                    clrb
                     jmp       >GrfMod+SysRet
 
 *******************************************************************
