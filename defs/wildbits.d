@@ -159,10 +159,14 @@ S$WinBg             equ       $81                 this terminal went background
 S$WinFg             equ       $82                 this terminal came forward
 
 * Graphics Get/SetStats for bitmaps, CLUTs, sprites, tile sets and tile maps
-* (grfdrv256).  Every code is assigned now so each group stays contiguous;
-* codes without a handler return E$UnkSvc.  The groups sit in the free holes:
-* $C7-$CB are VRN (os9.d), $D2 is sc16550's SS.DvrID, $E2 is SS.Fuji
-* (drivewire.d).  Spare: $FE-$FF ($E1 is SS.WSig, above).
+* (grfdrv256).  Codes without a handler return E$UnkSvc.  The groups sit in
+* the free holes: $C7-$CB are VRN (os9.d), $D2 is sc16550's SS.DvrID, $E2 is
+* SS.Fuji (drivewire.d).
+* Spare: $D0 (was SS.KyDwn), $D4-$E0 (the sprite codes the registered table
+* made unnecessary) and $FE-$FF.  $E1 is SS.WSig, above.
+* The sprite group is no longer contiguous, and that is the point: a code
+* with no handler is a promise nobody made.  The rest of the groups are
+* still reserved names awaiting the goal 2 trim (docs/driver-work.md).
 * CLUTs
 SS.ClutLoad         equ       $CC                 load a CLUT from a file
 SS.ClutCopy         equ       $CD                 load a whole CLUT from caller memory
@@ -176,20 +180,13 @@ SS.ClutWrite        equ       $CF                 CLUT entries from a caller buf
 * SS.SprSet ($D3, records from a caller buffer) is GONE: it was a second
 * writer the driver could not reproduce on a switch.
 SS.SprPush          equ       $D1                 R$Y = first record, R$U = count: that range of the registered table to the screen
-SS.SprReg           equ       $D3                 R$X = the caller's record table (0 = deregister), R$U = records 1-128
-SS.SprAlloc         equ       $D4                 allocate sprite image memory
-SS.SprACfg          equ       $D5                 configure all sprites
-SS.SprCfg           equ       $D6                 configure one sprite
-SS.SprXY            equ       $D7                 move one sprite
-SS.SprOn            equ       $D8                 enable one sprite
-SS.SprOff           equ       $D9                 disable one sprite
-SS.SprLayer         equ       $DA                 set one sprite's layer
-SS.SprClut          equ       $DB                 set one sprite's CLUT
-SS.SprLoad          equ       $DC                 load one sprite image from a file
-SS.SprSave          equ       $DD                 save one sprite image to a file
-SS.SprSLoad         equ       $DE                 load a sprite sheet
-SS.SprSSave         equ       $DF                 save a sprite sheet
-SS.SprKill          equ       $E0                 clear sprites and free their memory
+SS.SprReg           equ       $D3                 R$X = the table (auto: R$Y = 0), R$Y = blocks (manual), R$U = records 1-128, 0 = give it up
+* $D4-$E0 were thirteen more sprite codes - SprAlloc, SprACfg, SprCfg,
+* SprXY, SprOn, SprOff, SprLayer, SprClut, SprLoad, SprSave, SprSLoad,
+* SprSSave, SprKill - reserved in 2026-03 for a per-sprite API that the
+* registered table made unnecessary: a program moves, shows, hides and
+* re-images a sprite by writing its own record and pushing the range.
+* None of them ever had a handler.  They are free (user, 2026-09-20).
 * Bitmaps
 SS.BmAlloc          equ       $E3                 allocate a bitmap
 SS.BmBlk            equ       $E4                 GetStat: bitmap first block and control byte
