@@ -1186,11 +1186,23 @@ BmAllocGo           sta       >gr.b3              the control byte to leave
                     std       >gr.PDRGS+R$X       return the existing block
                     ldb       #E$WADef
                     bra       AScrnErr
-AScrnNew            ldb       >gr.PDRGS+R$X+1     screen type
-                    beq       ten@
-                    ldb       #BmBlk200
-                    bra       alloc@
-ten@                ldb       #BmBlk240
+* ALWAYS TEN BLOCKS (user, 2026-09-20).  R$X's screen type is still
+* ACCEPTED AND IGNORED - every existing caller passes 0 anyway.
+*
+* The type is only a REQUEST.  How many rows VICKY actually fetches comes
+* from the video mode, independently: TinyVickyCoreModule.v:1000 counts to
+* 400 or 480 lines by Video_Mode_i[0] and halves that to 200 or 240 rows,
+* against a hard-wired 320-byte stride.  So the two can disagree, and the
+* disagreement is not symmetric.  Ten blocks displayed at 70 Hz wastes two
+* of them.  EIGHT BLOCKS DISPLAYED AT 60 HZ makes VICKY read 12,800 bytes
+* PAST THE END of the allocation and put whoever owns them on the screen.
+*
+* It cannot be settled at allocation time, because the mode may legally
+* change afterwards - joust allocates its bitmaps in GfxInit and sets the
+* mode last.  Over-allocating is the only choice under which the wrong
+* combination cannot exist, and it costs two blocks of about 2 MB in the
+* mode nothing in either tree asks for: every caller passes type 0.
+AScrnNew            ldb       #BmBlk240
 * The block count is kept on the stack across the allocation because
 * SS.FScrn now frees exactly this number instead of re-deriving it from
 * the display mode, which may have changed in between.  ,s = the count,
