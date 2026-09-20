@@ -36,7 +36,12 @@
 * Comment
 * ------------------------------------------------------------------
 *  1       2026/09/20  Claude Opus 5 / John Federico
-* Written the same day as the calls it tests; never run at that point.
+* Written the same day as the calls it tests.  CONFIRMED ON K2 HARDWARE
+* the same day: the white bar came out flush with the top of the screen,
+* so SS.BmDef's offset is genuinely honoured; H and S hid and restored the
+* picture; SS.BmBlk reported bitmap 1 as control $00, defined but not
+* enabled; SS.GfxFree refused the driver's blocks; and the slab freed
+* afterwards, so SS.BmKill had left it alone.
 
                     nam       bmtest
                     ttl       new bitmap call test
