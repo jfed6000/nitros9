@@ -81,6 +81,7 @@ rowsleft            rmb       2         fill: rows left
 runlen              rmb       2         fill: bytes in this run
 barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
+hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 keybuf              rmb       1
 linebuf             rmb       80
                     rmb       300       stack
@@ -95,6 +96,7 @@ name                fcs       /bmtest/
 start               clr       gotslab,u
                     clr       gotdrv,u
                     clr       defined,u
+                    clr       hires,u
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -199,11 +201,11 @@ Loop                leax      keybuf,u
                     ldy       #1
                     clra                          path 0 - stdin
                     os9       I$Read
-                    bcs       Quit                EOF or a signal: get out
+                    lbcs      Quit                EOF or a signal: get out
                     lda       keybuf,u
                     anda      #$5F                fold to upper case
                     cmpa      #'Q
-                    beq       Quit
+                    lbeq      Quit
                     cmpa      #'H
                     beq       DoHide
                     cmpa      #'S
@@ -214,6 +216,12 @@ Loop                leax      keybuf,u
                     beq       DoKill
                     cmpa      #'G
                     lbeq      DoGuard
+                    cmpa      #'4
+                    lbeq      DoHi
+                    cmpa      #'8
+                    lbeq      DoLo
+                    cmpa      #'R
+                    lbeq      DoRedraw
                     bra       Loop
 
 * H - hide it.  Enable off; CLUT, HIRES4 and GROUP all left alone, and
@@ -253,13 +261,50 @@ DoKill              ldy       #0
                     os9       I$SetStt
                     bcc       kok@
                     lbsr      ShowErr
-                    bra       Loop
+                    lbra      Loop
 kok@                clr       defined,u
                     leax      KilTxt,pcr
                     lbsr      PutLine
                     lbra      Loop
 
 Quit                lbra      Cleanup
+
+* 4 and 8 - the 640x240 4bpp mode, on and off, WITHOUT touching the
+* pixels.  One byte becomes two dots, high nibble on the left, and nibble
+* 0 is transparent per dot - so the 8bpp bars, whose bytes are 1 to 15,
+* reappear as half-width stripes of colour alternating with transparent.
+* That is the whole demonstration.  R then redraws them solid.
+*
+* The mode costs no memory: the stride is a hard-wired 320 bytes and the
+* line counter is halved, so 640x240 is the same 76,800 bytes as 320x240.
+* Nothing is reallocated here, and nothing needs to be.
+*
+* Palette GROUP stays 0, which is why this CLUT needs no changing: the
+* colour is entry (CLUT mod 4)*256 + GROUP*16 + nibble, so with GROUP 0
+* nibble n is simply entry n - the same sixteen entries the bars use.
+DoHi                lda       #1
+                    sta       hires,u
+                    lbsr      SetMode
+                    leax      HiTxt,pcr
+                    bra       ModeRep
+DoLo                clr       hires,u
+                    clra
+                    lbsr      SetMode
+                    leax      LoTxt,pcr
+ModeRep             bcc       mrok@
+                    lbsr      ShowErr
+                    lbra      Loop
+mrok@               lbsr      PutLine
+                    lbra      Loop
+
+* R - lay the bars down again to suit whichever mode is set now.
+DoRedraw            lbsr      FillBm
+                    bcs       rerr@
+                    leax      RedrTxt,pcr
+                    lbsr      PutLine
+                    lbra      Loop
+rerr@               lbsr      ShowErr
+                    lbra      Loop
 
 ********************************************************************
 * G - the ownership guard.  Ask SS.GfxFree to free bitmap 1's blocks,
@@ -387,6 +432,22 @@ SetCfg              tfr       d,x                 X = enable:CLUT
                     rts
 
 ********************************************************************
+* SetMode - SS.BmCfg on bitmap 0, the MODE fields only.  A = HIRES4
+*   (0 or 1); palette GROUP is always 0.  Enable and CLUT are left alone,
+*   which is the $FF convention doing exactly what it is for.
+********************************************************************
+SetMode             clrb                          GROUP 0
+                    pshs      u
+                    tfr       d,u                 R$U = HIRES4:GROUP
+                    ldx       #$FFFF              enable and CLUT untouched
+                    ldy       #0                  bitmap 0
+                    lda       #BMPATH
+                    ldb       #SS.BmCfg
+                    os9       I$SetStt
+                    puls      u
+                    rts
+
+********************************************************************
 * RepBm - SS.BmBlk for bitmap A, reported.
 ********************************************************************
 * THE CALL COMES FIRST.  StartLine puts the line pointer in Y, which is
@@ -474,6 +535,18 @@ fgot@               std       runlen,u
                     ldx       bmptr,u
                     tfr       d,y                 Y = the run length
                     lda       colour,u
+* In 640x240 one byte is TWO dots, so a solid bar wants the colour in
+* both nibbles.  Written as the plain colour it would come out as the
+* left dot transparent and the right dot coloured - which is exactly what
+* pressing 4 without redrawing shows, and is the proof of the split.
+                    tst       hires,u
+                    beq       fput@
+                    pshs      a
+                    lsla
+                    lsla
+                    lsla
+                    lsla
+                    ora       ,s+
 fput@               sta       ,x+
                     leay      -1,y
                     bne       fput@
@@ -657,7 +730,13 @@ DrvTxt              fcc       /SS.BmAlloc gave bitmap 1 block $/
                     fcb       $00
 RdyTxt              fcc       /Bitmap 0 is at offset $1000 in that slab.  THE TOP BAR MUST BE WHITE./
                     fcb       C$CR
-KeyTxt              fcc       /H hide  S show  B blocks  K kill bitmap 0  G guard test  Q quit/
+KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  K kill  G guard  Q quit/
+                    fcb       C$CR
+HiTxt               fcc       /  640x240 4bpp on - bars should halve into colour and clear stripes/
+                    fcb       C$CR
+LoTxt               fcc       /  back to 320x240 8bpp/
+                    fcb       C$CR
+RedrTxt             fcc       /  redrawn for the mode that is set now/
                     fcb       C$CR
 HidTxt              fcc       /  hidden - the pixels are still there/
                     fcb       C$CR
