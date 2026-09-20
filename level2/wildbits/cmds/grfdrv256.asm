@@ -2155,7 +2155,22 @@ seed@               lda       ,x+
 * BACKGROUND_COLOR_B/G/R.  Text mode on, 80x60 (no DBL_X/DBL_Y), no
 * layers, border off and sized 0, black background.
 DispRegs            fcb       Mstr_Ctrl_Text_Mode_En,$00
-                    fcb       $00,$00
+* VKY_LAYER_CTRL: $FF,$FF, which is source 7 in each of the three 3-bit
+* fields.  The core's default arm reads 3 and 7 as neither a bitmap nor a
+* tile map, so every layer starts DRAWING NOTHING.
+*
+* This used to be $00,$00 - source 0 in all three, which is BITMAP 0.  So
+* every layer pointed at bitmap 0 and merely enabling it put it on all
+* three.  Nothing noticed because every program assigns its layers and
+* turns FX_BM on last, but it made the enable bit a proxy for "shows",
+* which it should not be: a bitmap appears only when its enable bit is
+* set AND a layer points at it AND FX_BM is on, and those are now three
+* independent things.  That is what makes SS.BmAlloc safe to leave a
+* bitmap defined but off.
+*
+* The hardware's own reset value is $40,$15 - bitmap 0, tile map 0, tile
+* map 1 - so the driver was overriding a sane default with a worse one.
+                    fcb       $FF,$FF
                     fcb       $00,$00,$00,$00
                     fcb       $00,$00
                     fcb       $00,$00,$00
@@ -2309,6 +2324,14 @@ inhcp@              ldb       ,x+
                     puls      x,u
                     bra       inhrun@
 inhdone@            puls      cc
+* The display mode is inherited; THE LAYER ASSIGNMENT IS NOT.  A new
+* terminal has no bitmaps and no tile maps - GF.TermNew wipes that whole
+* mirror above - so inheriting the console's layers would point them at
+* things this terminal does not have, and the moment it allocated bitmap
+* 0 it would appear on whichever layers the last program happened to
+* leave aimed at it.  Source 7 in all three fields draws nothing.
+                    ldd       #$FFFF
+                    std       V.V_LayerCTL,u
 * PushCore remaps slots 1/2 and exits U = gr.U5.  Its text and colour
 * copies into the new buffer are blanked straight after.
 TNPush              lbsr      PushCore
