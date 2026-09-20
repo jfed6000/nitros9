@@ -203,7 +203,15 @@ Loop                leax      keybuf,u
                     os9       I$Read
                     lbcs      Quit                EOF or a signal: get out
                     lda       keybuf,u
-                    anda      #$5F                fold to upper case
+* The DIGITS are tested BEFORE the case fold, because the fold is for
+* letters only and destroys them: '4' is $34 and $34 & $5F is $14, so a
+* cmpa #'4 after it can never match.  That cost one hardware run - every
+* letter key worked and only 4 and 8 did nothing at all.
+                    cmpa      #'4
+                    lbeq      DoHi
+                    cmpa      #'8
+                    lbeq      DoLo
+                    anda      #$5F                letters fold to upper case
                     cmpa      #'Q
                     lbeq      Quit
                     cmpa      #'H
@@ -216,13 +224,9 @@ Loop                leax      keybuf,u
                     beq       DoKill
                     cmpa      #'G
                     lbeq      DoGuard
-                    cmpa      #'4
-                    lbeq      DoHi
-                    cmpa      #'8
-                    lbeq      DoLo
                     cmpa      #'R
                     lbeq      DoRedraw
-                    bra       Loop
+                    lbra      Loop
 
 * H - hide it.  Enable off; CLUT, HIRES4 and GROUP all left alone, and
 * the pixels are untouched, so S must bring back exactly this picture.
