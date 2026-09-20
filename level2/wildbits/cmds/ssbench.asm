@@ -71,9 +71,10 @@ blk                 rmb       2         F$AllRAM's block, for the F$MapBlk test
 tstptr              rmb       2         the current test's routine
 linebuf             rmb       80        the line being built
 padbuf              rmb       8         SS.Joy mode 6's four words
-tmrec               rmb       12        a tile map record, left all zero: CTRL 0 keeps map 2
-*                             disabled and block 0 means address 0, so timing
-*                             SS.TmSet changes nothing a text terminal shows
+tmrec               rmb       12        a tile map record, ZEROED AT START (see below) so
+*                             CTRL 0 keeps map 2 disabled and block 0 means
+*                             address 0: timing SS.TmSet changes nothing a text
+*                             terminal shows.  It must stay directly before recs
 recs                rmb       1024      128 zero sprite records, registered with the driver
                     rmb       300       stack
 size                equ       .
@@ -81,8 +82,12 @@ size                equ       .
 name                fcs       /ssbench/
                     fcb       edition
 
-start               leax      recs,u              zero the records
-                    ldd       #1024
+* The data area arrives with GARBAGE, not zeroes - which is why the
+* records are cleared here.  tmrec sits immediately before them and is
+* cleared by the same loop: a random offset in it is rejected by
+* SS.TmSet's own range check (E$IllArg), which is how this was found.
+start               leax      tmrec,u             zero tmrec and the records
+                    ldd       #12+1024
 clr@                clr       ,x+
                     subd      #1
                     bne       clr@
