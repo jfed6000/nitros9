@@ -165,9 +165,11 @@ V.TM2RESRV2         RMB       1
 V.TM2ScrlX          RMB       2         2 bytes for scroll X info
 V.TM2ScrlY          RMB       2         2 bytes for scroll Y info
 
-V.TM0Blk            RMB       1         starting block# of Tile Map
-V.TM1Blk            RMB       1         starting block# of tile set
-V.TM2Blk            RMB       1         starting block# of tile set
+* V.TM0Blk-V.TM2Blk were here: the map's first block, computed and stored
+* by SSTmSet and read by NOTHING.  Deleted 2026-09-20.  Unlike a bitmap,
+* whose register takes a block and whose mirror is the only record of it,
+* a tile map register holds the whole address, so the block is derivable
+* and was never needed.  11 bytes back into the 250-byte DSS budget.
 * TILE SETS - there are 8 tile sets.  Tile Set registers contain a physical address, and
 * a Square bit to determine if Tile Set is LINEAR or SQUARE
 * Tile Sets are either 16K (8x8) or 64K (16x16)
@@ -214,14 +216,7 @@ V.TS7AddrL          RMB       1
 V.TS7SQR            RMB       1         square or linear (bit 3)
 
 
-V.TS0Blk            RMB       1         starting block# of tile set
-V.TS1Blk            RMB       1         starting block# of tile set
-V.TS2Blk            RMB       1         starting block# of tile set
-V.TS3Blk            RMB       1         starting block# of tile set
-V.TS4Blk            RMB       1         starting block# of tile set
-V.TS5Blk            RMB       1         starting block# of tile set
-V.TS6Blk            RMB       1         starting block# of tile set
-V.TS7Blk            RMB       1         starting block# of tile set
+* V.TS0Blk-V.TS7Blk were here, and went the same way.
 * GRAPHICS CURSORS,LINES, COLORS
 V.GCX               RMB       2         graphics cursor X
 V.GCY               RMB       1         graphics cursor Y

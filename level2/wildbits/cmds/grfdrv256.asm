@@ -2525,7 +2525,7 @@ SCFX                puls      cc,d,x,pc
 *   record at R$X, in register order: CFG (bit 7 SQUARE), ADDR hi, ADDR mid,
 *   ADDR lo.  The V.TSn mirror bytes hold this register order (the
 *   AddrH/AddrM/AddrL/SQR field names predate it).
-* The mirror (V.TSn and V.TSnBlk = address / $2000) always; the registers
+* The mirror (V.TSn) always; the registers
 *   at $C0 $1180+4*n only when live.  PullBuf reprograms the tile set
 *   registers from the mirror on a switch.
 *******************************************************************
@@ -2548,20 +2548,6 @@ loop@               lda       ,u+
                     sta       ,y+
                     decb
                     bne       loop@
-                    lda       -3,y                ADDR hi
-                    ldb       -2,y                ADDR mid
-                    lslb
-                    rola
-                    lslb
-                    rola
-                    lslb
-                    rola                          A = first block
-                    ldy       >gr.U5
-                    leay      V.TS0Blk,y
-                    ldb       ,s
-                    lsrb
-                    lsrb                          B = n
-                    sta       b,y
                     ldu       >gr.U5
                     tst       V.TermLive,u
                     beq       done@
@@ -2588,8 +2574,8 @@ TsBad               comb
 *   1=8x8), ADDR hi/mid/lo, SIZE_X (2), SIZE_Y (2), X position (2), Y
 *   position (2); the 16-bit fields are high byte first.  The V.TMn mirror
 *   holds this order (its MapX/RSRV/MapY/RESRV field names predate it).
-* The mirror (V.TMn, same order, and V.TMnBlk = address / $2000) always;
-*   the registers at $C0 $1100+12*n only when live.  PullBuf reprograms the
+* The mirror (V.TMn, same order) always; the registers at $C0 $1100+12*n
+*   only when live.  PullBuf reprograms the
 *   tile map registers from the mirror on a switch.
 *******************************************************************
 SSTmSet             ldd       R$Y,x               tile map #
@@ -2611,18 +2597,6 @@ loop@               lda       ,u+
                     sta       ,y+
                     decb
                     bne       loop@
-                    lda       -11,y               ADDR hi
-                    ldb       -10,y               ADDR mid
-                    lslb
-                    rola
-                    lslb
-                    rola
-                    lslb
-                    rola                          A = first block
-                    ldy       >gr.U5
-                    leay      V.TM0Blk,y
-                    ldb       ,s
-                    sta       b,y
                     ldu       >gr.U5
                     tst       V.TermLive,u
                     beq       done@
