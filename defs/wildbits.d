@@ -149,6 +149,18 @@ JY.L                equ       %00000100           high byte, SNES
 JY.R                equ       %00001000           high byte, SNES
 SS.WSig             equ       $E1                 SetStat: signal me when this terminal goes background/forward
 
+* Aliases: two codes adopted from the CoCo whose os9.d names describe
+* nothing they do on this hardware.  SS.PScrn is "Polymorph Screen into
+* different screen type" there and sets which source feeds one display
+* layer here; SS.DScrn is "Display a screen allocated by SS.AScrn" there
+* and is the VICKY master control register here, Get and Set.  The
+* originals stay valid and stay in use - level2/coco3 uses both codes
+* with their CoCo meanings - but new Wildbits code should use these.
+* Defined here rather than in os9.d for exactly that reason: coco3
+* modules do not include this file.
+SS.Layer            equ       SS.PScrn            R$X = layer 0-2, R$Y = source: 0-2 bitmap, 4-6 tile map
+SS.MCR              equ       SS.DScrn            R$X = MCR low byte, R$Y = MCR high byte (FX_OMIT/FT_OMIT)
+
 * Signal codes for SS.WSig.  The caller picks its own, but these are the
 * project's defaults and what wsigtst uses.  They are above $80 because
 * the system owns everything at or below it (os9.d: S$Kill $00 ... S$Alarm
