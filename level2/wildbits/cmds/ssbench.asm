@@ -71,6 +71,9 @@ blk                 rmb       2         F$AllRAM's block, for the F$MapBlk test
 tstptr              rmb       2         the current test's routine
 linebuf             rmb       80        the line being built
 padbuf              rmb       8         SS.Joy mode 6's four words
+tmrec               rmb       12        a tile map record, left all zero: CTRL 0 keeps map 2
+*                             disabled and block 0 means address 0, so timing
+*                             SS.TmSet changes nothing a text terminal shows
 recs                rmb       1024      128 zero sprite records, registered with the driver
                     rmb       300       stack
 size                equ       .
@@ -186,6 +189,8 @@ TestTbl             fdb       TNull-*,NNull-*
                     fdb       TUnk-*,NUnk-*
                     fdb       TSpr1-*,NSpr1-*
                     fdb       TSpr80-*,NSpr80-*
+                    fdb       TTmSet-*,NTmSet-*
+                    fdb       TTmScrl-*,NTmScrl-*
                     fdb       TMap-*,NMap-*
                     fdb       TBad-*,NBad-*
                     fdb       0
@@ -245,6 +250,28 @@ SprCall             lda       #TPATH
                     os9       I$SetStt
                     puls      u,pc
 
+* The two tile calls, on tile map 2.  They are here to answer one
+* question: how much of SS.TmSet's cost is the 12-byte caller buffer
+* that SS.TmScrl does not have?  Both pay the same grfdrv round trip,
+* so the difference between these two lines IS the buffer mapping plus
+* eight bytes of copy - and it is the only honest way to say what
+* implementing SS.TmScrl bought.
+TTmSet              leax      tmrec,u             twelve zero bytes
+                    ldy       #2                  tile map 2
+                    lda       #TPATH
+                    ldb       #SS.TmSet
+                    os9       I$SetStt
+                    rts
+
+TTmScrl             pshs      u
+                    ldx       #0                  X scroll
+                    ldy       #2                  tile map 2
+                    ldu       #0                  Y scroll
+                    lda       #TPATH
+                    ldb       #SS.TmScrl
+                    os9       I$SetStt
+                    puls      u,pc
+
 * TBad is the check that errors come back: it must print error 187.
 TBad                pshs      u
                     ldy       #0
@@ -280,6 +307,10 @@ NUnk                fcc       /SetStt unknown $FE      /
 NSpr1               fcc       /SetStt SS.SprPush N=1   /
                     fcb       0
 NSpr80              fcc       /SetStt SS.SprPush N=80  /
+                    fcb       0
+NTmSet              fcc       /SetStt SS.TmSet record  /
+                    fcb       0
+NTmScrl             fcc       /SetStt SS.TmScrl        /
                     fcb       0
 NBad                fcc       /SprPush N=200 (err 187) /
                     fcb       0
