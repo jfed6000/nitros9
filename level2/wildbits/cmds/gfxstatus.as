@@ -228,7 +228,7 @@ clkbuf@             lbsr      tobuf
                     leay      oeqtxt,pcr
                     lbsr      tobuf
                     pshs      a
-                    anda      #$50
+                    anda      #$70                three bits, not two - $50 lost bit 5
                     lsra
                     lsra
                     leay      laytxt,pcr
@@ -237,7 +237,7 @@ clkbuf@             lbsr      tobuf
                     leay      zeqtxt,pcr
                     lbsr      tobuf
                     puls      a
-                    anda      #$05
+                    anda      #$07                three bits, not two - $05 lost bit 1
                     lsla
                     lsla
                     leay      laytxt,pcr
@@ -253,7 +253,7 @@ clkbuf@             lbsr      tobuf
                     leay      teqtxt,pcr
                     lbsr      tobuf
                     lda       $FFC3
-                    anda      #$05
+                    anda      #$07                three bits, not two - $05 lost bit 1
                     lsla
                     lsla
                     leay      laytxt,pcr
@@ -329,12 +329,18 @@ clk70txt            fcs       "CLK70"
 zeqtxt              fcs       "0="
 oeqtxt              fcs       "1="
 teqtxt              fcs       "2="
+* All EIGHT sources.  It used to stop at TM1, so 6 and 7 indexed off the
+* end of it - and 7 is what a layer showing NOTHING reads as, which is
+* now what every layer starts at.  3 and 7 both blank the layer: the
+* core's decode clears both the bitmap and the tile map enable for them.
 laytxt              fcs       "BM0 "
                     fcs       "BM1 "
                     fcs       "BM2 "
-                    fcs       "XX  "
+                    fcs       "--  "
                     fcs       "TM0 "
                     fcs       "TM1 "
+                    fcs       "TM2 "
+                    fcs       "--  "
 
 * convert value in D to ASCII hex (4 chars). Append to output buffer, then append "SPACE" to output buffer
 buf4hex             pshs      b,a
