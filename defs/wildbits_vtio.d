@@ -143,6 +143,25 @@ V.BM2Blk            RMB       1         bitmap2 block
 * terminal starts with every bitmap unowned and 10-block by default.
 V.BMFlags           RMB       1         bits 0-2 size, bits 4-6 ownership
 
+* The offset within V.BMxBlk at which each bitmap starts, 0-$1FFF.
+*
+* V.BMxBlk alone could only ever name a block BOUNDARY, which made the
+* bitmap the one asset whose address the API could not express the way
+* the tile calls already do - SS.TsSet and SS.TmSet have taken a block
+* AND an offset since the tile rework, and SS.BmDef now matches them.
+* That is what lets a program make one allocation for a slew of assets
+* and lay them out inside it, instead of having to spend a whole block
+* boundary on every one.
+*
+* V.BMxBlk keeps its name and meaning rather than being widened to a
+* 24-bit address, because level1/wildbits/modules/vtio.asm still refers
+* to it and nothing is gained by breaking a file the L1 recipe can find.
+* The pair is turned into the register's 24-bit address by BmRegAddr,
+* which is the only place that arithmetic happens.
+V.BM0Off            RMB       2         offset within V.BM0Blk
+V.BM1Off            RMB       2
+V.BM2Off            RMB       2
+
 BM.Small            equ       %00000001 bitmap 0's "8 blocks, not 10" bit
 BM.Owned            equ       %00010000 bitmap 0's "the driver allocated it" bit
 BmBlk240            equ       10        blocks in a 320x240 bitmap (76,800 bytes)

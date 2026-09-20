@@ -458,6 +458,42 @@ Blk2Addr            lsra
                     lsra
                     rorb
                     rts
+
+*******************************************************************
+* BmGetAddr - where bitmap A lives, from this terminal's mirror.
+*   Entry: A = bitmap # (0-2), U = the statics.
+*   Exit:  A = its block, X = its offset within that block.  B clobbered.
+*******************************************************************
+BmGetAddr           lsla                          two bytes per bitmap in each
+                    leax      V.BM0Blk,u
+                    ldb       a,x                 its block
+                    leax      V.BM0Off,u
+                    ldx       a,x                 its offset
+                    tfr       b,a
+                    rts
+
+*******************************************************************
+* BmRegAddr - write a bitmap's 24-bit address into its registers.
+*   Entry: A = block, X = offset (0-$1FFF), Y = the register base
+*          ($3000, $3008 or $3010 with $C0 in slot 1).
+*   Writes bits 23:16 at 1,y and bits 15:0 at 2,y.  Clobbers D and X.
+*
+* The address is block*$2000 + offset.  Blk2Addr gives bits 23:8 of the
+* block part, whose low 13 bits are zero by construction, so an offset of
+* $1FFF or less can never carry out of them and the high byte is the
+* block's alone.  The 16-bit sum cannot overflow either: bits 15:13 come
+* from the block's low three bits, so the most it can reach is $FFFF.
+*******************************************************************
+BmRegAddr           clrb
+                    lbsr      Blk2Addr            D = address bits 23:8
+                    pshs      a                   bits 23:16
+                    tfr       b,a
+                    clrb                          D = bits 15:0, low 13 clear
+                    leax      d,x                 X = that plus the offset
+                    puls      a
+                    sta       1,y                 bits 23:16
+                    stx       2,y                 bits 15:8 and 7:0
+                    rts
 ;;; Pulluf
 ;;; Push Registers to Screen Backup Buffer
 ;;;
@@ -513,30 +549,29 @@ PullCore            lbsr      SetBlkC2C3
                     ldd       #16
                     lbsr      CpyBlk
                     ldu       >gr.U5
+* The three bitmaps, from the mirror.  BmRegAddr writes all three address
+* bytes including the low one, which PullBuf used to have to clear by hand
+* because GFBmEnable was the only other writer of it and does not run for
+* a terminal that set its bitmap up while it was a shadow.  Now that a
+* bitmap carries an offset within its block, that byte is real data.
                     lda       V.BM0Cl_En,u
                     sta       $3000
-                    lda       V.BM0Blk,u
-                    clrb
-                    lbsr      Blk2Addr
-                    std       $3001
-                    clr       $3003               address low byte
+                    ldy       #$3000
+                    clra                          bitmap 0
+                    lbsr      BmGetAddr
+                    lbsr      BmRegAddr
                     lda       V.BM1Cl_En,u
                     sta       $3008
-                    lda       V.BM1Blk,u
-                    clrb
-                    lbsr      Blk2Addr
-                    std       $3009
-                    clr       $300B               address low byte
+                    ldy       #$3008
+                    lda       #1
+                    lbsr      BmGetAddr
+                    lbsr      BmRegAddr
                     lda       V.BM2Cl_En,u
                     sta       $3010
-                    lda       V.BM2Blk,u
-                    clrb
-                    lbsr      Blk2Addr
-                    std       $3011
-* GFBmEnable is the only other writer of the low byte, and it no longer
-* runs for a terminal that sets its bitmap up while it is a shadow, so
-* PullBuf has to clear it here.
-                    clr       $3013               address low byte
+                    ldy       #$3010
+                    lda       #2
+                    lbsr      BmGetAddr
+                    lbsr      BmRegAddr
                     ldy       #$3100
                     leau      V.TM0,u   Copy Tile Map Regs
                     ldd       #36
@@ -1122,10 +1157,26 @@ DfPalBad            comb
 *   bitmap already has one).  B = 0, or carry + E$IllArg / E$WADef /
 *   E$MFull.
 *******************************************************************
-GFAScrn             ldd       >gr.PDRGS+R$Y       bitmap #
+* SS.BmAlloc ($E3) and SS.AScrn ($8B) are ONE implementation, and the
+* only thing that separates them is the control byte they leave behind.
+* SS.BmAlloc allocates and defines and stops there; SS.AScrn additionally
+* enables on CLUT 0, because that is its contract and Joust and jstview
+* both depend on it - neither ever calls SS.Palet.  Putting the enable in
+* the CoCo-named doorway is what lets that doorway be deleted later
+* without taking anything else with it.
+*
+* SS.BmAlloc leaves the bitmap DEFINED BUT OFF on purpose.  The blocks
+* hold whatever was in them, so enabling as a side effect of allocating
+* means showing garbage; and visibility needs a layer and FX_BM anyway.
+GFAScrn             lda       #%00000001          enable, CLUT 0
+                    bra       BmAllocGo
+SSBmAlloc           clra                          defined, but not enabled
+BmAllocGo           sta       >gr.b3              the control byte to leave
+                    ldd       >gr.PDRGS+R$Y       bitmap #
                     cmpd      #2
                     bhi       AScrnBad
                     lbsr      SetBlkC2C3          U = this terminal's statics
+                    stb       >gr.b2              bitmap #, for the helpers below
                     lslb
                     leax      V.BM0Cl_En,u
                     abx                           X -> V.BMxCl_En, V.BMxBlk at 1,x
@@ -1156,20 +1207,14 @@ got@                ldx       1,s                 the mirror pointer back
                     clra
                     std       >gr.PDRGS+R$X       return the block
                     stb       1,x                 V.BMxBlk
-                    lda       #%00000001
-                    sta       ,x                  V.BMxCl_En = enable, CLUT 0
+                    lbsr      BmClrOff            a driver-allocated bitmap starts
+                    lda       >gr.b3              at offset 0 of its first block
+                    sta       ,x                  V.BMxCl_En
                     lbsr      AScrnRec            record the size and the ownership
                     leas      3,s                 done with the count and the pointer
                     tst       V.TermLive,u
                     beq       ok@                 shadow: PullBuf programs it on the switch
-                    sta       >gr.b3              control byte (enable)
-                    lda       >gr.PDRGS+R$Y+1
-                    sta       >gr.b2              bitmap #
-                    tfr       b,a
-                    clrb
-                    lbsr      Blk2Addr
-                    std       >gr.d1              physical address
-                    lbsr      BmEnCore
+                    lbsr      BmEnCore            gr.b3 and the mirror's address
 ok@                 clrb
                     jmp       >GrfMod+SysRet
 AScrnBad            ldb       #E$IllArg
@@ -1189,7 +1234,7 @@ AScrnErr            coma
 *   is about to put in gr.b3 and B is the first block it feeds Blk2Addr.
 *******************************************************************
 AScrnRec            pshs      d
-                    lda       >gr.PDRGS+R$Y+1     bitmap #
+                    lda       >gr.b2              bitmap #
                     lbsr      BmFlagMask          A = its size bit
                     tfr       a,b                 keep the size bit in B
                     lsla
@@ -1266,8 +1311,22 @@ GetSttTbl           fcb       SS.ScSiz
                     fcb       SS.BmBlk
                     fdb       GrfMod+GSBmBlk
                     fcb       0
+* The bitmap calls go first: StatDisp searches this table linearly, and a
+* game's set-up walks all of them.
 SetSttTbl           fcb       SS.AScrn
                     fdb       GrfMod+GFAScrn
+                    fcb       SS.BmAlloc
+                    fdb       GrfMod+SSBmAlloc
+                    fcb       SS.BmDef
+                    fdb       GrfMod+SSBmDef
+                    fcb       SS.BmCfg
+                    fdb       GrfMod+SSBmCfg
+                    fcb       SS.BmKill
+                    fdb       GrfMod+SSBmKill
+                    fcb       SS.GfxAlloc
+                    fdb       GrfMod+SSGfxAlloc
+                    fcb       SS.GfxFree
+                    fdb       GrfMod+SSGfxFree
                     fcb       SS.DfPal
                     fdb       GrfMod+GFDfPal
                     fcb       SS.FntChar
@@ -1611,18 +1670,26 @@ ok@                 lbra      StatOK
 * which sets Actual_BM_Enabled = 0 AND Actual_TM_Enabled = 0
 * (TinyVickyCoreModule.v:775-782).  wildbits_vtio.d documents only 000-110,
 * so nobody has used it.  Layer 0 is in FRONT; layer 2 is furthest back.
+* The source is MASKED to three bits.  It used to be added in whole, so a
+* value of 8 or more carried straight into the neighbouring layer's field
+* and silently repointed it.  Nothing in the tree passes one, but nothing
+* stopped it either.
 SSPScrn             ldy       R$X,x
                     lda       V.V_LayerCTL,u
                     cmpy      #0
                     bne       l1@
-                    anda      #%11110000          layer 0: low nibble
-                    adda      R$Y+1,x
+                    anda      #%11111000          layer 0: bits 2:0
+                    pshs      a
+                    lda       R$Y+1,x
+                    anda      #%00000111
+                    ora       ,s+
                     bra       st0@
 l1@                 cmpy      #1
                     bne       l2@
-                    anda      #%00001111          layer 1: high nibble
+                    anda      #%10001111          layer 1: bits 6:4
                     pshs      a
                     lda       R$Y+1,x
+                    anda      #%00000111
                     ldb       #16
                     mul
                     addb      ,s+
@@ -1634,7 +1701,12 @@ st0@                sta       V.V_LayerCTL,u
                     bra       ok@
 l2@                 cmpy      #2
                     bne       ok@
+                    lda       V.V_LayerCTL+1,u
+                    anda      #%11111000          layer 2: bits 2:0
                     ldb       R$Y+1,x
+                    andb      #%00000111
+                    pshs      a
+                    orb       ,s+
                     stb       V.V_LayerCTL+1,u
                     tst       V.TermLive,u
                     beq       ok@
@@ -1655,6 +1727,17 @@ SSPalet             ldd       R$Y,x
                     ldb       R$X+1,x             CLUT #
                     orcc      #Carry
                     rolb                          CLUT# | enable
+                    andb      #%00001111          enable and CLUT only
+* Keep HIRES4 and GROUP.  This used to rewrite the WHOLE control byte, so
+* once those bits meant something, assigning a CLUT would have silently
+* dropped a bitmap out of 640x240 4bpp mode.  It still forces the enable
+* bit on, which is its long-standing contract and what shellbg, drawtest,
+* pixview and view all rely on; SS.BmCfg is the call that can leave it
+* alone, and the one to use in new code.
+                    lda       ,y
+                    anda      #%11110000
+                    pshs      a
+                    orb       ,s+
                     stb       >gr.b3
                     stb       ,y                  V.BMxCl_En
                     tst       V.TermLive,u
@@ -1678,7 +1761,17 @@ BmBad               comb
 * it by freeing their bitmaps before restoring the display mode, in a
 * comment that explained the symptom and not the cause.  The count now
 * comes from V.BMFlags, where GFAScrn recorded it.
-SSFScrn             ldd       R$Y,x
+* IT ALSO FREES ONLY WHAT THE DRIVER OWNS.  A bitmap the program pointed
+* at its own blocks with SS.BmDef is undefined and switched off, and its
+* blocks are left strictly alone - they are the program's to free with
+* SS.GfxFree or F$DelRAM.  That is the whole of the ownership rule:
+* whoever allocated, frees, and the driver knows which it was without the
+* caller having to say.
+*
+* SS.BmKill dispatches here too - the two codes are one handler, not two
+* implementations.
+SSFScrn
+SSBmKill            ldd       R$Y,x
                     cmpd      #2
                     bhi       BmBad
                     stb       >gr.b2              bitmap # 0-2
@@ -1686,15 +1779,24 @@ SSFScrn             ldd       R$Y,x
                     leay      V.BM0Cl_En,u
                     leay      b,y                 Y -> V.BMxCl_En, V.BMxBlk at 1,y
                     ldb       1,y
-                    bne       free@
-                    ldb       #E$WUndef           no bitmap allocated
+                    bne       defd@
+                    ldb       #E$WUndef           no bitmap defined
                     coma
                     jmp       >GrfMod+SysRet
-free@               clra
-                    tfr       d,x                 X = first block
-                    lda       >gr.b2              bitmap #
-                    lbsr      BmFlagMask          A = its size bit in V.BMFlags
+defd@               lda       >gr.b2              bitmap #
+                    lbsr      BmFlagMask          A = its bit in V.BMFlags
+                    pshs      a                   ,s = its size bit
+                    lsla
+                    lsla
+                    lsla
+                    lsla                          A = its ownership bit
                     anda      V.BMFlags,u
+                    beq       undef@              the program's blocks: not ours
+                    clra
+                    ldb       1,y                 its first block
+                    tfr       d,x                 X = first block
+                    ldb       ,s                  its size bit
+                    andb      V.BMFlags,u
                     beq       ten@                clear = the 10-block size
                     ldb       #BmBlk200
                     bra       del@
@@ -1703,12 +1805,306 @@ del@                pshs      y
                     os9       F$DelRAM
                     lbsr      SetBlkC2C3          remap slot 5 and reload U
                     puls      y
+undef@              leas      1,s                 drop the size bit
                     clr       ,y                  both mirror bytes, or PullBuf
                     clr       1,y                 re-enables a freed bitmap
                     lbsr      BmFlagClr           no longer owned, no longer small
+                    lbsr      BmClrOff            and no longer at any offset
                     tst       V.TermLive,u
                     lbne      GFBmFree            live: zero the registers
                     lbra      StatOK
+
+*******************************************************************
+* SetStat SS.BmCfg ($ED) - configure one bitmap.  THE call that was
+*   missing, and the reason this rework happened.
+*   R$Y      = bitmap # (0-2)
+*   R$X high = enable: 0 off, 1 on, $FF leave alone
+*   R$X low  = CLUT #: 0-3, $FF leave alone
+*   R$U high = HIRES4: 0 off, 1 on (640x240 4bpp), $FF leave alone
+*   R$U low  = palette GROUP: 0-7, $FF leave alone
+*
+* Until now NOTHING COULD HIDE A BITMAP AND KEEP IT.  SS.AScrn set the
+* enable bit as a side effect of allocating, SS.FScrn cleared it only by
+* freeing the memory, and SS.Palet FORCED IT ON every time it assigned a
+* CLUT - so assigning a CLUT silently re-enabled a bitmap and there was no
+* way at all to turn one off.  Joust pays about 164 ms clearing both its
+* bitmaps at every screen transition where a hide would have done, while
+* doing exactly that cheap hide for the tile map beside them (src/gfx.a
+* SCCLR).  That asymmetry is the whole argument for this call.
+*
+* $FF means "leave this field alone", the same convention SS.DScrn's
+* FX_OMIT/FT_OMIT already use, so one call sets everything at start-up and
+* the same call toggles one field later without disturbing the rest.
+*
+* Visibility needs THREE independent things and this is only one of them:
+* the enable bit here, a layer pointing at the bitmap (SS.Layer), and
+* FX_BM in the master control register (SS.MCR).
+*******************************************************************
+SSBmCfg             ldd       R$Y,x               bitmap #
+                    cmpd      #2
+                    lbhi      BmBad
+                    stb       >gr.b2
+                    lslb
+                    leay      V.BM0Cl_En,u
+                    leay      b,y                 Y -> V.BMxCl_En
+                    lda       ,y                  the control byte as it stands
+* Enable, bit 0.
+                    ldb       R$X,x
+                    cmpb      #$FF
+                    beq       bcclut@
+                    anda      #%11111110
+                    tstb
+                    beq       bcclut@
+                    ora       #%00000001
+bcclut@             ldb       R$X+1,x             CLUT #, bits 3:1
+                    cmpb      #$FF
+                    beq       bchi@
+                    cmpb      #3
+                    lbhi      BmBad
+                    anda      #%11110001
+                    lslb
+                    pshs      b
+                    ora       ,s+
+bchi@               ldb       R$U,x               HIRES4, bit 4
+                    cmpb      #$FF
+                    beq       bcgrp@
+                    anda      #%11101111
+                    tstb
+                    beq       bcgrp@
+                    ora       #%00010000
+bcgrp@              ldb       R$U+1,x             palette GROUP, bits 7:5
+                    cmpb      #$FF
+                    beq       bcset@
+                    cmpb      #7
+                    lbhi      BmBad
+                    anda      #%00011111
+                    lslb
+                    lslb
+                    lslb
+                    lslb
+                    lslb
+                    pshs      b
+                    ora       ,s+
+bcset@              sta       ,y                  the mirror always
+                    tst       V.TermLive,u
+                    lbeq      StatOK              a shadow: PullBuf programs it
+                    sta       >gr.b3
+                    lbsr      BmEnCore            live: control byte and address
+                    lbra      StatOK
+
+*******************************************************************
+* SetStat SS.BmDef ($E6) - point a bitmap at memory the PROGRAM owns.
+*   R$Y high = mode: bit 0 HIRES4, bits 3:1 palette GROUP
+*   R$Y low  = bitmap # (0-2)
+*   R$X      = block number, or 0 to clear this bitmap
+*   R$U      = offset within that block, $0000-$1FFF
+*
+* The same addressing rule the tile calls have used since the tile rework
+* (docs/tile-api.md): a block and an offset, never a 24-bit address, with
+* the driver doing the multiply.  A bitmap was the one asset whose address
+* the API could not express that way, so a program that allocated one slab
+* for a slew of assets had to spend a whole block boundary on the bitmap.
+*
+* The blocks stay the PROGRAM's.  This never sets the ownership bit, so
+* SS.BmKill and a terminal close undefine the bitmap and leave the memory
+* alone.  The lifetime rule that applies to every asset the hardware reads
+* directly applies here too: switch it off before you free it, or VICKY
+* goes on drawing whatever the next owner puts there.
+*
+* It does NOT touch the enable or CLUT bits, so pointing a bitmap at new
+* pixels never makes it appear by itself - that is SS.BmCfg's job.
+*******************************************************************
+SSBmDef             ldd       R$Y,x               A = mode, B = bitmap #
+                    cmpb      #2
+                    lbhi      BmBad
+                    stb       >gr.b2
+                    ldd       R$U,x               offset within the block
+                    cmpd      #$1FFF
+                    lbhi      BmBad
+                    ldd       R$X,x               block
+                    tsta
+                    lbne      BmBad               a block number is one byte
+* Refuse to re-point a bitmap whose blocks the DRIVER allocated: nothing
+* would ever free them again.  SS.BmKill first.
+                    lda       >gr.b2
+                    lbsr      BmFlagMask
+                    lsla
+                    lsla
+                    lsla
+                    lsla                          A = its ownership bit
+                    anda      V.BMFlags,u
+                    beq       bdset@
+                    ldb       #E$WADef            the driver's - kill it first
+                    coma
+                    jmp       >GrfMod+SysRet
+bdset@              lda       >gr.b2
+                    lsla                          two offset bytes per bitmap
+                    leay      V.BM0Off,u
+                    leay      a,y
+                    ldd       R$U,x
+                    std       ,y                  its offset
+                    lda       >gr.b2
+                    lsla                          two mirror bytes per bitmap
+                    leay      V.BM0Cl_En,u
+                    leay      a,y                 Y -> V.BMxCl_En, block at 1,y
+                    ldb       R$X+1,x             its block
+                    stb       1,y
+                    bne       bdmode@
+                    clr       ,y                  block 0 clears the bitmap outright
+                    bra       bdlive@
+bdmode@             lda       R$Y,x               mode
+                    anda      #%00001111
+                    lsla
+                    lsla
+                    lsla
+                    lsla                          HIRES4 to bit 4, GROUP to 7:5
+                    ldb       ,y
+                    andb      #%00001111          keep the enable and CLUT bits
+                    stb       ,y
+                    ora       ,y
+                    sta       ,y
+bdlive@             tst       V.TermLive,u
+                    lbeq      StatOK              a shadow: PullBuf programs it
+                    lda       ,y                  the control byte
+                    sta       >gr.b3
+                    lbsr      BmEnCore
+                    lbra      StatOK
+
+*******************************************************************
+* SetStat SS.GfxAlloc ($D4) - N consecutive blocks of graphics memory.
+*   R$X = block count (1-255) in, the first block out.
+*
+* Deliberately NOT a bitmap call: one allocator serves bitmaps, tile sets
+* and tile maps alike, which is why a program can ask once for a slab big
+* enough for a slew of assets and then lay them out inside it with
+* SS.BmDef, SS.TsSet and SS.TmSet, all of which take a block and an
+* offset.  It exists at all because F$AlHRAM is registered
+* F$AlHRAM+SysState in krnp2.asm's svctab, so an application cannot reach
+* it and the driver can - and the convention is that graphics allocate
+* from the top of the block map down, leaving the low contiguous space
+* free.
+*
+* THE BLOCKS BELONG TO THE PROGRAM.  It frees them with SS.GfxFree, and
+* the driver never does: no terminal close, no SS.BmKill.  The other half
+* of the rule is SS.BmAlloc, whose blocks belong to the driver.  Whoever
+* allocated, frees.
+*
+* The blocks are physically consecutive, so an object may run past the end
+* of one - which is how a 76,800-byte bitmap fits in ten of them.
+*******************************************************************
+SSGfxAlloc          ldd       R$X,x               block count
+                    tsta
+                    lbne      BmBad               more than 255 blocks
+                    tstb
+                    lbeq      BmBad               none
+                    pshs      x                   os9 may clobber it
+                    os9       F$AlHRAM            D = first block
+                    lbsr      SetBlkC2C3          remap slot 5, reload U (keeps D, X, CC)
+                    puls      x
+                    bcc       gaok@
+                    ldb       #E$MFull
+                    coma
+                    jmp       >GrfMod+SysRet
+gaok@               clra
+                    std       R$X,x               the first block back
+                    lbra      StatOK
+
+*******************************************************************
+* SetStat SS.GfxFree ($D5) - give those blocks back.
+*   R$X = first block, R$U = count.
+*
+* It REFUSES a range that overlaps a bitmap the driver allocated, which is
+* what keeps the two ownership models from colliding: a program that
+* freed the blocks SS.BmBlk reported would otherwise double-free them the
+* moment the terminal closed.  E$IllArg, and nothing is freed.
+*******************************************************************
+SSGfxFree           ldd       R$U,x               count
+                    tsta
+                    lbne      BmBad
+                    tstb
+                    lbeq      BmBad
+                    pshs      b                   ,s = the count
+                    ldd       R$X,x               first block
+                    tsta
+                    bne       gfbad@              a block number is one byte
+                    tstb
+                    beq       gfbad@              block 0 is the system block
+                    lda       ,s                  the count
+                    exg       a,b                 A = first block, B = count
+                    lbsr      GfxChkOwn
+                    bcs       gfbad@              overlaps a bitmap we own
+                    ldx       #gr.PDRGS           GfxChkOwn clobbers X
+                    clra
+                    ldb       R$X+1,x             first block
+                    tfr       d,x                 X = first block
+                    puls      b                   the count
+                    os9       F$DelRAM
+                    lbsr      SetBlkC2C3          remap slot 5 and reload U
+                    bcs       gferr@
+                    lbra      StatOK
+gferr@              coma
+                    jmp       >GrfMod+SysRet
+gfbad@              leas      1,s
+                    lbra      BmBad
+
+*******************************************************************
+* GfxChkOwn - does the block range [A, A+B) overlap a bitmap the DRIVER
+*   allocated?  Entry A = first block, B = count, U = the statics.
+*   Exit: carry SET if it overlaps.  Clobbers D, X, Y.
+*
+* Two containment tests make the full overlap test, and both are 8-bit:
+* either the bitmap's first block falls inside the request, or the
+* request's first block falls inside the bitmap.
+*******************************************************************
+GfxChkOwn           pshs      d                   ,s = first block, 1,s = count
+                    clra                          bitmap # 0
+gco1@               pshs      a                   ,s = bitmap #
+                    lbsr      BmFlagMask
+                    pshs      a                   ,s = its size bit
+                    lsla
+                    lsla
+                    lsla
+                    lsla                          A = its ownership bit
+                    anda      V.BMFlags,u
+                    beq       gco8@               a program's, or undefined
+                    lda       1,s                 bitmap #
+                    lsla
+                    leay      V.BM0Blk,u
+                    lda       a,y                 A = its first block
+                    beq       gco8@               not defined
+                    ldb       ,s                  its size bit
+                    andb      V.BMFlags,u
+                    beq       gco2@
+                    ldb       #BmBlk200
+                    bra       gco3@
+gco2@               ldb       #BmBlk240
+* After the push: ,s = the bitmap's first block, 1,s = its length,
+* 2,s = its size bit, 3,s = the bitmap #, 4,s = the request's first block,
+* 5,s = the request's count.
+gco3@               pshs      d                   ,s = bm block, 1,s = bm length
+                    lda       ,s                  bitmap start
+                    suba      4,s                 minus the request's start
+                    bcs       gco4@               below it - try the other way
+                    cmpa      5,s                 inside the request's length?
+                    blo       gco7@               yes: they overlap
+gco4@               lda       4,s                 the request's start
+                    suba      ,s                  minus the bitmap's
+                    bcs       gco6@               below it - no overlap
+                    cmpa      1,s                 inside the bitmap's length?
+                    blo       gco7@               yes: they overlap
+gco6@               leas      2,s                 drop the bitmap's block/length
+                    bra       gco8@
+gco7@               leas      6,s                 drop everything: block, length,
+                    orcc      #Carry              size bit, bitmap #, and the
+                    rts                           request's own two bytes
+gco8@               leas      1,s                 drop the size bit
+                    puls      a                   bitmap #
+                    inca
+                    cmpa      #3
+                    blo       gco1@
+                    leas      2,s                 drop the request
+                    andcc     #^Carry
+                    rts
 
 *******************************************************************
 * GF.InitDisp (b29) - display setup for the first terminal, issued by
@@ -2252,13 +2648,20 @@ GFPalIdx            ldb       >gr.b2              palette register #
 *******************************************************************
 GFBmEnable          bsr       BmEnCore
                     jmp       >GrfMod+SysRet
-* BmEnCore - GF.BmEnable's body, also called by GFAScrn.
-BmEnCore            bsr       GFBmX
+* BmEnCore - GF.BmEnable's body, also called by GFAScrn and the new
+*   bitmap calls.  Programs bitmap gr.b2's control byte from gr.b3 and its
+*   24-bit address FROM THE MIRROR, which is now the only source for that
+*   address: gr.d1 is no longer part of it, and neither is the caller.
+*   Every writer keeps V.BMxBlk / V.BMxOff right and this reads them, so
+*   the registers cannot disagree with the mirror PullBuf restores from.
+*   SetBlkC0C1 touches only slots 1 and 2, so U still reaches the statics.
+BmEnCore            bsr       GFBmX               X = $3000 + bitmap*8
                     lda       >gr.b3              control byte
                     sta       ,x
-                    ldd       >gr.d1              physical address
-                    std       1,x
-                    clr       3,x
+                    tfr       x,y                 Y = the register base
+                    lda       >gr.b2              bitmap #
+                    lbsr      BmGetAddr           A = block, X = offset
+                    lbsr      BmRegAddr           bits 23:0 at 1,y and 2,y
                     rts
 GFBmFree            bsr       GFBmX
                     clr       ,x
@@ -2299,6 +2702,17 @@ bfml@               lslb
                     bne       bfml@
 bfmx@               tfr       b,a
                     puls      b,pc
+
+* BmClrOff - zero bitmap gr.b2's offset, so a bitmap that is allocated,
+*   freed and allocated again does not inherit the last one's.  U = the
+*   statics.  Clobbers A and Y; X is left alone because GFAScrn needs it.
+BmClrOff            lda       >gr.b2              bitmap #
+                    lsla                          two offset bytes each
+                    leay      V.BM0Off,u
+                    leay      a,y
+                    clr       ,y
+                    clr       1,y
+                    rts
 
 * BmFlagClr - clear BOTH of bitmap gr.b2's bits, so a freed bitmap is
 *   neither owned nor remembered as the small size.  U = the statics.
