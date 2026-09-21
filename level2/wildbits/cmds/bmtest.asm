@@ -104,6 +104,8 @@ scancol             rmb       2         C: scan - the column being checked
 scanbad             rmb       1         C: scan - non-zero once the fill has begun
 scansr              rmb       2         C: scan - the row the fill starts on
 scansc              rmb       2         C: scan - the column it starts at
+scaner              rmb       2         C: scan - the row the LAST filled byte is on
+scanec              rmb       2         C: scan - its column
 dcval               rmb       2         AppDc16: what is left to print
 dcdig               rmb       1         AppDc16: the digit being built
 dcsup               rmb       1         AppDc16: non-zero once a digit has gone out
@@ -246,6 +248,8 @@ Step1               ldx       #NBLKS
                     lbsr      PutLine
                     leax      KeyTxt,pcr
                     lbsr      PutLine
+                    leax      KeyTx2,pcr
+                    lbsr      PutLine
 
 ********************************************************************
 * The key loop
@@ -264,6 +268,8 @@ Loop                leax      keybuf,u
                     lbeq      DoHi
                     cmpa      #'8
                     lbeq      DoLo
+                    cmpa      #'2
+                    lbeq      DoHalves
                     anda      #$5F                letters fold to upper case
                     cmpa      #'Q
                     lbeq      Quit
@@ -904,6 +910,91 @@ ClrNoMap            lbsr      EndLine
                     lbra      Loop
 
 ********************************************************************
+* 2 - the same whole-bitmap clear in TWO HALVES, which is what the first
+*     row parameter was added for: rows 0-119, then rows 120-239, each
+*     its own SS.BmClear and each waited out before the next is armed.
+*
+* It asks two questions at once.  Whether splitting a fill changes
+* anything - the reason it was wanted - and what CONSECUTIVE TRANSFERS
+* do, which the RTL says is not obvious: the engine loads its write
+* pointer only while Write_Strobe is LOW, at VALIDATE2, so a second
+* transfer that arrives with it still high keeps the FIRST one's
+* pointer and carries on from where that ended.  Nothing else in this
+* program arms the engine twice in a row, so nothing else has ever
+* exercised it.
+*
+* A pass is the same line C gives for 240 rows: fill 0,0 to 239,319
+* COMPLETE.  If the second half lands anywhere but row 120, the pointer
+* was stale and that is the finding.
+********************************************************************
+DoHalves            ldd       #BMROWS
+                    std       clrnow,u            the verdict is for both halves
+                    leax      HlfTxt,pcr
+                    lbsr      PutLine
+                    lbsr      FillBm
+                    bcc       dh1@
+                    lbsr      ShowErr
+                    lbra      Loop
+dh1@                clra                          first row 0
+                    ldb       #BMROWS/2           120 rows
+                    lbsr      ClrOne
+                    bcc       dh2@
+                    leax      Hlf1E,pcr
+                    lbsr      ShowErrAt
+                    lbra      Loop
+dh2@                lda       #BMROWS/2           first row 120
+                    ldb       #BMROWS/2           120 rows
+                    lbsr      ClrOne
+                    bcc       dh3@
+                    leax      Hlf2E,pcr
+                    lbsr      ShowErrAt
+                    lbra      Loop
+dh3@                lbsr      ClrScan
+                    lbra      Loop
+
+********************************************************************
+* ClrOne - one SS.BmClear and wait for it.  A = first row, B = rows.
+*   Returns the carry and B: clear means it finished, set means B is
+*   the error - either the SetStat's own or E$NotRdy for a fill that
+*   never came back.
+*
+* NEITHER TFR NOR PULS TOUCHES CC, which is what lets the call's carry
+* survive all the way to the bcs below it.
+********************************************************************
+ClrOne              pshs      u
+                    tfr       d,u                 R$U = first row : row count
+                    ldy       #0                  bitmap 0
+                    ldx       #CLRVAL             high byte 0 = reserved
+                    lda       #BMPATH
+                    ldb       #SS.BmClear
+                    os9       I$SetStt
+                    puls      u
+                    bcs       co9@
+                    clr       clrtck,u
+co1@                ldx       #2                  one 60 Hz tick
+                    pshs      u
+                    os9       F$Sleep
+                    puls      u
+                    pshs      u
+                    lda       #BMPATH
+                    ldb       #SS.BmClear
+                    os9       I$GetStt
+                    tfr       x,d                 D = 0 idle, 1 still outstanding
+                    puls      u
+                    bcs       co9@
+                    tstb
+                    beq       co8@
+                    inc       clrtck,u
+                    lda       clrtck,u
+                    cmpa      #CLRWAIT
+                    blo       co1@
+                    comb
+                    ldb       #E$NotRdy           it never came back
+                    rts
+co8@                andcc     #^Carry
+co9@                rts
+
+********************************************************************
 * ClrScan - walk BITMAP 0, not the slab, and say where the fill value
 *   starts and where it stops, each as a row and a column.
 *
@@ -994,8 +1085,32 @@ scnext@             ldx       blkleft,u
                     bne       screp@
                     leax      ScNoneTx,pcr
                     lbra      PutLine
+* REPORT THE LAST BYTE FILLED, NOT THE FIRST ONE THAT IS NOT.  The walk
+* naturally stops on the first MISmatch, so scanrow:scancol is an
+* EXCLUSIVE bound - and printed raw it said things like "fill 0,0 to
+* 237,0", which reads as an inclusive end and then makes no sense,
+* because a full-width fill cannot end at column 0.  It meant "rows 0-236
+* are filled", i.e. a PASS for 237 rows, and it was read as a failure at
+* row 237.  Backing up one byte says "fill 0,0 to 236,319", which is what
+* it always meant and cannot be misread: a last column of 319 is a whole
+* row, anything else stopped mid-row.
+* Backing up across a row boundary is the only wrinkle, and the
+* ran-to-the-end case (240,0) falls out of the same arithmetic as
+* (239,319).
 scstop@             lbsr      UnmapCur
-screp@              leax      ScFrTx,pcr
+screp@              ldd       scancol,u
+                    bne       scdec@
+                    ldd       #BMCOLS-1
+                    std       scanec,u
+                    ldd       scanrow,u
+                    subd      #1
+                    std       scaner,u
+                    bra       scsay1@
+scdec@              subd      #1
+                    std       scanec,u
+                    ldd       scanrow,u
+                    std       scaner,u
+scsay1@             leax      ScFrTx,pcr
                     lbsr      StartLine
                     ldd       scansr,u
                     lbsr      AppDc16
@@ -1005,28 +1120,32 @@ screp@              leax      ScFrTx,pcr
                     lbsr      AppDc16
                     leax      ScToTx,pcr
                     lbsr      AppStr
-                    ldd       scanrow,u
+                    ldd       scaner,u
                     lbsr      AppDc16
                     leax      ScComTx,pcr
                     lbsr      AppStr
-                    ldd       scancol,u
+                    ldd       scanec,u
                     lbsr      AppDc16
 * The verdict, and it is the reason the two positions are measured rather
 * than just printed: a late start, a short fill on a row boundary and a
-* short fill inside a row are three different faults.
+* short fill inside a row are three different faults.  A pass is the last
+* byte of the last row asked for: row clrnow-1, column 319.
                     ldd       scansr,u
                     bne       sclate@
                     ldd       scansc,u
                     bne       sclate@
-                    ldd       scanrow,u
-                    cmpd      clrnow,u            what THIS press asked for
-                    bhi       scover@
-                    blo       scshort@
-                    ldd       scancol,u
-                    bne       scshort@
+                    ldd       clrnow,u
+                    subd      #1
+                    cmpd      scaner,u
+                    blo       scover@             it went past the rows asked for
+                    bhi       scshort@
+                    ldd       scanec,u
+                    cmpd      #BMCOLS-1
+                    bne       scmid@              the last row is incomplete
                     leax      ScOkTx,pcr
                     bra       scsay@
-scshort@            ldd       scancol,u
+scshort@            ldd       scanec,u
+                    cmpd      #BMCOLS-1
                     bne       scmid@
                     leax      ScRowTx,pcr
                     bra       scsay@
@@ -1340,7 +1459,17 @@ DrvTxt              fcc       /SS.BmAlloc gave bitmap 1 block $/
                     fcb       $00
 RdyTxt              fcc       /Bitmap 0 is at offset $1000 in that slab.  THE TOP BAR MUST BE WHITE./
                     fcb       C$CR
-KeyTxt              fcc       /H hide S show B blocks 4 hires 8 normal R redraw C clear L lines F flood K kill G guard Q quit/
+HlfTxt              fcc       /  2 - clearing in two halves: rows 0-119, then rows 120-239/
+                    fcb       C$CR
+Hlf1E               fcc       /  2 first half err /
+                    fcb       $00
+Hlf2E               fcc       /  2 second half err /
+                    fcb       $00
+* The key line was one string of 97 characters and I$WritLn is given 80,
+* so "G guard Q quit" never reached the screen.  Two lines now.
+KeyTx2              fcc       /C clear  2 halves  L lines  F flood  K kill  G guard/
+                    fcb       C$CR
+KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  Q quit/
                     fcb       C$CR
 HiTxt               fcc       /  640x240 4bpp on - bars should halve into colour and clear stripes/
                     fcb       C$CR

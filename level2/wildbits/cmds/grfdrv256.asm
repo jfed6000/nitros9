@@ -2021,7 +2021,15 @@ bdlive@             tst       V.TermLive,u
 *   R$Y      = bitmap # (0-2)
 *   R$X high = reserved, must be 0
 *   R$X low  = the fill value (a CLUT index; 0 = transparent)
-*   R$U      = ROWS to fill, 1-240.  0 means the whole bitmap (240).
+*   R$U high = FIRST ROW, 0-239
+*   R$U low  = ROWS to fill.  0 means "to the end of the bitmap", which
+*              is the whole 240 when the first row is 0.
+*
+* THE FIRST ROW IS BACKWARD COMPATIBLE.  R$U's high byte used to have to
+* be zero and every caller passed it that way, so every one of them still
+* means "start at row 0" and behaves exactly as before.  It is there so a
+* caller can clear a BAND - which is what Joust's SCCLR actually wants -
+* and so a big fill can be split, which is what asked for it.
 *
 * THE ROW COUNT EXISTS BECAUSE THE ENGINE CANNOT SAFELY BE INTERRUPTED.
 * If a transfer does not finish inside one vertical-blanking window the
@@ -2069,17 +2077,26 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     tsta
                     lbne      BmBad
                     stb       >gr.b3
-* Rows -> a 24-bit byte count.  rows*320 = rows*256 + rows*64, and the
-* product reaches 76,800, so it does not fit 16 bits and is built in
-* three bytes below.
-                    ldd       R$U,x
-                    tsta
-                    lbne      BmBad               above 255 rows
+* The first row and the row count, and the band they describe has to fit
+* inside the bitmap.
+                    ldd       R$U,x               A = first row, B = row count
+                    cmpa      #BmPixels/320-1
+                    lbhi      BmBad               a first row past the last one
+                    sta       >gr.b5
                     tstb
                     bne       bcrow@
-                    ldb       #BmPixels/320       0 means the whole bitmap (240)
+                    ldb       #BmPixels/320       0 = to the end of the bitmap
+                    subb      >gr.b5
                     bra       bcrow2@
-bcrow@              cmpb      #BmPixels/320
+* first + count must not run off the end, and that sum reaches 494, so it
+* is checked in 16 bits rather than in B.
+bcrow@              pshs      b
+                    ldb       >gr.b5
+                    clra
+                    addb      ,s
+                    adca      #0
+                    cmpd      #BmPixels/320
+                    puls      b                   PULS leaves the flags alone
                     lbhi      BmBad
 bcrow2@             stb       >gr.b4              the row count
                     lda       DMA.Base+DMA_STATUS_REG
@@ -2090,7 +2107,7 @@ bcrow2@             stb       >gr.b4              the row count
                     beq       BmClrUnd            no blocks: nothing to fill
 * Build DmaFill's parameter block.  X stopped being the caller's register
 * image at BmGetAddr, which is why nothing below uses it.
-                    leas      -7,s
+                    leas      -10,s
                     ldb       >gr.b3
                     stb       6,s                 the fill value
 * THE DESTINATION FIRST, while A is still the block BmGetAddr returned.
@@ -2108,21 +2125,27 @@ bcrow2@             stb       >gr.b4              the row count
                     clrb                          D = bits 15:0, low 13 clear
                     leax      d,x                 X = that plus the offset
                     stx       1,s                 destination bits 15:8 and 7:0
+* THE FIRST ROW'S OFFSET, built in 7,8,9 and added in 24 bits.  This is
+* the one place a carry out of the middle byte is real: the argument that
+* a bitmap offset cannot carry rests on the block part's low 13 bits
+* being zero, and firstrow*320 reaches $12AC0, which is far larger than
+* an offset ever is.
+                    lda       >gr.b5              the first row
+                    leax      7,s
+                    lbsr      Rows2Byt
+                    ldd       1,s
+                    addd      8,s
+                    std       1,s                 STD leaves the carry alone
+                    lda       ,s
+                    adca      7,s
+                    sta       ,s
 * NOW the count, because from here A is expendable.
                     lda       >gr.b4              rows
-                    ldb       #64
-                    mul                           D = rows*64
-                    std       4,s                 into the count's M and L
-                    clr       3,s
-                    ldb       >gr.b4              + rows*256: add rows to M
-                    addb      4,s
-                    stb       4,s
-                    bcc       bccnt@
-                    inc       3,s
-bccnt@              equ       *
+                    leax      3,s
+                    lbsr      Rows2Byt
                     leax      ,s
                     lbsr      DmaFill             armed; it runs in the next vblank
-                    leas      7,s
+                    leas      10,s
                     lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy
@@ -2130,6 +2153,28 @@ BmClrBsy            comb
 BmClrUnd            comb
                     ldb       #E$WUndef
                     jmp       >GrfMod+SysRet
+
+*******************************************************************
+* Rows2Byt - rows of a 320-byte bitmap as a 24-bit byte count.
+*   Entry: A = rows (0-240), X -> three bytes.
+*   Exit:  ,X 1,X 2,X = rows*320, bits 23:16, 15:8, 7:0.  X and A kept.
+*
+* rows*320 = rows*256 + rows*64, and the product reaches 76,800, so it
+* does not fit in 16 bits and has to be built a byte at a time.  Both the
+* first row's offset and the byte count are this same sum, which is why
+* it is a subroutine now rather than written out twice.
+*******************************************************************
+Rows2Byt            pshs      a
+                    ldb       #64
+                    mul                           D = rows*64
+                    std       1,x
+                    clr       ,x
+                    ldb       ,s                  + rows*256: add rows to the M byte
+                    addb      1,x
+                    stb       1,x
+                    bcc       r2b@
+                    inc       ,x
+r2b@                puls      a,pc
 
 *******************************************************************
 * DmaFill - arm a 1D fill on the DMA engine and return.  Factored out of
