@@ -724,7 +724,6 @@ ClrDone             leax      ClrTxt,pcr
                     lda       $1C00,x             the byte just past it
                     lbsr      AppHex
 ClrNoMap            lbsr      EndLine
-                    lbsr      PutLine
                     lbra      Loop
 
 ********************************************************************
@@ -771,7 +770,6 @@ LnRep               pshs      cc,b
                     tfr       b,a
                     lbsr      AppDec
 lrok@               lbsr      EndLine
-                    lbsr      PutLine
                     lbra      Loop
 
 ********************************************************************
@@ -949,6 +947,9 @@ one@                pshs      a
                     sta       ,y+
                     puls      a,b,pc
 
+* EndLine FALLS THROUGH INTO PutLine, so it terminates the line AND
+* prints it.  Calling PutLine after it prints the line twice, which is
+* exactly what the C, L and F keys did on their first MAME run.
 EndLine             lda       #C$CR
                     sta       ,y
                     leax      linebuf,u
