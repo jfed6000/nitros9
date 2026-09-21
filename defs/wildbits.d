@@ -1284,15 +1284,23 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * raster spin does.  Arming near line 0 would also be safe, so the wrap
 * from the last line to line 0 between the test and the store costs
 * nothing - which is why the test is a simple "line < DMA_ArmLine".
-* A REGISTER-ONLY DELAY LOOP.  THE EXPERIMENT IS DONE AND THE ANSWER IS
-* "only touching the registers" - see beside DMA_STATUS_TRF_IP.  It is
-* kept, still opt-in, because it is the one thing that can demonstrate
-* that again cheaply, and because the user found the call steadier with
-* it on: a loop hitting a fetch boundary every 7 cycles grants the bus
-* the moment HALT asserts, where a CPU unwinding through grfdrv, vtio,
-* SCF and IOMan may take long enough that the transfer misses its window
-* and Progress holds the CPU down for another frame.  THAT last part is
-* a hypothesis and has not been measured.
+* THE DELAY LOOPS ARE DIAGNOSTICS, NOT A FIX, AND THEY ARE OFF BY
+* DEFAULT.  All three wedge the machine when sized to span the window -
+* see the table beside DMA_STATUS_TRF_IP.
+*
+* THE ONE THING TO REMEMBER: the register-only loop looked unbreakable
+* at first and was NOT.  Its first version was 4,096 passes, ~3.6 ms
+* against a wait of up to 16.7 ms, so it usually FINISHED BEFORE THE
+* HALT ARRIVED and left the CPU back in F$Sleep.  It covered ~22% of the
+* window, so it was mostly not being tested at all.  Resized to ~25 ms
+* it wedged like the others, with a whole-bitmap fill AND with two
+* half-bitmap fills - so it is not about the transfer fitting the
+* window either.
+*
+* That is worth spelling out because "the timer works better than
+* F$Sleep" is the natural conclusion from the early runs and it is
+* wrong.  THE SHIPPING PATH IS arm, F$Sleep, read the status once.
+* Nothing in a driver should turn these bits on.
 *
 * The loop is "leay -1,y / bne" - 7 cycles, of which 4 are instruction
 * fetches from the module's own code and 3 are dead cycles.  It reaches
