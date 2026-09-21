@@ -98,10 +98,7 @@ barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 wide                rmb       1         non-zero = ask for 16-bit transfers
-dlay                rmb       1         non-zero = ask the driver to delay after arming
-dio                 rmb       1         non-zero = that delay loop reads $FE20 each pass
-dram                rmb       1         non-zero = that delay loop reads RAM instead
-dsyn                rmb       1         non-zero = SYNC in the driver instead of a loop
+pmode               rmb       1         how the driver waits: 0 cwai 1 sync 2 reg 3 io 4 ram
 clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
@@ -146,10 +143,7 @@ start               clr       gotslab,u
                     clr       defined,u
                     clr       hires,u
                     clr       wide,u              8-bit until W says otherwise
-                    clr       dlay,u              no driver-side delay until D says so
-                    clr       dio,u               and it reads nothing until E says so
-                    clr       dram,u              M is the RAM-reading variant of E
-                    clr       dsyn,u              Y is SYNC, A is CWAI
+                    clr       pmode,u             0 = CWAI, the driver's own default
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -287,14 +281,8 @@ Loop                leax      keybuf,u
                     anda      #$5F                letters fold to upper case
                     cmpa      #'W
                     lbeq      DoWide
-                    cmpa      #'D
-                    lbeq      DoDlay
-                    cmpa      #'E
-                    lbeq      DoDio
-                    cmpa      #'M
-                    lbeq      DoDram
-                    cmpa      #'Y
-                    lbeq      DoSyn
+                    cmpa      #'P
+                    lbeq      DoPmode
                     cmpa      #'Q
                     lbeq      Quit
                     cmpa      #'H
@@ -983,15 +971,6 @@ dw@                 lbsr      PutLine
 * Survives hammering with 3 -> the hazard is the register access.
 * Wedges -> the hazard is executing at all during the window.
 ********************************************************************
-DoDlay              lda       dlay,u
-                    eora      #1
-                    sta       dlay,u
-                    leax      DlOffTx,pcr
-                    tst       dlay,u
-                    beq       dd@
-                    leax      DlOnTx,pcr
-dd@                 lbsr      PutLine
-                    lbra      Loop
 
 ********************************************************************
 * E - the driver's delay loop, but reading $FE20 every pass.
@@ -1006,15 +985,6 @@ dd@                 lbsr      PutLine
 * Wedges -> any I/O access during a transfer is unsafe, which is far
 *           broader and points at the bus rather than the DMA.
 ********************************************************************
-DoDio               lda       dio,u
-                    eora      #1
-                    sta       dio,u
-                    leax      EiOffTx,pcr
-                    tst       dio,u
-                    beq       de@
-                    leax      EiOnTx,pcr
-de@                 lbsr      PutLine
-                    lbra      Loop
 
 ********************************************************************
 * M - the delay loop reading RAM, the control for E.
@@ -1029,15 +999,6 @@ de@                 lbsr      PutLine
 * Wedges -> it is any data access, or just time in the window, and D was
 *           only safe because it was shorter.
 ********************************************************************
-DoDram              lda       dram,u
-                    eora      #1
-                    sta       dram,u
-                    leax      MrOffTx,pcr
-                    tst       dram,u
-                    beq       dm@
-                    leax      MrOnTx,pcr
-dm@                 lbsr      PutLine
-                    lbra      Loop
 
 ********************************************************************
 * Y and A - SYNC and CWAI in the driver instead of a delay loop.
@@ -1062,16 +1023,52 @@ dm@                 lbsr      PutLine
 * sleeping works - and unlike F$Sleep it is something a driver can do
 * without handing the question back to its caller.
 ********************************************************************
-DoSyn               lda       dsyn,u
-                    eora      #1
-                    sta       dsyn,u
-                    leax      SyOffTx,pcr
-                    tst       dsyn,u
-                    beq       dy@
-                    leax      SyOnTx,pcr
-dy@                 lbsr      PutLine
-                    lbra      Loop
 
+
+********************************************************************
+* P - how the DRIVER waits after arming.  Cycles through five.
+*
+* These were four independent toggles and that was a trap: the driver
+* takes the HIGHEST bit set, so turning one off could leave another
+* underneath it still in force, and nothing on screen said which was
+* winning.  One selector, named on every line it affects.
+*
+*   cwai     the default, and the shipping behaviour.  Parks the CPU at
+*            $FFFF with rAVMA = 0 until the tick, which fires at line 0
+*            - the instant HALT asserts.  Works.
+*   sync     the same park without vectoring.  Works, but is not bounded
+*            and is a no-op if a line is already asserted.
+*   regloop  a register-only loop.  WEDGES THE MACHINE.
+*   ioloop   that loop reading $FE20.  WEDGES.
+*   ramloop  that loop reading RAM.  WEDGES.
+*
+* The last three are kept to reproduce the failure, not to be used.
+********************************************************************
+DoPmode             lda       pmode,u
+                    inca
+                    cmpa      #5
+                    blo       dp1@
+                    clra
+dp1@                sta       pmode,u
+                    leax      PmMsg,pcr
+                    lbsr      StartLine
+                    lda       pmode,u
+                    leax      PmCwai,pcr
+                    tsta
+                    beq       dp2@
+                    leax      PmSync,pcr
+                    deca
+                    beq       dp2@
+                    leax      PmReg,pcr
+                    deca
+                    beq       dp2@
+                    leax      PmIo,pcr
+                    deca
+                    beq       dp2@
+                    leax      PmRam,pcr
+dp2@                lbsr      AppStr
+                    lbsr      EndLine
+                    lbra      Loop
 
 ********************************************************************
 * ClrOne - one SS.BmClear and wait for it.  A = first row, B = rows.
@@ -1104,27 +1101,37 @@ ClrOne              sta       cofrow,u
                     beq       cow@
                     leax      OneW16,pcr
 cow@                lbsr      AppStr
+* AND WHICH WAIT THE DRIVER IS USING.  Leaving this off the line meant a
+* crash could not be attributed: four independent toggles, the driver
+* taking the highest bit set, and nothing on screen saying which won.
+                    leax      OneSp,pcr
+                    lbsr      AppStr
+                    lda       pmode,u
+                    leax      PmCwai,pcr
+                    tsta
+                    beq       cop@
+                    leax      PmSync,pcr
+                    deca
+                    beq       cop@
+                    leax      PmReg,pcr
+                    deca
+                    beq       cop@
+                    leax      PmIo,pcr
+                    deca
+                    beq       cop@
+                    leax      PmRam,pcr
+cop@                lbsr      AppStr
                     lbsr      EndLine
-* R$X = flags : fill value.  Bit 0 of the high byte asks for 16-bit.
-* BUILT BEFORE "tfr d,u", because after that U is the row parameter and
-* "wide,u" would be reading through it.
+* R$X = flags : fill value.  Bit 0 of the high byte asks for 16-bit,
+* the rest say how the DRIVER waits.  BUILT BEFORE "tfr d,u", because
+* after that U is the row parameter and "wide,u" reads through it.
+cox@                leax      PmFlags,pcr
+                    lda       pmode,u
+                    lda       a,x                 the flag bits for this mode
                     ldx       #CLRVAL
                     tst       wide,u
-                    beq       cox@
-                    ldx       #$0100+CLRVAL
-cox@                lda       #0
-                    tst       dlay,u
-                    beq       cox1@
-                    lda       #2                  bit 1: delay inside the driver
-cox1@               tst       dio,u
-                    beq       cox1b@
-                    lda       #4                  bit 2: that delay, reading $FE20
-cox1b@              tst       dram,u
-                    beq       cox1c@
-                    lda       #8                  bit 3: the same, reading RAM
-cox1c@              tst       dsyn,u
                     beq       cox2@
-                    lda       #16                 bit 4: SYNC instead of CWAI
+                    ldx       #$0100+CLRVAL
 cox2@               tsta
                     beq       cox3@
                     pshs      x
@@ -1681,26 +1688,25 @@ OneGE               fcc       /  GetStt err /
                     fcb       $00
 OneNR               fcc       /  it never came back/
                     fcb       C$CR
+OneSp               fcc       / /
+                    fcb       $00
+PmMsg               fcc       /  P - the driver now waits with: /
+                    fcb       $00
+PmCwai              fcc       /cwai/
+                    fcb       $00
+PmSync              fcc       /sync/
+                    fcb       $00
+PmReg               fcc       /regloop - WEDGES/
+                    fcb       $00
+PmIo                fcc       /ioloop - WEDGES/
+                    fcb       $00
+PmRam               fcc       /ramloop - WEDGES/
+                    fcb       $00
+PmFlags             fcb       0,16,2,4,8          cwai sync reg io ram
 OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
                     fcb       $00
-SyOffTx             fcc       /  Y - back to CWAI, the default/
-                    fcb       C$CR
-SyOnTx              fcc       /  Y - SYNC instead of the default CWAI (not bounded)/
-                    fcb       C$CR
-MrOffTx             fcc       /  M - RAM-read loop OFF/
-                    fcb       C$CR
-MrOnTx              fcc       /  M - the delay loop READS RAM each pass - same timing as E, not IO/
-                    fcb       C$CR
-EiOffTx             fcc       /  E - the delay loop reads NOTHING (register-only)/
-                    fcb       C$CR
-EiOnTx              fcc       /  E - the delay loop READS $FE20 each pass - real IO, but not the DMA/
-                    fcb       C$CR
-DlOffTx             fcc       /  D - driver delay OFF: arm and return, as normal/
-                    fcb       C$CR
-DlOnTx              fcc       /  D - driver delay ON: register-only loop in grfdrv after arming/
-                    fcb       C$CR
 W8Txt               fcc       /  W - transfers are 8-BIT now (768 us a bitmap)/
                     fcb       C$CR
 W16Txt              fcc       /  W - transfers are 16-BIT now (384 us a bitmap, the untried path)/
@@ -1711,7 +1717,7 @@ Hlf2E               fcc       /  2 second half err /
                     fcb       $00
 * The key line was one string of 97 characters and I$WritLn is given 80,
 * so "G guard Q quit" never reached the screen.  Two lines now.
-KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  E ioread  M ramread  Y sync/
+KeyTx2              fcc       /C clear  2 halves  3 full  W width  P wait-mode/
                     fcb       C$CR
 KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  Q quit/
                     fcb       C$CR
