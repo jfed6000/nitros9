@@ -101,6 +101,8 @@ wide                rmb       1         non-zero = ask for 16-bit transfers
 dlay                rmb       1         non-zero = ask the driver to delay after arming
 dio                 rmb       1         non-zero = that delay loop reads $FE20 each pass
 dram                rmb       1         non-zero = that delay loop reads RAM instead
+dsyn                rmb       1         non-zero = SYNC in the driver instead of a loop
+dcwa                rmb       1         non-zero = CWAI in the driver instead
 clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
@@ -148,6 +150,8 @@ start               clr       gotslab,u
                     clr       dlay,u              no driver-side delay until D says so
                     clr       dio,u               and it reads nothing until E says so
                     clr       dram,u              M is the RAM-reading variant of E
+                    clr       dsyn,u              Y is SYNC, A is CWAI
+                    clr       dcwa,u
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -291,6 +295,10 @@ Loop                leax      keybuf,u
                     lbeq      DoDio
                     cmpa      #'M
                     lbeq      DoDram
+                    cmpa      #'Y
+                    lbeq      DoSyn
+                    cmpa      #'A
+                    lbeq      DoCwa
                     cmpa      #'Q
                     lbeq      Quit
                     cmpa      #'H
@@ -817,7 +825,7 @@ dcmax@              equ       *
 * the ONLY thing C did that 2 never did was read the busy bit back
 * IMMEDIATELY after arming, with no sleep in between.  That read is a
 * full I$GetStt - IOMan, SCF, vtio, grfdrv, about 474 us of system-state
-* execution with interrupts masked - and it runs while the transfer is
+* execution - and it runs while the transfer is
 * armed and waiting for the window to open.  When the window opens,
 * Bus_RDY_o = Available & Progress halts the CPU wherever it happens to
 * be; 2 is parked in F$Sleep at that moment and C is inside a driver.
@@ -1036,6 +1044,49 @@ dm@                 lbsr      PutLine
                     lbra      Loop
 
 ********************************************************************
+* Y and A - SYNC and CWAI in the driver instead of a delay loop.
+*
+* Every counted loop wedges the machine.  The one state that has never
+* failed is the CPU issuing NO VALID BUS CYCLES, which is what the
+* kernel's idle CWAI does - and the shipping path reaches it only
+* indirectly, by returning and letting the caller F$Sleep.
+*
+* These put that state INSIDE grfdrv, right after arming, so the CPU is
+* already parked when HALT asserts instead of unwinding out through
+* grfdrv, vtio, SCF and IOMan first.  Both park at $FFFF with rAVMA = 0.
+*
+*   Y  SYNC  does not vector; exits when any interrupt LINE asserts, and
+*            the 60 Hz tick fires at line 0 - the instant HALT asserts.
+*            NOT BOUNDED: sits for ever if no line ever asserts.
+*   A  CWAI  vectors normally and is BOUNDED - the tick always wakes it.
+*            Safe here because grfdrv runs with interrupts ENABLED;
+*            CallGrfDrvGo's orcc #IntMasks covers only the stack switch.
+*
+* If either is solid where the loops are not, that is the answer to why
+* sleeping works - and unlike F$Sleep it is something a driver can do
+* without handing the question back to its caller.
+********************************************************************
+DoSyn               lda       dsyn,u
+                    eora      #1
+                    sta       dsyn,u
+                    leax      SyOffTx,pcr
+                    tst       dsyn,u
+                    beq       dy@
+                    leax      SyOnTx,pcr
+dy@                 lbsr      PutLine
+                    lbra      Loop
+
+DoCwa               lda       dcwa,u
+                    eora      #1
+                    sta       dcwa,u
+                    leax      CwOffTx,pcr
+                    tst       dcwa,u
+                    beq       da@
+                    leax      CwOnTx,pcr
+da@                 lbsr      PutLine
+                    lbra      Loop
+
+********************************************************************
 * ClrOne - one SS.BmClear and wait for it.  A = first row, B = rows.
 *   Returns the carry and B: clear means it finished, set means B is
 *   the error - either the SetStat's own or E$NotRdy for a fill that
@@ -1082,8 +1133,14 @@ cox1@               tst       dio,u
                     beq       cox1b@
                     lda       #4                  bit 2: that delay, reading $FE20
 cox1b@              tst       dram,u
-                    beq       cox2@
+                    beq       cox1c@
                     lda       #8                  bit 3: the same, reading RAM
+cox1c@              tst       dsyn,u
+                    beq       cox1d@
+                    lda       #16                 bit 4: SYNC, not a loop
+cox1d@              tst       dcwa,u
+                    beq       cox2@
+                    lda       #32                 bit 5: CWAI, not a loop
 cox2@               tsta
                     beq       cox3@
                     pshs      x
@@ -1645,6 +1702,14 @@ OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
                     fcb       $00
+SyOffTx             fcc       /  Y - SYNC OFF/
+                    fcb       C$CR
+SyOnTx              fcc       /  Y - SYNC in the driver after arming (not bounded)/
+                    fcb       C$CR
+CwOffTx             fcc       /  A - CWAI OFF/
+                    fcb       C$CR
+CwOnTx              fcc       /  A - CWAI in the driver after arming (bounded by the tick)/
+                    fcb       C$CR
 MrOffTx             fcc       /  M - RAM-read loop OFF/
                     fcb       C$CR
 MrOnTx              fcc       /  M - the delay loop READS RAM each pass - same timing as E, not IO/
@@ -1667,7 +1732,7 @@ Hlf2E               fcc       /  2 second half err /
                     fcb       $00
 * The key line was one string of 97 characters and I$WritLn is given 80,
 * so "G guard Q quit" never reached the screen.  Two lines now.
-KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  E ioread  M ramread  L lines  F flood/
+KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  E ioread  M ramread  Y sync  A cwai/
                     fcb       C$CR
 KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  Q quit/
                     fcb       C$CR

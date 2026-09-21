@@ -1320,6 +1320,19 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * Both counts below are ~25 ms at 10 MHz, longer at any slower clock, so
 * every variant now spans the whole wait and they are duration-matched
 * against each other.  Only the instruction mix differs.
+* HOW MANY SYNCs THE BIT-4 VARIANT EXECUTES.  One should be enough - a
+* SYNC exits at the next interrupt, and the 60 Hz tick fires at line 0,
+* the same instant HALT asserts - but SYNC exits IMMEDIATELY if a line
+* is already asserted rather than waiting for an edge, so a tick latched
+* but not yet serviced makes it a no-op.  Four covers that without being
+* able to eat many frames.
+DmaSyncs            equ       4
+* The same count for the CWAI variant (bit 5).  CWAI is the instruction
+* the kernel's own idle uses, and grfdrv runs with interrupts ENABLED -
+* CallGrfDrvGo's orcc #IntMasks covers only the stack switch, because it
+* plants the CALLER's CC in the frame S.Flip1 rti's from.  So CWAI
+* enables nothing here that is not already enabled, and unlike SYNC it
+* is BOUNDED: the tick always wakes it and it vectors normally.
 DmaDly7             equ       35714     register-only loop, 7 cycles a pass
 DmaDly12            equ       20833     the data-reading loops, 12 a pass
 DMA_ArmLine         equ       48        arm at this raster line or later

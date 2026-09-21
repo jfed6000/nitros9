@@ -2081,7 +2081,7 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     lbhi      BmBad
                     stb       >gr.b2
                     ldd       R$X,x               A = flags, B = the fill value
-                    bita      #$F0                only bits 0-3 are defined
+                    bita      #$C0                only bits 0-5 are defined
                     lbne      BmBad
                     sta       >gr.d1              the width flag
                     stb       >gr.b3
@@ -2108,11 +2108,11 @@ bcrow@              pshs      b
                     lbhi      BmBad
 bcrow2@             stb       >gr.b4              the row count
                     lda       DMA.Base+DMA_STATUS_REG
-                    bmi       BmClrBsy            a fill is still outstanding
+                    lbmi      BmClrBsy            a fill is still outstanding
                     lda       >gr.b2
                     lbsr      BmGetAddr           A = block, X = offset
                     tsta
-                    beq       BmClrUnd            no blocks: nothing to fill
+                    lbeq      BmClrUnd            no blocks: nothing to fill
 * Build DmaFill's parameter block.  X stopped being the caller's register
 * image at BmGetAddr, which is why nothing below uses it.
                     leas      -11,s
@@ -2174,6 +2174,10 @@ bcrow2@             stb       >gr.b4              the row count
 * Wedges    -> the hazard is executing at all, and only the woken-from-
 *              idle path is safe.
                     lda       >gr.d1
+                    bita      #32
+                    bne       bccwai@             bit 5: CWAI instead of a loop
+                    bita      #16
+                    bne       bcsync@             bit 4: SYNC instead of a loop
                     bita      #8
                     bne       bcdram@             bit 3: the same loop, reading RAM
                     bita      #4
@@ -2216,6 +2220,53 @@ bcdram@             leax      <bcdram@,pcr
 bcdrm2@             lda       ,x
                     leay      -1,y
                     bne       bcdrm2@
+                    bra       bcnod@
+* BIT 4 - SYNC, WHICH IS THE ONLY ONE OF THESE THAT IS NOT A LOOP.
+* Every counted loop above wedges the machine, and the one state that
+* never has is the CPU issuing NO VALID BUS CYCLES - which is what the
+* kernel's idle CWAI does.  CWAI cannot be used here: it ENABLES
+* interrupts, and grfdrv is not reentrant with the MMU flipped onto a
+* shared stack.  SYNC gives the same bus behaviour without that -
+* CPUSTATE_SYNC sets rAVMA = 0 with the address parked at $FFFF, and
+* with I set the core leaves SYNC and runs the NEXT INSTRUCTION rather
+* than vectoring.
+*
+* It should land exactly right: SYNC exits when an interrupt LINE
+* asserts, and the 60 Hz tick fires at line 0 - the same instant the
+* transfer window opens and HALT asserts.  So the CPU is parked with no
+* bus cycles right up to the moment it is asked for the bus, then takes
+* HALT at the next fetch.
+*
+* TWO HAZARDS.  SYNC exits at once if a line is ALREADY asserted, not on
+* an edge, so a tick latched but not yet serviced makes it a no-op -
+* hence DmaSyncs of them rather than one.  And SYNC has NO
+* TIMEOUT: if no interrupt ever arrives the CPU stays there for ever.
+* The tick makes that very unlikely; it is not impossible.  This is an
+* experiment, not something to ship.
+bcsync@             ldy       #DmaSyncs
+bcsyn2@             sync
+                    leay      -1,y
+                    bne       bcsyn2@
+                    bra       bcnod@
+* BIT 5 - CWAI, which is what the kernel's own idle uses and is the one
+* state that has never failed.  CPUSTATE_CWAI_POST parks at $FFFF with
+* rAVMA = 0, the same "no valid accesses" as SYNC, and unlike SYNC it is
+* BOUNDED - the 60 Hz tick always wakes it and it vectors normally,
+* where SYNC sits for ever if no line ever asserts.
+*
+* It is safe to do here because GRFDRV RUNS WITH INTERRUPTS ENABLED, so
+* CWAI enables nothing that is not already enabled.  An interrupt taken
+* in this module is an ordinary event, not a new hazard.
+*
+* The difference from the working path is only WHERE the CWAI happens:
+* the kernel's is at the scheduler, after grfdrv has returned and the
+* MMU is back; this one is inside grfdrv with the task still flipped.
+* If bit 5 is solid and bit 4 is not, that is the answer to why sleeping
+* works, and it is an answer a driver could act on.
+bccwai@             ldy       #DmaSyncs
+bccw2@              cwai      #^IntMasks
+                    leay      -1,y
+                    bne       bccw2@
 bcnod@              lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy
