@@ -73,6 +73,10 @@ FANCY               equ       120
 * is unambiguous, and white-on-blue reads cleanly.
 CLRVAL              equ       9         C: blue - see the note above
 CLRWAIT             equ       10        C: frames to wait before calling it dead
+* What FillBm writes into the four bytes past the end of the bitmap, so
+* that C's "next" reading is a measurement and not whatever the slab
+* happened to hold.  Any value but CLRVAL would do.
+SENTVAL             equ       $AA
 
                     mod       eom,name,tylg,atrv,start,size
 
@@ -640,6 +644,20 @@ fnxt@               ldd       rowsleft,u
                     subd      #1
                     std       rowsleft,u
                     lbne      frow@
+* A SENTINEL PAST THE END, so that "next" means something.  That byte is
+* the off-by-one check, and it lives in the UNINITIALISED part of the
+* slab: one hardware run read it as $09 - the fill value itself - and
+* another read $E8 at the same offset, so it was leftover and not
+* evidence either way.  With this, "next $AA" is a fill that stopped
+* where it should and "next $09" is one that ran past the end.  bmptr is
+* already sitting on it, because the walk ends inside the tenth block
+* with $400 to spare.
+                    ldx       bmptr,u
+                    lda       #SENTVAL
+                    sta       ,x+
+                    sta       ,x+
+                    sta       ,x+
+                    sta       ,x
                     lbsr      UnmapCur
                     andcc     #^Carry
                     rts
@@ -704,8 +722,14 @@ ShowErrAt           pshs      b
 * call that could not be settled by reading the RTL: the engine computes
 * Dst_Stop = Dst + Count - 1 and loops while ptr < Stop, and whether that
 * writes Count or Count-1 bytes depends on a write strobe and a pointer
-* increment that share a clock.  "last 0F, next XX" is right; "last XX"
-* means the fill is one byte short.
+* increment that share a clock.  At the FULL 240 rows, "last 09, next AA"
+* is right: "last" not the fill value means it came up one byte short,
+* and "next" not SENTVAL means it ran one byte past.  Below 240 rows
+* "last" is simply the bar colour that row was drawn in.
+*
+* THE SCAN IS THE BETTER INSTRUMENT AND IT ANSWERS THE SAME QUESTION: a
+* fill one byte short reads "SHORT, mid-row" at 239,319.  This pair is
+* kept because it is a direct read of the two bytes in question.
 *
 * BMOFF + 76,800 - 1 = $13BFF, which is offset $1BFF of the TENTH block
 * of the slab - so the byte after it, at $1C00, is still inside the slab
