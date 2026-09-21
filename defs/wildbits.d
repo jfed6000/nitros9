@@ -1166,9 +1166,10 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * document notes that its own probe "deliberately never starts a
 * transfer for this reason".
 *
-* So: arm, F$Sleep to get the CPU out of the way, THEN read this bit.
-* A driver-side spin was built on 2026-09-21 and wedged the machine at
-* once; it is reverted, and this note is why it must not come back.
+* So: arm, let the transfer finish, THEN read this bit - and never poll
+* it while one is outstanding.  A driver-side spin was built on
+* 2026-09-21 and wedged the machine at once; it is reverted, and this
+* note is why it must not come back.
 *
 * WHERE THE HANDSHAKE ACTUALLY COMES FROM, read from the core RTL
 * (source/mc6809/mc6809i.v) and worth knowing before anyone tries to be
@@ -1194,13 +1195,20 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 *      (level2/modules/kernel/ccbfnproc.asm:23) and grants the bus a few
 *      instructions later at the next fetch.
 *
-* WHY A TIGHT POLL OF THIS REGISTER FAILS IS STILL NOT EXPLAINED.  It
-* also reaches fetch boundaries constantly.  The remaining suspect is
-* MRDY - Drive_RDY stretches the current cycle, and a loop doing real
-* reads of $FEC1 may freeze mid-cycle where CWAI's $FFFF dead cycles do
-* not - but that is untested and should be treated as a guess.  What is
-* established is only the empirical ordering: sleep-then-poll works, an
-* immediate GetStat is intermittent, a driver-side spin fails at once.
+* WHY A TIGHT POLL FAILS IS NOW MEASURED, and the answer narrows the
+* rule considerably.  A register-only delay loop was run in grfdrv in
+* exactly the place the poll had been - same masked, MMU-flipped
+* context, same ~8 ms, hitting instruction-fetch boundaries every 7
+* cycles - differing from it in ONE way: it never reads $FEC0-$FECF.
+* It is rock solid under hammering where the poll wedged on the first
+* press.  (K2 hardware, 2026-09-21, the user's experiment.)
+*
+* SO THE HAZARD IS TOUCHING THE DMA REGISTERS WHILE A TRANSFER IS LIVE,
+* NOT EXECUTING DURING THE WINDOW.  A caller may do real work between
+* arming and completion; it must simply stay off $FEC0-$FECF.  F$Sleep
+* is therefore a convenient way to pass the time, not a safety
+* requirement - which is the opposite of what was written here earlier
+* in the day.
 *
 * Two more figures from the same source, neither of them ours to guess:
 *   - a timeout must be AT LEAST TWO FRAMES, ~40 ms.  A transfer armed
@@ -1236,9 +1244,15 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * raster spin does.  Arming near line 0 would also be safe, so the wrap
 * from the last line to line 0 between the test and the store costs
 * nothing - which is why the test is a simple "line < DMA_ArmLine".
-* A REGISTER-ONLY DELAY LOOP, for the experiment described beside
-* DMA_STATUS_TRF_IP: does EXECUTING during the pending window hurt, or
-* only TOUCHING THE DMA REGISTERS during it?
+* A REGISTER-ONLY DELAY LOOP.  THE EXPERIMENT IS DONE AND THE ANSWER IS
+* "only touching the registers" - see beside DMA_STATUS_TRF_IP.  It is
+* kept, still opt-in, because it is the one thing that can demonstrate
+* that again cheaply, and because the user found the call steadier with
+* it on: a loop hitting a fetch boundary every 7 cycles grants the bus
+* the moment HALT asserts, where a CPU unwinding through grfdrv, vtio,
+* SCF and IOMan may take long enough that the transfer misses its window
+* and Progress holds the CPU down for another frame.  THAT last part is
+* a hypothesis and has not been measured.
 *
 * The loop is "leay -1,y / bne" - 7 cycles, of which 4 are instruction
 * fetches from the module's own code and 3 are dead cycles.  It reaches
