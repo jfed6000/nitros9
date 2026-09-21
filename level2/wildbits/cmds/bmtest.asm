@@ -94,6 +94,7 @@ barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 clrtck              rmb       1         C: frames waited for the fill to finish
+clrans              rmb       2         C: what the GetStat answered in R$X
 lnleft              rmb       1         L/F: records still to build
 lndrawn             rmb       2         L/F: records the driver says it drew
 lnbuf               rmb       NFLOOD*8  the line records, 8 bytes each
@@ -200,11 +201,19 @@ Step1               ldx       #NBLKS
 * TEXT OVERLAY ON.  Without FX_TXT+FX_OVR the bitmap covers the whole
 * screen and every message this program prints goes to a text screen
 * that is not being displayed - which is why the SS.BmClear readout
-* never reached the operator on the first hardware run.  FT_FOVR makes
-* the text background opaque rather than transparent, so a line stays
-* readable whatever colour the bitmap underneath it happens to be.
+* never reached the operator on the first hardware run.
+*
+* FT_FOVR MUST BE 0 HERE, and setting it is what blanked the bitmap on
+* the second run.  GraphicOutputMixer.v:230 is explicit: with overlay on
+* and Show_BG_in_Overlay set, the case 4'b110x - background index NOT
+* zero, EITHER font pixel - outputs the FONT colour for the whole cell.
+* The text screen is 80x60 and covers the entire display, so every cell
+* whose background attribute is non-zero paints solid over the graphics
+* and the bitmap disappears.  With the bit clear, case 4'b10x0 sends the
+* graphics through wherever a font pixel is background, which is exactly
+* the transparent overlay this test wants: glyph pixels only.
                     ldx       #FX_GRF+FX_BM+FX_TXT+FX_OVR
-                    ldy       #FT_FOVR            60 Hz, 320x240, opaque text
+                    ldy       #0                  60 Hz, 320x240, TRANSPARENT overlay
                     lda       #BMPATH
                     ldb       #SS.MCR
                     os9       I$SetStt
@@ -651,8 +660,10 @@ UnmapCur            ldx       winaddr,u
 ********************************************************************
 * ShowErr - "bmtest: error nnn" from B
 ********************************************************************
-ShowErr             pshs      b
-                    leax      ErrTxt,pcr
+* ShowErrAt - X = a prefix string, B = the error code.  ShowErr is the
+* same thing with the generic prefix.
+ShowErr             leax      ErrTxt,pcr
+ShowErrAt           pshs      b
                     lbsr      StartLine
                     lda       ,s
                     lbsr      AppDec
@@ -684,7 +695,8 @@ DoClear             ldy       #0                  bitmap 0
                     os9       I$SetStt
                     puls      u
                     bcc       ClrArm
-                    lbsr      ShowErr
+                    leax      ClrSetE,pcr         say WHICH call failed
+                    lbsr      ShowErrAt
                     lbra      Loop
 ClrArm              clr       clrtck,u
 ClrTick             ldx       #2                  one 60 Hz tick
@@ -695,12 +707,21 @@ ClrTick             ldx       #2                  one 60 Hz tick
                     lda       #BMPATH
                     ldb       #SS.BmClear
                     os9       I$GetStt
-                    tfr       x,d                 0 idle, 1 still outstanding
-                    puls      u                   PULS does not touch CC
+* Keep the call's CARRY, its ERROR CODE and its ANSWER.  The first
+* hardware run printed B after a "tfr x,d" had already overwritten it,
+* so its "error 187" was X's low byte and not an error code at all -
+* which cost a run and sent the diagnosis down the wrong road.
+                    pshs      cc,b,x              ,s=CC 1,s=B 2,s=X 4,s=the data ptr
+                    ldu       4,s
+                    ldd       2,s                 the driver's answer
+                    std       clrans,u
+                    puls      cc,b,x
+                    puls      u
                     bcc       ClrPoll
-                    lbsr      ShowErr
+                    leax      ClrGetE,pcr
+                    lbsr      ShowErrAt
                     lbra      Loop
-ClrPoll             tstb
+ClrPoll             ldd       clrans,u            0 idle, 1 still outstanding
                     beq       ClrDone
                     inc       clrtck,u
                     lda       clrtck,u
@@ -1055,6 +1076,10 @@ FldTxt              fcc       /  SS.BmLine flood: drew /
 LnTx2               fcc       / of them/
                     fcb       $00
 LnTx3               fcc       /, then stopped with error /
+                    fcb       $00
+ClrSetE             fcc       /  C: the SS.BmClear SetStat failed, error /
+                    fcb       $00
+ClrGetE             fcc       /  C: the fill was armed but the GetStat failed, error /
                     fcb       $00
 ErrTxt              fcc       /bmtest: error /
                     fcb       $00
