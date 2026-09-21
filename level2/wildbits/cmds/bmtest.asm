@@ -66,7 +66,12 @@ NLINES              equ       16        L: the fan from the centre
 NFLOOD              equ       255       F: the batch that must run the FIFO short
 FANCX               equ       160       the centre the fan radiates from
 FANCY               equ       120
-CLRVAL              equ       15        C: white, so a missed byte shows
+* C's fill colour.  NOT white: white is also the pattern's top bar, and
+* more importantly the overlaid text is white, so a white fill would hide
+* the very readout the test exists to produce.  Blue is in none of the
+* bars near the bottom, so "the screen went blue except the bottom bar"
+* is unambiguous, and white-on-blue reads cleanly.
+CLRVAL              equ       9         C: blue - see the note above
 CLRWAIT             equ       10        C: frames to wait before calling it dead
 
                     mod       eom,name,tylg,atrv,start,size
@@ -192,8 +197,14 @@ Step1               ldx       #NBLKS
                     os9       I$SetStt
                     lbcs      Failed
 
-                    ldx       #FX_GRF+FX_BM
-                    ldy       #0                  60 Hz, 320x240
+* TEXT OVERLAY ON.  Without FX_TXT+FX_OVR the bitmap covers the whole
+* screen and every message this program prints goes to a text screen
+* that is not being displayed - which is why the SS.BmClear readout
+* never reached the operator on the first hardware run.  FT_FOVR makes
+* the text background opaque rather than transparent, so a line stays
+* readable whatever colour the bitmap underneath it happens to be.
+                    ldx       #FX_GRF+FX_BM+FX_TXT+FX_OVR
+                    ldy       #FT_FOVR            60 Hz, 320x240, opaque text
                     lda       #BMPATH
                     ldb       #SS.MCR
                     os9       I$SetStt
@@ -723,6 +734,12 @@ ClrDone             leax      ClrTxt,pcr
                     ldx       winaddr,u
                     lda       $1C00,x             the byte just past it
                     lbsr      AppHex
+* Give the window back.  Every other MapCur in this file is paired with
+* an UnmapCur and this one was not, so each C leaked an 8K logical block
+* until F$MapBlk ran the process out of its eight and started failing.
+                    pshs      y
+                    lbsr      UnmapCur
+                    puls      y
 ClrNoMap            lbsr      EndLine
                     lbra      Loop
 
