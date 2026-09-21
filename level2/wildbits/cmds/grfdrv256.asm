@@ -2019,7 +2019,14 @@ bdlive@             tst       V.TermLive,u
 * SetStat SS.BmClear ($E5) - fill a bitmap with one colour, using the
 *   rc16's DMA engine.
 *   R$Y      = bitmap # (0-2)
-*   R$X high = reserved, must be 0
+*   R$X high = FLAGS.  Bit 0 = do a 16-bit transfer; all other bits must
+*              be 0.  16-bit is twice the rate, 384 us against 768 for a
+*              whole bitmap, and it is a SEPARATE PATH THROUGH THE ENGINE
+*              - Double_Speed_DMA, with its own end comparison and its
+*              own byte-lane handling - so it is opt-in until it has been
+*              run.  A 16-bit request against an ODD destination is
+*              quietly done 8-bit, because the engine masks address bit 0
+*              and would otherwise write the byte before the bitmap.
 *   R$X low  = the fill value (a CLUT index; 0 = transparent)
 *   R$U high = FIRST ROW, 0-239
 *   R$U low  = ROWS to fill.  0 means "to the end of the bitmap", which
@@ -2073,9 +2080,10 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     cmpd      #2
                     lbhi      BmBad
                     stb       >gr.b2
-                    ldd       R$X,x               A = reserved, B = the fill value
-                    tsta
+                    ldd       R$X,x               A = flags, B = the fill value
+                    bita      #$FE                only bit 0 is defined
                     lbne      BmBad
+                    sta       >gr.d1              the width flag
                     stb       >gr.b3
 * The first row and the row count, and the band they describe has to fit
 * inside the bitmap.
@@ -2107,9 +2115,11 @@ bcrow2@             stb       >gr.b4              the row count
                     beq       BmClrUnd            no blocks: nothing to fill
 * Build DmaFill's parameter block.  X stopped being the caller's register
 * image at BmGetAddr, which is why nothing below uses it.
-                    leas      -10,s
+                    leas      -11,s
                     ldb       >gr.b3
                     stb       6,s                 the fill value
+                    ldb       >gr.d1
+                    stb       7,s                 the width flag
 * THE DESTINATION FIRST, while A is still the block BmGetAddr returned.
 * The row arithmetic below uses MUL, and MUL DESTROYS A - putting it
 * first cost a hardware run: the block $E2 became the $3A that rows*64
@@ -2131,13 +2141,13 @@ bcrow2@             stb       >gr.b4              the row count
 * being zero, and firstrow*320 reaches $12AC0, which is far larger than
 * an offset ever is.
                     lda       >gr.b5              the first row
-                    leax      7,s
+                    leax      8,s
                     lbsr      Rows2Byt
                     ldd       1,s
-                    addd      8,s
+                    addd      9,s
                     std       1,s                 STD leaves the carry alone
                     lda       ,s
-                    adca      7,s
+                    adca      8,s
                     sta       ,s
 * NOW the count, because from here A is expendable.
                     lda       >gr.b4              rows
@@ -2145,7 +2155,7 @@ bcrow2@             stb       >gr.b4              the row count
                     lbsr      Rows2Byt
                     leax      ,s
                     lbsr      DmaFill             armed; it runs in the next vblank
-                    leas      10,s
+                    leas      11,s
                     lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy
@@ -2181,10 +2191,11 @@ r2b@                puls      a,pc
 *   SS.BmClear so that the 2D blit this engine can also do grows from the
 *   same place: a blit adds a source, two strides and the 2D control bit,
 *   and changes nothing here.
-*   Entry: X -> a 7-byte parameter block
+*   Entry: X -> an 8-byte parameter block
 *            0,1,2  destination address, bits 23:16, 15:8, 7:0
 *            3,4,5  byte count,          bits 23:16, 15:8, 7:0
 *            6      the fill value
+*            7      flags: bit 0 = 16-bit transfer
 *   Exit:  armed.  B = 0.  A, B and X clobbered.
 *
 * THIS IS THE USER'S OWN 2025 BARE-METAL TEST SEQUENCE, INSTRUCTION FOR
@@ -2232,10 +2243,27 @@ r2b@                puls      a,pc
 *******************************************************************
 DmaFill             clr       DMA.Base+DMA_CTRL_REG   start from a known-idle register
                     ldb       #DMA_CTRL_Enable+DMA_CTRL_Fill
-                    stb       DMA.Base+DMA_CTRL_REG   the mode, start bit clear
-                    lda       6,x
+                    lda       7,x                 the width flag
+                    bita      #1
+                    beq       dfmode@             8-bit, the reference's own mode
+* 16-bit masks address bit 0, so an odd destination would take the byte
+* BEFORE the bitmap with it - and SS.BmDef allows any offset, so that is
+* reachable.  An odd destination is quietly done 8-bit rather than
+* refused: the caller asked for speed, not for a different result.
+                    lda       2,x
+                    bita      #1
+                    bne       dfmode@
+                    orb       #DMA_CTRL_16Bit
+dfmode@             stb       DMA.Base+DMA_CTRL_REG   the mode, start bit clear
+                    bitb      #DMA_CTRL_16Bit
+                    beq       df8@
+                    lda       6,x                 16-bit: the value in BOTH halves
+                    sta       DMA.Base+DMA_FILL_16_H
+                    sta       DMA.Base+DMA_FILL_16_L
+                    bra       dfadr@
+df8@                lda       6,x
                     sta       DMA.Base+DMA_DATA_2_WRITE
-                    lda       ,x
+dfadr@              lda       ,x
                     sta       DMA.Base+DMA_DEST_ADDR_H
                     lda       1,x
                     sta       DMA.Base+DMA_DEST_ADDR_M

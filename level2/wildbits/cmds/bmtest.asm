@@ -97,6 +97,7 @@ runlen              rmb       2         fill: bytes in this run
 barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
+wide                rmb       1         non-zero = ask for 16-bit transfers
 clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
@@ -140,6 +141,7 @@ start               clr       gotslab,u
                     clr       gotdrv,u
                     clr       defined,u
                     clr       hires,u
+                    clr       wide,u              8-bit until W says otherwise
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -272,7 +274,11 @@ Loop                leax      keybuf,u
                     lbeq      DoLo
                     cmpa      #'2
                     lbeq      DoHalves
+                    cmpa      #'3
+                    lbeq      DoFull
                     anda      #$5F                letters fold to upper case
+                    cmpa      #'W
+                    lbeq      DoWide
                     cmpa      #'Q
                     lbeq      Quit
                     cmpa      #'H
@@ -903,6 +909,48 @@ dh3@                lbsr      ClrScan
                     lbra      Loop
 
 ********************************************************************
+* 3 - THE WHOLE BITMAP IN ONE CALL, 240 rows, over and over.
+*
+* C creeps its row count up one per press and stops at 240, so it reaches
+* a full-screen fill once and then repeats it; this is the same fill with
+* nothing else moving, which is what hammering it wants.  Take it with W
+* to compare the two transfer widths on identical work.
+********************************************************************
+DoFull              ldd       #BMROWS
+                    std       clrnow,u            the scan's verdict is for 240
+                    lbsr      FillBm
+                    bcc       df1@
+                    lbsr      ShowErr
+                    lbra      Loop
+df1@                clra                          first row 0
+                    ldb       #BMROWS             all 240 rows
+                    lbsr      ClrOne
+                    lbcs      Loop
+                    lbsr      ClrScan
+                    lbra      Loop
+
+********************************************************************
+* W - 8-bit or 16-bit transfers, for C, 2 and 3 alike.
+*
+* 16-bit is twice the rate - 384 us against 768 for a whole bitmap - and
+* it is a SEPARATE PATH THROUGH THE ENGINE, Double_Speed_DMA, with its
+* own end comparison and its own byte-lane handling.  The driver shipped
+* 16-bit-when-even for a while on the strength of the RTL alone and it
+* was backed out to match the user's own working 2025 test, which is
+* 8-bit.  So the default here is 8-bit and this key is how the other
+* path finally gets run.
+********************************************************************
+DoWide              lda       wide,u
+                    eora      #1
+                    sta       wide,u
+                    leax      W8Txt,pcr
+                    tst       wide,u
+                    beq       dw@
+                    leax      W16Txt,pcr
+dw@                 lbsr      PutLine
+                    lbra      Loop
+
+********************************************************************
 * ClrOne - one SS.BmClear and wait for it.  A = first row, B = rows.
 *   Returns the carry and B: clear means it finished, set means B is
 *   the error - either the SetStat's own or E$NotRdy for a fill that
@@ -928,13 +976,24 @@ ClrOne              sta       cofrow,u
                     lbsr      AppStr
                     lda       corows,u
                     lbsr      AppDec
+                    leax      OneW8,pcr
+                    tst       wide,u
+                    beq       cow@
+                    leax      OneW16,pcr
+cow@                lbsr      AppStr
                     lbsr      EndLine
-                    lda       cofrow,u
+* R$X = flags : fill value.  Bit 0 of the high byte asks for 16-bit.
+* BUILT BEFORE "tfr d,u", because after that U is the row parameter and
+* "wide,u" would be reading through it.
+                    ldx       #CLRVAL
+                    tst       wide,u
+                    beq       cox@
+                    ldx       #$0100+CLRVAL
+cox@                lda       cofrow,u
                     ldb       corows,u
                     pshs      u
                     tfr       d,u                 R$U = first row : row count
                     ldy       #0                  bitmap 0
-                    ldx       #CLRVAL             high byte 0 = reserved
                     lda       #BMPATH
                     ldb       #SS.BmClear
                     os9       I$SetStt
@@ -1481,13 +1540,21 @@ OneGE               fcc       /  GetStt err /
                     fcb       $00
 OneNR               fcc       /  it never came back/
                     fcb       C$CR
+OneW8               fcc       / 8-bit/
+                    fcb       $00
+OneW16              fcc       / 16-bit/
+                    fcb       $00
+W8Txt               fcc       /  W - transfers are 8-BIT now (768 us a bitmap)/
+                    fcb       C$CR
+W16Txt              fcc       /  W - transfers are 16-BIT now (384 us a bitmap, the untried path)/
+                    fcb       C$CR
 Hlf1E               fcc       /  2 first half err /
                     fcb       $00
 Hlf2E               fcc       /  2 second half err /
                     fcb       $00
 * The key line was one string of 97 characters and I$WritLn is given 80,
 * so "G guard Q quit" never reached the screen.  Two lines now.
-KeyTx2              fcc       /C clear  2 halves  L lines  F flood  K kill  G guard/
+KeyTx2              fcc       /C clear  2 halves  3 full  W width  L lines  F flood  K kill  G guard/
                     fcb       C$CR
 KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  Q quit/
                     fcb       C$CR
