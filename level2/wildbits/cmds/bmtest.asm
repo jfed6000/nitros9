@@ -102,7 +102,6 @@ dlay                rmb       1         non-zero = ask the driver to delay after
 dio                 rmb       1         non-zero = that delay loop reads $FE20 each pass
 dram                rmb       1         non-zero = that delay loop reads RAM instead
 dsyn                rmb       1         non-zero = SYNC in the driver instead of a loop
-dcwa                rmb       1         non-zero = CWAI in the driver instead
 clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
@@ -151,7 +150,6 @@ start               clr       gotslab,u
                     clr       dio,u               and it reads nothing until E says so
                     clr       dram,u              M is the RAM-reading variant of E
                     clr       dsyn,u              Y is SYNC, A is CWAI
-                    clr       dcwa,u
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -297,8 +295,6 @@ Loop                leax      keybuf,u
                     lbeq      DoDram
                     cmpa      #'Y
                     lbeq      DoSyn
-                    cmpa      #'A
-                    lbeq      DoCwa
                     cmpa      #'Q
                     lbeq      Quit
                     cmpa      #'H
@@ -1076,15 +1072,6 @@ DoSyn               lda       dsyn,u
 dy@                 lbsr      PutLine
                     lbra      Loop
 
-DoCwa               lda       dcwa,u
-                    eora      #1
-                    sta       dcwa,u
-                    leax      CwOffTx,pcr
-                    tst       dcwa,u
-                    beq       da@
-                    leax      CwOnTx,pcr
-da@                 lbsr      PutLine
-                    lbra      Loop
 
 ********************************************************************
 * ClrOne - one SS.BmClear and wait for it.  A = first row, B = rows.
@@ -1136,11 +1123,8 @@ cox1b@              tst       dram,u
                     beq       cox1c@
                     lda       #8                  bit 3: the same, reading RAM
 cox1c@              tst       dsyn,u
-                    beq       cox1d@
-                    lda       #16                 bit 4: SYNC, not a loop
-cox1d@              tst       dcwa,u
                     beq       cox2@
-                    lda       #32                 bit 5: CWAI, not a loop
+                    lda       #16                 bit 4: SYNC instead of CWAI
 cox2@               tsta
                     beq       cox3@
                     pshs      x
@@ -1161,11 +1145,12 @@ cox3@               lda       cofrow,u
                     lbsr      ShowErrAt
                     comb
                     rts
+* THE FILL IS DONE WHEN THE SETSTAT RETURNS.  SS.BmClear parks the CPU
+* with CWAI until the transfer has run, so there is no sleep here any
+* more and no polling loop: one call and the pixels are there.  The
+* GetStat below is only for the destination read-back, and it is safe
+* because the transfer is long over by the time it runs.
 co0@                clr       clrtck,u
-co1@                ldx       #2                  one 60 Hz tick
-                    pshs      u
-                    os9       F$Sleep
-                    puls      u
                     pshs      u
                     lda       #BMPATH
                     ldb       #SS.BmClear
@@ -1192,16 +1177,14 @@ co1@                ldx       #2                  one 60 Hz tick
                     lbsr      ShowErrAt           B is the REAL error here
                     comb
                     rts
+* Busy must read IDLE here.  The driver does not return until the
+* transfer has run, so anything else is a real fault and worth saying.
 co2@                ldd       cobusy,u
                     beq       co8@
-                    inc       clrtck,u
-                    lda       clrtck,u
-                    cmpa      #CLRWAIT
-                    blo       co1@
                     leax      OneNR,pcr
                     lbsr      PutLine
                     comb
-                    ldb       #E$NotRdy           it never came back
+                    ldb       #E$NotRdy           still busy on return
                     rts
 * Done.  Say where the ENGINE thinks it was writing, which is the one
 * reading that does not depend on the driver being right.
@@ -1702,13 +1685,9 @@ OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
                     fcb       $00
-SyOffTx             fcc       /  Y - SYNC OFF/
+SyOffTx             fcc       /  Y - back to CWAI, the default/
                     fcb       C$CR
-SyOnTx              fcc       /  Y - SYNC in the driver after arming (not bounded)/
-                    fcb       C$CR
-CwOffTx             fcc       /  A - CWAI OFF/
-                    fcb       C$CR
-CwOnTx              fcc       /  A - CWAI in the driver after arming (bounded by the tick)/
+SyOnTx              fcc       /  Y - SYNC instead of the default CWAI (not bounded)/
                     fcb       C$CR
 MrOffTx             fcc       /  M - RAM-read loop OFF/
                     fcb       C$CR
@@ -1732,7 +1711,7 @@ Hlf2E               fcc       /  2 second half err /
                     fcb       $00
 * The key line was one string of 97 characters and I$WritLn is given 80,
 * so "G guard Q quit" never reached the screen.  Two lines now.
-KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  E ioread  M ramread  Y sync  A cwai/
+KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  E ioread  M ramread  Y sync/
                     fcb       C$CR
 KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  Q quit/
                     fcb       C$CR

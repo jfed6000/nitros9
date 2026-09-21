@@ -2049,12 +2049,22 @@ bdlive@             tst       V.TermLive,u
 * caller must ask for an amount that FITS, and until the real throughput
 * is measured only the caller knows what that is.
 *
-* ASYNCHRONOUS.  Carry clear means ACCEPTED, not done.  The call arms the
-* engine and returns; the program does not block.  The fill happens in
-* the next vertical blank - up to 15.3 ms away and 768 us long - during
-* which the hardware freezes the CPU mid-stream and then releases it.
-* GetStat SS.BmClear says whether it has finished, and a program that
-* writes pixels into the bitmap before then will have them erased.
+* SYNCHRONOUS.  Carry clear means DONE - the pixels are there and the
+* bitmap may be written immediately.  The call arms the engine and then
+* PARKS THE CPU with CWAI until the transfer has run: at most one 60 Hz
+* tick, usually less, and the fill itself is 768 us of that.
+*
+* IT USED TO ARM AND RETURN, leaving the caller to F$Sleep and poll.
+* That was not a design so much as a way of getting the CPU out of the
+* way, because ANY CPU BUS ACTIVITY WHEN HALT ASSERTS CAN WEDGE THE
+* MACHINE UNRECOVERABLY - see DMA_STATUS_TRF_IP in wildbits.d.  Parking
+* here does the same job properly: the caller needs no rule, makes one
+* call instead of two, and it is quicker, because F$Sleep costs a whole
+* tick however early the fill really finished.
+*
+* GetStat SS.BmClear remains, but only as a diagnostic: it reports the
+* destination the engine holds, and by the time anyone can call it the
+* transfer is long over.
 *
 * IT ALWAYS FILLS BmPixels (76,800) BYTES - see the note beside that equ
 * in wildbits_vtio.d for why that is neither the allocation nor what the
@@ -2081,7 +2091,7 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     lbhi      BmBad
                     stb       >gr.b2
                     ldd       R$X,x               A = flags, B = the fill value
-                    bita      #$C0                only bits 0-5 are defined
+                    bita      #$E0                only bits 0-4 are defined
                     lbne      BmBad
                     sta       >gr.d1              the width flag
                     stb       >gr.b3
@@ -2174,19 +2184,36 @@ bcrow2@             stb       >gr.b4              the row count
 * Wedges    -> the hazard is executing at all, and only the woken-from-
 *              idle path is safe.
                     lda       >gr.d1
-                    bita      #32
-                    bne       bccwai@             bit 5: CWAI instead of a loop
                     bita      #16
-                    bne       bcsync@             bit 4: SYNC instead of a loop
+                    bne       bcsync@             bit 4: SYNC instead of CWAI
                     bita      #8
                     bne       bcdram@             bit 3: the same loop, reading RAM
                     bita      #4
                     bne       bcdio@              bit 2: the same loop, reading I/O
                     bita      #2
-                    beq       bcnod@
-                    ldy       #DmaDly7
-bcdly@              leay      -1,y
                     bne       bcdly@
+* THE DEFAULT, AND WHY THIS CALL IS SYNCHRONOUS: park the CPU until the
+* transfer has run.  CWAI puts it at $FFFF with rAVMA = 0 - NO VALID BUS
+* CYCLES - and waits for an interrupt.  The 60 Hz tick fires at line 0,
+* the same instant the window opens and HALT asserts, so the CPU is
+* already parked when the engine asks for the bus.  It takes HALT during
+* the clock ISR, the fill runs, and by the time this returns the pixels
+* are there.
+*
+* Seven variants were tried and the split is total: every one that left
+* the CPU issuing bus cycles wedged the machine unrecoverably, and every
+* one that did not - CWAI here, SYNC here, or the kernel's idle CWAI
+* reached by the caller sleeping - worked.  DMA_STATUS_TRF_IP in
+* wildbits.d has the table.
+*
+* Blocking here is safe because grfdrv processes one call at a time by
+* design (user, 2026-09-21): a second caller serialises behind this one
+* rather than re-entering it.
+                    cwai      #^IntMasks
+                    bra       bcnod@
+bcdly@              ldy       #DmaDly7
+bcdly2@             leay      -1,y
+                    bne       bcdly2@
                     bra       bcnod@
 * BIT 2 - THE SAME LOOP WITH AN I/O READ THAT IS NOT THE DMA BLOCK.
 * Bit 1's loop touches no memory at all and is safe; a poll of $FEC1 is
@@ -2243,30 +2270,8 @@ bcdrm2@             lda       ,x
 * TIMEOUT: if no interrupt ever arrives the CPU stays there for ever.
 * The tick makes that very unlikely; it is not impossible.  This is an
 * experiment, not something to ship.
-bcsync@             ldy       #DmaSyncs
-bcsyn2@             sync
-                    leay      -1,y
-                    bne       bcsyn2@
+bcsync@             sync
                     bra       bcnod@
-* BIT 5 - CWAI, which is what the kernel's own idle uses and is the one
-* state that has never failed.  CPUSTATE_CWAI_POST parks at $FFFF with
-* rAVMA = 0, the same "no valid accesses" as SYNC, and unlike SYNC it is
-* BOUNDED - the 60 Hz tick always wakes it and it vectors normally,
-* where SYNC sits for ever if no line ever asserts.
-*
-* It is safe to do here because GRFDRV RUNS WITH INTERRUPTS ENABLED, so
-* CWAI enables nothing that is not already enabled.  An interrupt taken
-* in this module is an ordinary event, not a new hazard.
-*
-* The difference from the working path is only WHERE the CWAI happens:
-* the kernel's is at the scheduler, after grfdrv has returned and the
-* MMU is back; this one is inside grfdrv with the task still flipped.
-* If bit 5 is solid and bit 4 is not, that is the answer to why sleeping
-* works, and it is an answer a driver could act on.
-bccwai@             ldy       #DmaSyncs
-bccw2@              cwai      #^IntMasks
-                    leay      -1,y
-                    bne       bccw2@
 bcnod@              lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy
