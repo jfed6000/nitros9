@@ -3886,6 +3886,16 @@ GSBmClear           clra
                     beq       GSBmClrX
                     ldb       #1
 GSBmClrX            std       R$X,x
+* And hand back the destination the ENGINE is holding, not the driver's
+* idea of it, read through the permuted read map (see DMA_DEST_RD_* in
+* wildbits.d).  R$Y = the high byte, R$U = mid:low.  Diagnostic: it is
+* the only way to see what actually reached the registers.
+                    clra
+                    ldb       DMA.Base+DMA_DEST_RD_H
+                    std       R$Y,x
+                    lda       DMA.Base+DMA_DEST_RD_M
+                    ldb       DMA.Base+DMA_DEST_RD_L
+                    std       R$U,x
                     lbra      StatOK
 
 * GetStat SS.BmLine - R$X = the pixels still queued in the line engine's

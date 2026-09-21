@@ -99,6 +99,8 @@ scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
 scanbad             rmb       1         C: scan - non-zero once a mismatch is found
 clrrows             rmb       2         C: rows to fill, creeping up one per press
+dsthi               rmb       2         C: destination the DMA engine holds, high byte
+dstlo               rmb       2         C: ... and its mid and low bytes
 lnleft              rmb       1         L/F: records still to build
 lndrawn             rmb       2         L/F: records the driver says it drew
 lnbuf               rmb       NFLOOD*8  the line records, 8 bytes each
@@ -731,11 +733,15 @@ ClrTick             ldx       #2                  one 60 Hz tick
 * hardware run printed B after a "tfr x,d" had already overwritten it,
 * so its "error 187" was X's low byte and not an error code at all -
 * which cost a run and sent the diagnosis down the wrong road.
-                    pshs      cc,b,x              ,s=CC 1,s=B 2,s=X 4,s=the data ptr
-                    ldu       4,s
-                    ldd       2,s                 the driver's answer
+                    pshs      cc,b,x,y,u          ,s=CC 1,s=B 2,s=X 4,s=Y 6,s=U 8,s=data ptr
+                    ldu       8,s
+                    ldd       2,s                 the busy answer
                     std       clrans,u
-                    puls      cc,b,x
+                    ldd       4,s                 R$Y = the destination's high byte
+                    std       dsthi,u
+                    ldd       6,s                 R$U = its mid and low bytes
+                    std       dstlo,u
+                    puls      cc,b,x,y,u
                     puls      u
                     bcc       ClrPoll
                     leax      ClrGetE,pcr
@@ -775,6 +781,14 @@ ClrDone             leax      ClrTxt,pcr
                     ldx       winaddr,u
                     lda       $1C00,x             the byte just past it
                     lbsr      AppHex
+                    leax      DstTxt,pcr
+                    lbsr      AppStr
+                    lda       dsthi+1,u
+                    lbsr      AppHex
+                    lda       dstlo,u
+                    lbsr      AppHex
+                    lda       dstlo+1,u
+                    lbsr      AppHex
 * Give the window back.  Every other MapCur in this file is paired with
 * an UnmapCur and this one was not, so each C leaked an 8K logical block
 * until F$MapBlk ran the process out of its eight and started failing.
@@ -801,42 +815,38 @@ clrmax@             lbra      Loop
 *   Sets scanbad, scanrow and scancol, and prints the answer.
 ********************************************************************
 ClrScan             clr       scanbad,u
+                    ldd       #0
+                    std       scanrow,u           block index within the slab
                     lda       slabblk,u
                     sta       curblk,u
                     lbsr      MapCur
                     lbcs      ScErr
-                    ldd       winaddr,u
-                    addd      #BMOFF
+scblk@              ldd       winaddr,u
                     std       bmptr,u
-                    ldd       #BLKSIZE-BMOFF
-                    std       blkleft,u
                     ldd       #0
-                    std       scanrow,u
-scrow@              ldd       #0
-                    std       scancol,u
-sccol@              ldx       bmptr,u
+                    std       scancol,u           offset within this block
+scoff@              ldx       bmptr,u
                     lda       ,x+
                     stx       bmptr,u
                     cmpa      #CLRVAL
-                    bne       scfnd@
-                    ldd       blkleft,u
-                    subd      #1
-                    std       blkleft,u
-                    bne       scnb@
-                    lbsr      NextBlk             release this block, map the next
-                    lbcs      ScErr
-scnb@               ldd       scancol,u
+                    beq       scfnd@
+                    ldd       scancol,u
                     addd      #1
                     std       scancol,u
-                    cmpd      #BMCOLS
-                    blo       sccol@
+                    cmpd      #BLKSIZE
+                    blo       scoff@
+* this block holds none of it - on to the next
                     ldd       scanrow,u
                     addd      #1
                     std       scanrow,u
-                    cmpd      #BMROWS
-                    blo       scrow@
+                    cmpd      #NBLKS
+                    bhs       scnone@
                     lbsr      UnmapCur
-                    leax      ScOkTx,pcr
+                    inc       curblk,u
+                    lbsr      MapCur
+                    lbcs      ScErr
+                    bra       scblk@
+scnone@             leax      ScNoneTx,pcr
                     lbra      PutLine
 scfnd@              inc       scanbad,u
                     lbsr      UnmapCur
@@ -1173,11 +1183,13 @@ ClrSetE             fcc       /  C SetStt err /
                     fcb       $00
 ClrGetE             fcc       /  C GetStt err /
                     fcb       $00
-ScOkTx              fcc       /  C scan: every one of 240 rows holds the fill value/
-                    fcb       C$CR
-ScBadTx             fcc       /  C scan: first byte not the fill value at row $/
+DstTxt              fcc       / dma dst $/
                     fcb       $00
-ScBad2Tx            fcc       / col $/
+ScNoneTx            fcc       /  C scan: the fill value is NOWHERE in the 12-block slab/
+                    fcb       C$CR
+ScBadTx             fcc       /  C scan: fill value first at slab blk $/
+                    fcb       $00
+ScBad2Tx            fcc       / off $/
                     fcb       $00
 ScErrTx             fcc       /  C scan: could not map the bitmap/
                     fcb       C$CR

@@ -1065,6 +1065,14 @@ DMA_UNUSED_1        rmb       1         fec8
 DMA_DEST_ADDR_H     rmb       1         fec9
 DMA_DEST_ADDR_M     rmb       1         feca
 DMA_DEST_ADDR_L     rmb       1         fecb
+* READING the destination back needs different addresses, because the
+* register block's read map is a different permutation from its write
+* map: writes at fec9/feca/fecb land in REG[9]/[10]/[11], but reads at
+* feca/fec9/fec8 return REG[9]/[10]/[11].  So the byte written as H
+* comes back at feca, M at fec9 and L at fec8.  Diagnostic only.
+DMA_DEST_RD_H       equ       DMA_DEST_ADDR_M   feca returns what H was given
+DMA_DEST_RD_M       equ       DMA_DEST_ADDR_H   fec9 returns what M was given
+DMA_DEST_RD_L       equ       DMA_UNUSED_1      fec8 returns what L was given
 * Size.  X and Y are the 2D block size; in 1D mode the SAME registers carry
 * a 24-bit byte count, assembled by the core as
 *     Count1D = { Y_Size[7:0], X_Size[15:0] }     (TinyVKY_DMA_Controller.v:210)
