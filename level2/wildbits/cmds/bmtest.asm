@@ -98,7 +98,6 @@ barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 clrtck              rmb       1         C: frames waited for the fill to finish
-clrans              rmb       2         C: what the GetStat answered in R$X
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
 scanbad             rmb       1         C: scan - non-zero once the fill has begun
@@ -118,9 +117,6 @@ coerr               rmb       1         ClrOne: the GetStat's REAL error code
 cobusy              rmb       2         ClrOne: 0 idle, 1 still outstanding
 codsth              rmb       1         ClrOne: the engine's dst, high byte
 codstl              rmb       2         ClrOne: ... and its mid and low
-dsthi               rmb       2         C: destination the DMA engine holds, high byte
-dstlo               rmb       2         C: ... and its mid and low bytes
-armbsy              rmb       1         C: the busy bit read straight after arming
 lnleft              rmb       1         L/F: records still to build
 lndrawn             rmb       2         L/F: records the driver says it drew
 lnbuf               rmb       NFLOOD*8  the line records, 8 bytes each
@@ -797,78 +793,26 @@ dcmax@              equ       *
                     bcc       dcdrawn@
                     lbsr      ShowErr
                     lbra      Loop
-dcdrawn@            ldy       #0                  bitmap 0
-                    ldx       #CLRVAL             high byte 0 = reserved
-                    ldd       clrnow,u            the rows to fill this time
-                    pshs      u
-                    tfr       d,u                 R$U = the row count
-                    lda       #BMPATH
-                    ldb       #SS.BmClear
-                    os9       I$SetStt
-                    puls      u
-                    bcc       ClrArm
-                    leax      ClrSetE,pcr         say WHICH call failed
-                    lbsr      ShowErrAt
-                    lbra      Loop
-* Read the busy bit back IMMEDIATELY, before any sleep.  The engine sets
-* VDMA_Status_Progress the moment it sees the start edge, at IDLE ->
-* VALIDATE0, long before it waits for a window - so a 1 here means the
-* start was accepted and a 0 means the engine never moved at all.  That
-* is the difference between "the transfer went somewhere wrong" and
-* "there is no working DMA on this core", and nothing else we print
-* separates them.
-ClrArm              pshs      u
-                    lda       #BMPATH
-                    ldb       #SS.BmClear
-                    os9       I$GetStt
-                    tfr       x,d
-                    puls      u
-                    stb       armbsy,u
-                    leax      ArmTxt,pcr
-                    lbsr      StartLine
-                    lda       armbsy,u
-                    lbsr      AppHex
-                    lbsr      EndLine
-                    clr       clrtck,u
-ClrTick             ldx       #2                  one 60 Hz tick
-                    pshs      u
-                    os9       F$Sleep
-                    puls      u
-                    pshs      u
-                    lda       #BMPATH
-                    ldb       #SS.BmClear
-                    os9       I$GetStt
-* Keep the call's CARRY, its ERROR CODE and its ANSWER.  The first
-* hardware run printed B after a "tfr x,d" had already overwritten it,
-* so its "error 187" was X's low byte and not an error code at all -
-* which cost a run and sent the diagnosis down the wrong road.
-                    pshs      cc,b,x,y,u          ,s=CC 1,s=B 2,s=X 4,s=Y 6,s=U 8,s=data ptr
-                    ldu       8,s
-                    ldd       2,s                 the busy answer
-                    std       clrans,u
-                    ldd       4,s                 R$Y = the destination's high byte
-                    std       dsthi,u
-                    ldd       6,s                 R$U = its mid and low bytes
-                    std       dstlo,u
-                    puls      cc,b,x,y,u
-                    puls      u
-                    bcc       ClrPoll
-                    leax      ClrGetE,pcr
-                    lbsr      ShowErrAt
-                    lbra      Loop
-ClrPoll             ldd       clrans,u            0 idle, 1 still outstanding
-                    beq       ClrDone
-                    inc       clrtck,u
-                    lda       clrtck,u
-                    cmpa      #CLRWAIT
-                    blo       ClrTick
-* It never finished.  This is what a core whose DMA halt is not wired to
-* Drive_RDY looks like, and NOTHING WAS WRITTEN: the engine parks in
-* CPU_STOPPED_ST0, which sits in front of its first write state.  So the
-* bitmap is untouched and a CPU clear would have been safe.
-                    leax      ClrHung,pcr
-                    lbsr      PutLine
-                    lbra      Loop
+* C AND 2 NOW GO THROUGH THE SAME CODE, and finding out that they have to
+* is what this session was actually about.  On K2 hardware 2 ran over and
+* over without a fault while C wedged the machine on the first press, and
+* the ONLY thing C did that 2 never did was read the busy bit back
+* IMMEDIATELY after arming, with no sleep in between.  That read is a
+* full I$GetStt - IOMan, SCF, vtio, grfdrv, about 474 us of system-state
+* execution with interrupts masked - and it runs while the transfer is
+* armed and waiting for the window to open.  When the window opens,
+* Bus_RDY_o = Available & Progress halts the CPU wherever it happens to
+* be; 2 is parked in F$Sleep at that moment and C is inside a driver.
+* The line the machine died halfway through printing was that read's.
+*
+* The immediate read was added to tell "the start was accepted" from
+* "there is no working DMA on this core".  The first of those is settled
+* now - the engine takes the start edge - so the diagnostic has outlived
+* its question, and it is gone rather than kept for one that is answered.
+dcdrawn@            clra                          first row 0
+                    ldb       clrnow+1,u          the rows to fill this time
+                    lbsr      ClrOne
+                    lbcs      Loop                ClrOne has already said why
 ClrDone             leax      ClrTxt,pcr
                     lbsr      StartLine
                     lda       clrtck,u
@@ -892,11 +836,11 @@ ClrDone             leax      ClrTxt,pcr
                     lbsr      AppHex
                     leax      DstTxt,pcr
                     lbsr      AppStr
-                    lda       dsthi+1,u
+                    lda       codsth,u
                     lbsr      AppHex
-                    lda       dstlo,u
+                    lda       codstl,u
                     lbsr      AppHex
-                    lda       dstlo+1,u
+                    lda       codstl+1,u
                     lbsr      AppHex
 * Give the window back.  Every other MapCur in this file is paired with
 * an UnmapCur and this one was not, so each C leaked an 8K logical block
@@ -1583,8 +1527,6 @@ ClrTx2              fcc       / frame(s); last byte $/
                     fcb       $00
 ClrTx3              fcc       /, next $/
                     fcb       $00
-ClrHung             fcc       /  SS.BmClear NEVER FINISHED - this core's DMA halt is not wired; nothing was written/
-                    fcb       C$CR
 LnTxt               fcc       /  SS.BmLine fan: drew /
                     fcb       $00
 FldTxt              fcc       /  SS.BmLine flood: drew /
@@ -1593,15 +1535,9 @@ LnTx2               fcc       / of them/
                     fcb       $00
 LnTx3               fcc       /, then stopped with error /
                     fcb       $00
-ArmTxt              fcc       /  C armed, busy now $/
-                    fcb       $00
 RowTxt              fcc       /  C rows /
                     fcb       $00
 BefTxt              fcc       /, busy before $/
-                    fcb       $00
-ClrSetE             fcc       /  C SetStt err /
-                    fcb       $00
-ClrGetE             fcc       /  C GetStt err /
                     fcb       $00
 DstTxt              fcc       / dma dst $/
                     fcb       $00
