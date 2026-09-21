@@ -718,7 +718,16 @@ DoClear             leax      RowTxt,pcr
                     ldd       clrrows,u
                     lbsr      AppDc16
                     lbsr      EndLine
-                    ldy       #0                  bitmap 0
+* REDRAW THE BARS FIRST, so each press measures only what THAT press did.
+* The fill always covers a prefix of the bitmap and the row count creeps
+* up by one per press, so without this the second press would find the
+* first press's bytes still in place and read them as its own - a fill
+* that did nothing at all would look like a pass.
+                    lbsr      FillBm
+                    bcc       dcdrawn@
+                    lbsr      ShowErr
+                    lbra      Loop
+dcdrawn@            ldy       #0                  bitmap 0
                     ldx       #CLRVAL             high byte 0 = reserved
                     ldd       clrrows,u           the rows to fill this time
                     pshs      u
