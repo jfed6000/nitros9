@@ -2036,7 +2036,7 @@ bdlive@             tst       V.TermLive,u
 *
 * ASYNCHRONOUS.  Carry clear means ACCEPTED, not done.  The call arms the
 * engine and returns; the program does not block.  The fill happens in
-* the next vertical blank - up to 15.3 ms away and 384 us long - during
+* the next vertical blank - up to 15.3 ms away and 768 us long - during
 * which the hardware freezes the CPU mid-stream and then releases it.
 * GetStat SS.BmClear says whether it has finished, and a program that
 * writes pixels into the bitmap before then will have them erased.
@@ -2122,19 +2122,10 @@ bcrow2@             stb       >gr.b4              the row count
 bccnt@              equ       *
                     leax      ,s
                     lbsr      DmaFill             armed; it runs in the next vblank
-* LEAS does not touch the flags - only LEAX and LEAY set Z - so DmaFill's
-* carry survives it.
                     leas      7,s
-                    bcs       BmClrRas
                     lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy
-                    jmp       >GrfMod+SysRet
-* The raster read-back is not answering, so the safe moment to arm cannot
-* be found.  Arming anyway is what put a transfer in the middle of the
-* blanking window, so this refuses instead; the caller falls back.
-BmClrRas            comb
-                    ldb       #E$NotRdy
                     jmp       >GrfMod+SysRet
 BmClrUnd            comb
                     ldb       #E$WUndef
@@ -2151,11 +2142,34 @@ BmClrUnd            comb
 *            6      the fill value
 *   Exit:  armed.  B = 0.  A, B and X clobbered.
 *
-* 16-BIT WHEN THE DESTINATION IS EVEN, 8-BIT WHEN IT IS ODD.  In 16-bit
-* mode the engine takes Addy[23:1] and enables both byte lanes, so an odd
-* start would also write the byte before it - and SS.BmDef allows any
-* offset, so that is reachable.  8-bit halves the rate, which still
-* finishes a whole bitmap inside one vertical blank.
+* THIS IS THE USER'S OWN 2025 BARE-METAL TEST SEQUENCE, INSTRUCTION FOR
+* INSTRUCTION, on this tree's register map.
+* /home/magnus/projects/f256/jfed/dma/dmakeytest.asm DMA_Fill_Test_1D
+* fills $012C00 bytes - 76,800, exactly a bitmap - at a destination it
+* sets with no regard whatever for where the raster is, and it worked.
+* Whatever is wrong with SS.BmClear, that is the reference behaviour, and
+* the driver is now the same shape as it.  Three things changed to get
+* here and all three were mine:
+*
+*   1. 8-BIT ONLY.  The reference never sets bit 6; its own defs file
+*      calls that bit DMA_CTRL_NotUsed2.  This driver used to set it
+*      whenever the destination was even, on the strength of the RTL
+*      naming it Double_Speed_DMA - a SEPARATE path through the engine,
+*      with its own end comparison ({ptr[23:1],0} < {Stop[23:1],0}) and
+*      its own byte-lane handling, that NOTHING HAS EVER RUN on this
+*      hardware.  8-bit costs 768 us against 384, which is still 24 of
+*      the 43 lines in a window and still about 100x better than the CPU
+*      loop, so the speed was never worth the risk.
+*   2. THE CONTROL REGISTER IS CLEARED FIRST.  The reference disables the
+*      DMA after every transfer; doing it before the next one is the same
+*      thing for a driver that never sees the end, and it means the start
+*      edge is always made from a known-idle register rather than from
+*      whatever the last call left behind.
+*   3. NO RASTER GUARD.  It was built against a hazard read out of the
+*      RTL, and the reference is direct evidence that the hazard does not
+*      bite: a full-size fill armed at arbitrary moments, repeatedly,
+*      with no trouble.  The reasoning is kept in
+*      docs/bmline-bmclear-plan.md section 2 in case it is needed again.
 *
 * THE START BIT IS EDGE-TRIGGERED (Fire_Transfer[1:0] == 2'b01), so the
 * control register is written twice: once with the mode and the start bit
@@ -2164,28 +2178,18 @@ BmClrUnd            comb
 * The count is NOT three consecutive registers.  Count1D is
 * {Y_Size[7:0], X_Size}, so its three bytes live at $FECF, $FECC and
 * $FECD - which is what the DMA_SIZE_1D_* aliases in wildbits.d say.
-*
-* IT WAITS FOR THE VISIBLE FRAME BEFORE IT ARMS, and that is not an
-* optimisation - arming inside the blanking window hands the transfer
-* only the tail of that window and an overrun writes megabytes of
-* rubbish.  The whole argument, with the RTL it comes from, is beside
-* DMA_ArmLine in wildbits.d.  The spin is bounded by one window, 1.5 ms
-* at worst, and 91% of calls never enter it.  READ FROM THE RTL, NOT YET
-* CONFIRMED ON HARDWARE.
+* NOTE that the reference's map is NOT this one - it puts the destination
+* at $FEC8/9/A and the size at $FECC/D/E - and this one is right for
+* rc16: it is what TinyVKY_DMA_Reg_Block.v assembles the address from,
+* and "dma dst $1C5000" read back correctly on K2 hardware.  So the map
+* changed between the core the reference ran on and this one, and only
+* the SEQUENCE is being copied from it, not the addresses.
 *******************************************************************
-DmaFill             lda       2,x                 the destination's low byte
-                    bita      #1
-                    bne       DmaFill8
-                    lda       6,x                 16-bit: the value in both halves
-                    sta       DMA.Base+DMA_FILL_16_H
-                    sta       DMA.Base+DMA_FILL_16_L
-                    ldb       #DMA_CTRL_Enable+DMA_CTRL_Fill+DMA_CTRL_16Bit
-                    bra       DmaFillGo
-DmaFill8            lda       6,x
-                    sta       DMA.Base+DMA_DATA_2_WRITE
+DmaFill             clr       DMA.Base+DMA_CTRL_REG   start from a known-idle register
                     ldb       #DMA_CTRL_Enable+DMA_CTRL_Fill
-DmaFillGo           stb       DMA.Base+DMA_CTRL_REG   the mode, start bit clear
-                    pshs      b
+                    stb       DMA.Base+DMA_CTRL_REG   the mode, start bit clear
+                    lda       6,x
+                    sta       DMA.Base+DMA_DATA_2_WRITE
                     lda       ,x
                     sta       DMA.Base+DMA_DEST_ADDR_H
                     lda       1,x
@@ -2198,40 +2202,6 @@ DmaFillGo           stb       DMA.Base+DMA_CTRL_REG   the mode, start bit clear
                     sta       DMA.Base+DMA_SIZE_1D_M
                     lda       5,x
                     sta       DMA.Base+DMA_SIZE_1D_L
-                    puls      b
-* The raster guard, as late as it can be put: everything else is already
-* in the registers, so nothing but the start edge follows it.
-*
-* IT REFUSES RATHER THAN GUESSES, and that is the whole point of this
-* version.  The first one trusted the read-back and had no way to say it
-* was not working - so if those two bytes are not the raster at all, and
-* an undecoded read returning $FF is the obvious way for that to happen,
-* the high byte is non-zero, the test concludes "deep in the visible
-* frame" and arms AT ONCE.  A guard that silently does nothing looks
-* exactly like no guard, which is how the arming hazard survived a whole
-* session of hardware runs while this code was supposedly preventing it.
-*
-* So both failure modes are now loud.  A raster line is 0-524, so its
-* high byte can only be 0, 1 or 2; anything above that is not a raster
-* and the call fails with E$NotRdy.  A read stuck low runs the spin out
-* and fails the same way, instead of hanging a driver that has interrupts
-* masked.  Failing is safe: the caller falls back to a CPU clear, which
-* is what src/gfx.a BmClear already does on any error.
-                    pshs      x,y
-                    ldy       #DMA_ArmSpin
-dfwt@               lda       TXT.Base+VKY_LINE_Y_POS_HI
-                    cmpa      #2
-                    bhi       dfbad@              not a raster: refuse to arm blind
-                    bne       dfgo@               256 or over: the visible frame
-                    lda       TXT.Base+VKY_LINE_Y_POS_LO
-                    cmpa      #DMA_ArmLine
-                    bhs       dfgo@
-                    leay      -1,y
-                    bne       dfwt@
-dfbad@              puls      x,y
-                    comb                          COMB sets the carry
-                    rts
-dfgo@               puls      x,y                 PULS leaves CC and B alone
                     orb       #DMA_CTRL_Start_Trf
                     stb       DMA.Base+DMA_CTRL_REG
                     clrb                          and CLRB clears the carry
