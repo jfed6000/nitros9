@@ -108,6 +108,8 @@ dcval               rmb       2         AppDc16: what is left to print
 dcdig               rmb       1         AppDc16: the digit being built
 dcsup               rmb       1         AppDc16: non-zero once a digit has gone out
 clrrows             rmb       2         C: rows to fill, creeping up one per press
+clrnow              rmb       2         C: what THIS press asked for
+befbsy              rmb       1         C: the busy bit BEFORE this press armed
 dsthi               rmb       2         C: destination the DMA engine holds, high byte
 dstlo               rmb       2         C: ... and its mid and low bytes
 armbsy              rmb       1         C: the busy bit read straight after arming
@@ -737,10 +739,42 @@ ShowErrAt           pshs      b
 ********************************************************************
 * Say what is about to be attempted BEFORE attempting it, so a row count
 * that kills the machine is on the screen when it does.
-DoClear             leax      RowTxt,pcr
+* THE ROW COUNT ADVANCES ON EVERY PRESS, ERROR OR NOT, and that matters
+* more than it looks.  It used to be bumped at the very END of DoClear,
+* so any error path jumped back to Loop before reaching it and the count
+* FROZE.  Once SS.BmClear started failing, every later press reprinted
+* the same number - and "it stops at 236" then means "the engine wedged",
+* which is a completely different fault from "the fill came up short at
+* row 236".  Two hardware runs were reported as the second when they may
+* well have been the first.  An instrument that can freeze its own
+* counter cannot tell those apart, so it does not freeze any more:
+* clrnow is what THIS press asks for, and clrrows has already moved on.
+DoClear             ldd       clrrows,u
+                    std       clrnow,u
+                    cmpd      #BMROWS
+                    bhs       dcmax@
+                    addd      #1
+                    std       clrrows,u
+dcmax@              equ       *
+* AND ASK WHETHER THE ENGINE WAS ALREADY BUSY, before touching anything.
+* A 1 here means the PREVIOUS press left a transfer outstanding and never
+* got it back - which is the stuck-engine case, visible one press earlier
+* than the error it eventually causes.
+                    pshs      u
+                    lda       #BMPATH
+                    ldb       #SS.BmClear
+                    os9       I$GetStt
+                    tfr       x,d
+                    puls      u
+                    stb       befbsy,u
+                    leax      RowTxt,pcr
                     lbsr      StartLine
-                    ldd       clrrows,u
+                    ldd       clrnow,u
                     lbsr      AppDc16
+                    leax      BefTxt,pcr
+                    lbsr      AppStr
+                    lda       befbsy,u
+                    lbsr      AppHex
                     lbsr      EndLine
 * REDRAW THE BARS FIRST, so each press measures only what THAT press did.
 * The fill always covers a prefix of the bitmap and the row count creeps
@@ -753,7 +787,7 @@ DoClear             leax      RowTxt,pcr
                     lbra      Loop
 dcdrawn@            ldy       #0                  bitmap 0
                     ldx       #CLRVAL             high byte 0 = reserved
-                    ldd       clrrows,u           the rows to fill this time
+                    ldd       clrnow,u            the rows to fill this time
                     pshs      u
                     tfr       d,u                 R$U = the row count
                     lda       #BMPATH
@@ -865,13 +899,9 @@ ClrNoMap            lbsr      EndLine
 * COUNT bug stops partway through a row, a BASE mismatch between what the
 * DMA writes and what VICKY reads loses whole rows and stops at column 0.
                     lbsr      ClrScan
-* One more row next time, up to the whole bitmap.
-                    ldd       clrrows,u
-                    cmpd      #BMROWS
-                    bhs       clrmax@
-                    addd      #1
-                    std       clrrows,u
-clrmax@             lbra      Loop
+* The row count moved on at the TOP of DoClear, so there is nothing to do
+* here - see the note there for why it is not done at the end any more.
+                    lbra      Loop
 
 ********************************************************************
 * ClrScan - walk BITMAP 0, not the slab, and say where the fill value
@@ -989,7 +1019,7 @@ screp@              leax      ScFrTx,pcr
                     ldd       scansc,u
                     bne       sclate@
                     ldd       scanrow,u
-                    cmpd      clrrows,u
+                    cmpd      clrnow,u            what THIS press asked for
                     bhi       scover@
                     blo       scshort@
                     ldd       scancol,u
@@ -1361,6 +1391,8 @@ LnTx3               fcc       /, then stopped with error /
 ArmTxt              fcc       /  C armed, busy now $/
                     fcb       $00
 RowTxt              fcc       /  C rows /
+                    fcb       $00
+BefTxt              fcc       /, busy before $/
                     fcb       $00
 ClrSetE             fcc       /  C SetStt err /
                     fcb       $00
