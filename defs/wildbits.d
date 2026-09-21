@@ -389,6 +389,14 @@ INT_PS2_KBD         equ       %00000100 PS/2 keyboard event
 INT_PS2_MOUSE       equ       %00001000 PS/2 mouse event
 INT_TIMER_0         equ       %00010000 TIMER0 has reached its target value
 INT_TIMER_1         equ       %00100000 TIMER1 has reached its target value
+* The DMA engine's completion interrupt, raised when DMA_CTRL_Int_En is
+* set in the control register.  IRQ_Controller_Jr.v:156 puts DMA_INT_i in
+* bit 6 of this group; the bit had simply been left out of this list.
+* NOTHING USES IT YET, and it is the structural answer to SS.BmClear's
+* one remaining hazard: with the driver told when a fill finishes, no
+* caller ever has to read the DMA registers while a transfer is in
+* flight, which is exactly the thing that wedged the machine.
+INT_VDMA            equ       %01000000 the DMA engine finished a transfer
 INT_CARTRIDGE       equ       %10000000 Interrupt asserted by the cartridge
 
 * Interrupt group 1 flags
