@@ -100,6 +100,7 @@ hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 wide                rmb       1         non-zero = ask for 16-bit transfers
 dlay                rmb       1         non-zero = ask the driver to delay after arming
 dio                 rmb       1         non-zero = that delay loop reads $FE20 each pass
+dram                rmb       1         non-zero = that delay loop reads RAM instead
 clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
@@ -146,6 +147,7 @@ start               clr       gotslab,u
                     clr       wide,u              8-bit until W says otherwise
                     clr       dlay,u              no driver-side delay until D says so
                     clr       dio,u               and it reads nothing until E says so
+                    clr       dram,u              M is the RAM-reading variant of E
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -287,6 +289,8 @@ Loop                leax      keybuf,u
                     lbeq      DoDlay
                     cmpa      #'E
                     lbeq      DoDio
+                    cmpa      #'M
+                    lbeq      DoDram
                     cmpa      #'Q
                     lbeq      Quit
                     cmpa      #'H
@@ -1009,6 +1013,29 @@ de@                 lbsr      PutLine
                     lbra      Loop
 
 ********************************************************************
+* M - the delay loop reading RAM, the control for E.
+*
+* E wedged the machine, which says the hazard is not the DMA's own
+* registers.  But E's loop is 12 cycles against D's 7, so it also ran
+* 70% longer and duration is not ruled out.  M is byte for byte the same
+* shape as E - lda 5 cycles, leay 4, bne 3 - differing in ONE thing: the
+* address is RAM, not I/O.
+*
+* Safe   -> it is I/O space, and the duration confound is dead.
+* Wedges -> it is any data access, or just time in the window, and D was
+*           only safe because it was shorter.
+********************************************************************
+DoDram              lda       dram,u
+                    eora      #1
+                    sta       dram,u
+                    leax      MrOffTx,pcr
+                    tst       dram,u
+                    beq       dm@
+                    leax      MrOnTx,pcr
+dm@                 lbsr      PutLine
+                    lbra      Loop
+
+********************************************************************
 * ClrOne - one SS.BmClear and wait for it.  A = first row, B = rows.
 *   Returns the carry and B: clear means it finished, set means B is
 *   the error - either the SetStat's own or E$NotRdy for a fill that
@@ -1052,8 +1079,11 @@ cox@                lda       #0
                     beq       cox1@
                     lda       #2                  bit 1: delay inside the driver
 cox1@               tst       dio,u
-                    beq       cox2@
+                    beq       cox1b@
                     lda       #4                  bit 2: that delay, reading $FE20
+cox1b@              tst       dram,u
+                    beq       cox2@
+                    lda       #8                  bit 3: the same, reading RAM
 cox2@               tsta
                     beq       cox3@
                     pshs      x
@@ -1615,6 +1645,10 @@ OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
                     fcb       $00
+MrOffTx             fcc       /  M - RAM-read loop OFF/
+                    fcb       C$CR
+MrOnTx              fcc       /  M - the delay loop READS RAM each pass - same timing as E, not IO/
+                    fcb       C$CR
 EiOffTx             fcc       /  E - the delay loop reads NOTHING (register-only)/
                     fcb       C$CR
 EiOnTx              fcc       /  E - the delay loop READS $FE20 each pass - real IO, but not the DMA/
@@ -1633,7 +1667,7 @@ Hlf2E               fcc       /  2 second half err /
                     fcb       $00
 * The key line was one string of 97 characters and I$WritLn is given 80,
 * so "G guard Q quit" never reached the screen.  Two lines now.
-KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  E ioread  L lines  F flood  K kill/
+KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  E ioread  M ramread  L lines  F flood/
                     fcb       C$CR
 KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  Q quit/
                     fcb       C$CR

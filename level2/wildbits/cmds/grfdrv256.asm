@@ -2081,7 +2081,7 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     lbhi      BmBad
                     stb       >gr.b2
                     ldd       R$X,x               A = flags, B = the fill value
-                    bita      #$F8                only bits 0, 1 and 2 are defined
+                    bita      #$F0                only bits 0-3 are defined
                     lbne      BmBad
                     sta       >gr.d1              the width flag
                     stb       >gr.b3
@@ -2174,6 +2174,8 @@ bcrow2@             stb       >gr.b4              the row count
 * Wedges    -> the hazard is executing at all, and only the woken-from-
 *              idle path is safe.
                     lda       >gr.d1
+                    bita      #8
+                    bne       bcdram@             bit 3: the same loop, reading RAM
                     bita      #4
                     bne       bcdio@              bit 2: the same loop, reading I/O
                     bita      #2
@@ -2197,6 +2199,23 @@ bcdio@              ldy       #DmaDelay
 bcdio2@             lda       INT_PENDING_0
                     leay      -1,y
                     bne       bcdio2@
+                    bra       bcnod@
+* BIT 3 - THE SAME LOOP AGAIN, READING RAM INSTEAD OF I/O.
+* Bit 2's loop wedged the machine, which says the hazard is not the DMA's
+* own registers.  But its loop is 12 cycles against bit 1's 7, so it also
+* ran 70% longer, and DURATION is not ruled out.  This one is byte for
+* byte the same shape as bit 2 - "lda" 5 cycles, leay 4, bne 3 - and
+* differs in ONE thing: the address is RAM, not I/O.  X points at this
+* module's own code, which is read-only and always mapped.
+*
+* Safe   -> it is I/O SPACE, and the duration confound is dead.
+* Wedges -> it is any data access, or simply time in the window, and
+*           bit 1's loop was only safe because it was shorter.
+bcdram@             leax      <bcdram@,pcr
+                    ldy       #DmaDelay
+bcdrm2@             lda       ,x
+                    leay      -1,y
+                    bne       bcdrm2@
 bcnod@              lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy
