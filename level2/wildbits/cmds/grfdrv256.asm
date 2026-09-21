@@ -2049,18 +2049,25 @@ bdlive@             tst       V.TermLive,u
 * caller must ask for an amount that FITS, and until the real throughput
 * is measured only the caller knows what that is.
 *
-* SYNCHRONOUS.  Carry clear means DONE - the pixels are there and the
-* bitmap may be written immediately.  The call arms the engine and then
-* PARKS THE CPU with CWAI until the transfer has run: at most one 60 Hz
-* tick, usually less, and the fill itself is 768 us of that.
+* ASYNCHRONOUS.  Carry clear means ACCEPTED, not done.  The call arms
+* the engine and returns; THE CALLER MUST F$Sleep AND THEN READ THE
+* STATUS, and must do nothing else in between - any CPU bus activity
+* when HALT asserts can wedge the machine unrecoverably.  The rule and
+* the evidence are beside DMA_STATUS_TRF_IP in wildbits.d.
 *
-* IT USED TO ARM AND RETURN, leaving the caller to F$Sleep and poll.
-* That was not a design so much as a way of getting the CPU out of the
-* way, because ANY CPU BUS ACTIVITY WHEN HALT ASSERTS CAN WEDGE THE
-* MACHINE UNRECOVERABLY - see DMA_STATUS_TRF_IP in wildbits.d.  Parking
-* here does the same job properly: the caller needs no rule, makes one
-* call instead of two, and it is quicker, because F$Sleep costs a whole
-* tick however early the fill really finished.
+* IT WAS BRIEFLY MADE SYNCHRONOUS, parking here with CWAI so the caller
+* needed no rule, and that was WRONG FOR ONE REASON THAT OUTWEIGHS THE
+* REST: parking holds grfdrv.  gr.Busy stays set and the MMU stays
+* flipped to task 1 for up to a tick per call, on the single-instance
+* driver that also serves the keyboard and every line of text.
+* CallGrfDrvGo's own note says re-entrancy "opens only if something
+* inside the grfdrv window blocks" - which is precisely what a park
+* does.  Starting a second clear before the first reported complete
+* crashed the machine (user, 2026-09-21).
+*
+* Bit 5 still selects the park for experiments.  If it is ever wanted
+* for real, the place to put it is VTIO - its SetStat runs in process
+* context, outside CallGrfDrvGo, so the park would leave grfdrv free.
 *
 * GetStat SS.BmClear remains, but only as a diagnostic: it reports the
 * destination the engine holds, and by the time anyone can call it the
@@ -2091,7 +2098,7 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     lbhi      BmBad
                     stb       >gr.b2
                     ldd       R$X,x               A = flags, B = the fill value
-                    bita      #$E0                only bits 0-4 are defined
+                    bita      #$C0                only bits 0-5 are defined
                     lbne      BmBad
                     sta       >gr.d1              the width flag
                     stb       >gr.b3
@@ -2184,14 +2191,17 @@ bcrow2@             stb       >gr.b4              the row count
 * Wedges    -> the hazard is executing at all, and only the woken-from-
 *              idle path is safe.
                     lda       >gr.d1
+                    bita      #32
+                    bne       bccwai@             bit 5: park with CWAI
                     bita      #16
-                    bne       bcsync@             bit 4: SYNC instead of CWAI
+                    bne       bcsync@             bit 4: park with SYNC
                     bita      #8
                     bne       bcdram@             bit 3: the same loop, reading RAM
                     bita      #4
                     bne       bcdio@              bit 2: the same loop, reading I/O
                     bita      #2
                     bne       bcdly@
+                    bra       bcnod@              the default: ARM AND RETURN
 * THE DEFAULT, AND WHY THIS CALL IS SYNCHRONOUS: park the CPU until the
 * transfer has run.  CWAI puts it at $FFFF with rAVMA = 0 - NO VALID BUS
 * CYCLES - and waits for an interrupt.  The 60 Hz tick fires at line 0,
@@ -2209,7 +2219,7 @@ bcrow2@             stb       >gr.b4              the row count
 * Blocking here is safe because grfdrv processes one call at a time by
 * design (user, 2026-09-21): a second caller serialises behind this one
 * rather than re-entering it.
-                    cwai      #^IntMasks
+bccwai@             cwai      #^IntMasks
                     bra       bcnod@
 bcdly@              ldy       #DmaDly7
 bcdly2@             leay      -1,y

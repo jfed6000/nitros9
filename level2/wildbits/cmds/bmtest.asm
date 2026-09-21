@@ -98,7 +98,7 @@ barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 wide                rmb       1         non-zero = ask for 16-bit transfers
-pmode               rmb       1         how the driver waits: 0 cwai 1 sync 2 reg 3 io 4 ram
+pmode               rmb       1         driver wait: 0 none 1 cwai 2 sync 3 reg 4 io 5 ram
 clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
@@ -143,7 +143,7 @@ start               clr       gotslab,u
                     clr       defined,u
                     clr       hires,u
                     clr       wide,u              8-bit until W says otherwise
-                    clr       pmode,u             0 = CWAI, the driver's own default
+                    clr       pmode,u             0 = none, the driver's own default
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -1046,15 +1046,18 @@ dw@                 lbsr      PutLine
 ********************************************************************
 DoPmode             lda       pmode,u
                     inca
-                    cmpa      #5
+                    cmpa      #6
                     blo       dp1@
                     clra
 dp1@                sta       pmode,u
                     leax      PmMsg,pcr
                     lbsr      StartLine
                     lda       pmode,u
-                    leax      PmCwai,pcr
+                    leax      PmNone,pcr
                     tsta
+                    beq       dp2@
+                    leax      PmCwai,pcr
+                    deca
                     beq       dp2@
                     leax      PmSync,pcr
                     deca
@@ -1107,8 +1110,11 @@ cow@                lbsr      AppStr
                     leax      OneSp,pcr
                     lbsr      AppStr
                     lda       pmode,u
-                    leax      PmCwai,pcr
+                    leax      PmNone,pcr
                     tsta
+                    beq       cop@
+                    leax      PmCwai,pcr
+                    deca
                     beq       cop@
                     leax      PmSync,pcr
                     deca
@@ -1152,12 +1158,15 @@ cox3@               lda       cofrow,u
                     lbsr      ShowErrAt
                     comb
                     rts
-* THE FILL IS DONE WHEN THE SETSTAT RETURNS.  SS.BmClear parks the CPU
-* with CWAI until the transfer has run, so there is no sleep here any
-* more and no polling loop: one call and the pixels are there.  The
-* GetStat below is only for the destination read-back, and it is safe
-* because the transfer is long over by the time it runs.
+* SLEEP, THEN READ THE STATUS - never the other way round, and nothing
+* in between.  SS.BmClear arms and returns; any CPU bus activity when
+* HALT asserts can wedge the machine, and F$Sleep gets the CPU into the
+* kernel's idle CWAI where it issues none.
 co0@                clr       clrtck,u
+co1@                ldx       #2                  one 60 Hz tick
+                    pshs      u
+                    os9       F$Sleep
+                    puls      u
                     pshs      u
                     lda       #BMPATH
                     ldb       #SS.BmClear
@@ -1184,14 +1193,16 @@ co0@                clr       clrtck,u
                     lbsr      ShowErrAt           B is the REAL error here
                     comb
                     rts
-* Busy must read IDLE here.  The driver does not return until the
-* transfer has run, so anything else is a real fault and worth saying.
 co2@                ldd       cobusy,u
                     beq       co8@
+                    inc       clrtck,u
+                    lda       clrtck,u
+                    cmpa      #CLRWAIT
+                    blo       co1@
                     leax      OneNR,pcr
                     lbsr      PutLine
                     comb
-                    ldb       #E$NotRdy           still busy on return
+                    ldb       #E$NotRdy           it never came back
                     rts
 * Done.  Say where the ENGINE thinks it was writing, which is the one
 * reading that does not depend on the driver being right.
@@ -1692,7 +1703,9 @@ OneSp               fcc       / /
                     fcb       $00
 PmMsg               fcc       /  P - the driver now waits with: /
                     fcb       $00
-PmCwai              fcc       /cwai/
+PmNone              fcc       /none/
+                    fcb       $00
+PmCwai              fcc       /cwai - holds grfdrv/
                     fcb       $00
 PmSync              fcc       /sync/
                     fcb       $00
@@ -1702,7 +1715,7 @@ PmIo                fcc       /ioloop - WEDGES/
                     fcb       $00
 PmRam               fcc       /ramloop - WEDGES/
                     fcb       $00
-PmFlags             fcb       0,16,2,4,8          cwai sync reg io ram
+PmFlags             fcb       0,32,16,2,4,8       none cwai sync reg io ram
 OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
