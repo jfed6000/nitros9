@@ -1174,20 +1174,6 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * raster spin does.  Arming near line 0 would also be safe, so the wrap
 * from the last line to line 0 between the test and the store costs
 * nothing - which is why the test is a simple "line < DMA_ArmLine".
-* HOW LONG SS.BmClear WILL WAIT for the engine, as a loop count.
-*
-* A fill takes "until the next blanking window opens" plus the transfer:
-* worst case 15.3 ms of waiting and 768 us of filling, about 16.1 ms.
-* The loop is ~8 cycles, so that worst case is ~7,200 passes at 3.58 MHz
-* and ~3,600 at 1.79 MHz.  25,000 leaves 3.5x margin at the fast clock
-* and 7x at the slow one.
-*
-* Running out means the engine never finished - a core whose DMA halt is
-* not wired to Drive_RDY parks in CPU_STOPPED_ST0 for ever and writes
-* nothing - so the bound is what stops that freezing the machine, and it
-* costs ~56 ms once, because the caller latches its fallback and never
-* asks again.
-DmaSpin             equ       25000
 DMA_ArmLine         equ       48        arm at this raster line or later
 * The spin's ceiling, and it is a safety net rather than a timing figure.
 * One window is 48 lines, 1.5 ms, which is about 180 passes of the loop at

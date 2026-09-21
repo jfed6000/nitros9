@@ -72,6 +72,7 @@ FANCY               equ       120
 * bars near the bottom, so "the screen went blue except the bottom bar"
 * is unambiguous, and white-on-blue reads cleanly.
 CLRVAL              equ       9         C: blue - see the note above
+CLRWAIT             equ       10        C: frames to wait before calling it dead
 * What FillBm writes into the four bytes past the end of the bitmap, so
 * that C's "next" reading is a measurement and not whatever the slab
 * happened to hold.  Any value but CLRVAL would do.
@@ -97,6 +98,7 @@ barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 wide                rmb       1         non-zero = ask for 16-bit transfers
+clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
 scanbad             rmb       1         C: scan - non-zero once the fill has begun
@@ -113,6 +115,7 @@ befbsy              rmb       1         C: the busy bit BEFORE this press armed
 cofrow              rmb       1         ClrOne: the first row passed
 corows              rmb       1         ClrOne: the row count passed
 coerr               rmb       1         ClrOne: the GetStat's REAL error code
+cobusy              rmb       2         ClrOne: 0 idle, 1 still outstanding
 codsth              rmb       1         ClrOne: the engine's dst, high byte
 codstl              rmb       2         ClrOne: ... and its mid and low
 lnleft              rmb       1         L/F: records still to build
@@ -816,10 +819,12 @@ dcdrawn@            clra                          first row 0
                     ldb       clrnow+1,u          the rows to fill this time
                     lbsr      ClrOne
                     lbcs      Loop                ClrOne has already said why
-* The frame count is gone with the poll loop: SS.BmClear returns when the
-* fill is done, so there is nothing left to count.
 ClrDone             leax      ClrTxt,pcr
                     lbsr      StartLine
+                    lda       clrtck,u
+                    lbsr      AppDec
+                    leax      ClrTx2,pcr
+                    lbsr      AppStr
                     lda       slabblk,u
                     adda      #9                  the tenth block of the slab
                     sta       curblk,u
@@ -998,36 +1003,47 @@ cox@                lda       cofrow,u
                     lbsr      ShowErrAt
                     comb
                     rts
-* THE SETSTAT RETURNED, SO THE FILL IS DONE.  There is no poll loop any
-* more: SS.BmClear waits on the status bit inside grfdrv, 1.4 us from the
-* register, instead of handing the question back out through ~474 us of
-* kernel per look.  It also returns the moment the engine finishes rather
-* than at the next tick, so a fill armed just before the blanking window
-* costs about a millisecond instead of a frame.
-*
-* The GetStat is kept for ONE reason: it reports the destination the
-* engine itself holds, which is the reading that does not depend on the
-* driver being right.  It is safe here because the transfer is over - and
-* reading those registers while one was LIVE is exactly what used to
-* wedge the machine.
-co0@                pshs      u
+co0@                clr       clrtck,u
+co1@                ldx       #2                  one 60 Hz tick
+                    pshs      u
+                    os9       F$Sleep
+                    puls      u
+                    pshs      u
                     lda       #BMPATH
                     ldb       #SS.BmClear
                     os9       I$GetStt
+* KEEP THE CARRY, THE ERROR AND THE ANSWERS BEFORE ANYTHING TOUCHES
+* THEM.  A "tfr x,d" stood here and overwrote B with X's low byte, so a
+* failing call reported "err 187" - a number that is not an error code at
+* all.  That is the SECOND time this exact trap has cost a hardware run
+* in this file; docs/status.md records the first.
                     pshs      cc,b,x,y,u          ,s=CC 1,s=B 2,s=X 4,s=Y 6,s=U 8,s=data ptr
                     ldu       8,s
                     ldb       1,s
                     stb       coerr,u
+                    ldd       2,s                 R$X = 0 idle, 1 outstanding
+                    std       cobusy,u
                     ldd       4,s                 R$Y = the engine's dst, high byte
                     stb       codsth,u
                     ldd       6,s                 R$U = its mid and low
                     std       codstl,u
                     puls      cc,b,x,y,u
                     puls      u
-                    bcc       co8@
+                    bcc       co2@
                     leax      OneGE,pcr
                     lbsr      ShowErrAt           B is the REAL error here
                     comb
+                    rts
+co2@                ldd       cobusy,u
+                    beq       co8@
+                    inc       clrtck,u
+                    lda       clrtck,u
+                    cmpa      #CLRWAIT
+                    blo       co1@
+                    leax      OneNR,pcr
+                    lbsr      PutLine
+                    comb
+                    ldb       #E$NotRdy           it never came back
                     rts
 * Done.  Say where the ENGINE thinks it was writing, which is the one
 * reading that does not depend on the driver being right.
@@ -1522,6 +1538,8 @@ OneSE               fcc       /  SetStt err /
                     fcb       $00
 OneGE               fcc       /  GetStt err /
                     fcb       $00
+OneNR               fcc       /  it never came back/
+                    fcb       C$CR
 OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
@@ -1570,7 +1588,9 @@ FreeTxt             fcc       /bmtest: the slab would not free, error /
                     fcb       $00
 DoneTxt             fcc       /bmtest done - the slab was freed, so SS.BmKill left it alone/
                     fcb       C$CR
-ClrTxt              fcc       /  last byte $/
+ClrTxt              fcc       /  SS.BmClear done after /
+                    fcb       $00
+ClrTx2              fcc       / frame(s); last byte $/
                     fcb       $00
 ClrTx3              fcc       /, next $/
                     fcb       $00
