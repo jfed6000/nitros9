@@ -2155,6 +2155,14 @@ BmClrUnd            comb
 * The count is NOT three consecutive registers.  Count1D is
 * {Y_Size[7:0], X_Size}, so its three bytes live at $FECF, $FECC and
 * $FECD - which is what the DMA_SIZE_1D_* aliases in wildbits.d say.
+*
+* IT WAITS FOR THE VISIBLE FRAME BEFORE IT ARMS, and that is not an
+* optimisation - arming inside the blanking window hands the transfer
+* only the tail of that window and an overrun writes megabytes of
+* rubbish.  The whole argument, with the RTL it comes from, is beside
+* DMA_ArmLine in wildbits.d.  The spin is bounded by one window, 1.5 ms
+* at worst, and 91% of calls never enter it.  READ FROM THE RTL, NOT YET
+* CONFIRMED ON HARDWARE.
 *******************************************************************
 DmaFill             lda       2,x                 the destination's low byte
                     bita      #1
@@ -2182,6 +2190,25 @@ DmaFillGo           stb       DMA.Base+DMA_CTRL_REG   the mode, start bit clear
                     lda       5,x
                     sta       DMA.Base+DMA_SIZE_1D_L
                     puls      b
+* The raster guard, as late as it can be put: everything else is already
+* in the registers, so nothing but the start edge follows it.  Line 256
+* and over is deep in the visible frame and needs no second read.
+* THE SPIN IS COUNTED, because this driver runs with interrupts masked
+* and the read-back itself has never been exercised.  If those two bytes
+* turn out not to be the raster, every reading is either large (arm at
+* once) or stuck at zero - and the count is what stops the stuck case
+* from hanging the machine on the first SS.BmClear.  Falling out of the
+* count arms anyway, which is exactly what the driver did before.
+                    pshs      x,y
+                    ldy       #DMA_ArmSpin
+dfwt@               lda       TXT.Base+VKY_LINE_Y_POS_HI
+                    bne       dfgo@
+                    lda       TXT.Base+VKY_LINE_Y_POS_LO
+                    cmpa      #DMA_ArmLine
+                    bhs       dfgo@
+                    leay      -1,y
+                    bne       dfwt@
+dfgo@               puls      x,y                 PULS leaves CC and B alone
                     orb       #DMA_CTRL_Start_Trf
                     stb       DMA.Base+DMA_CTRL_REG
                     clrb

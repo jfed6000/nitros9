@@ -683,10 +683,21 @@ VKY_LINE_IRQ_CTRL_REG rmb       1         [0] - enable line 0 - write only
 VKY_LINE_CMP_VALUE_HI rmb       1         write only [7:0]
 VKY_LINE_CMP_VALUE_LO rmb       1         write only [3:0]
 
-VKY_PIXEL_X_POS_HI  equ       VKY_LINE_IRQ_CTRL_REG this is where on the video line is the pixel
-VKY_PIXEL_X_POS_LO  equ       VKY_LINE_CMP_VALUE_LO or what pixel is being displayed when the register is read
-VKY_LINE_Y_POS_HI   equ       VKY_LINE_CMP_VALUE_HI this is the line value of the raster
-VKY_LINE_Y_POS_LO   rmb       1
+* THE RASTER READ-BACK.  These four write-only registers read back as the
+* video position, and the middle two were the WRONG WAY ROUND here until
+* 2026-09-21.  TinyVickyControl_Registers.v:151-154 is the whole map:
+*   $18 read = HPixelCount[11:8]   $19 read = HPixelCount[7:0]
+*   $1A read = HLineCount[11:8]    $1B read = HLineCount[7:0]
+* so PIXEL_X_POS_LO is $19 and LINE_Y_POS_HI is $1A, not the reverse.
+* Nothing had used either, so the swap was dormant.
+*
+* HLineCount is the WHOLE frame's line, 0 at the top of vertical blanking
+* and counting to VTOTAL (524 at 60 Hz, 448 at 70 Hz) - not the visible
+* line - which is exactly the number DMA_ArmLine below is measured in.
+VKY_PIXEL_X_POS_HI  equ       VKY_LINE_IRQ_CTRL_REG read: pixel X, bits 11:8
+VKY_PIXEL_X_POS_LO  equ       VKY_LINE_CMP_VALUE_HI read: pixel X, bits 7:0
+VKY_LINE_Y_POS_HI   equ       VKY_LINE_CMP_VALUE_LO read: raster line, bits 11:8
+VKY_LINE_Y_POS_LO   rmb       1         read: raster line, bits 7:0
 
 * Text control bit definitions
 Mstr_Ctrl_Text_Mode_En equ       $01       enable the text mode
@@ -1128,6 +1139,40 @@ DMA_CTRL_NotUsed2   equ       DMA_CTRL_16Bit     old name, wrong meaning
 
 * DMA_STATUS_REG bit definitions
 DMA_STATUS_TRF_IP   equ       $80       transfer in progress
+
+* WHEN IT IS SAFE TO ARM, IN RASTER LINES, AND WHY IT MATTERS.  Read from
+* TinyVKY_DMA_Controller.v's WAIT_2_TRF and VideoTimingGenerator.v's two
+* DMA window signals; NOT yet confirmed on hardware.
+*
+* WAIT_2_TRF leaves on the RISING EDGE of VDMA_Transfer_Time_Available
+* (= line 0) or while VDMA_Trf_Time_Before2Late is high.  From the tops'
+* timing constants, at 60 Hz Available is high for lines 0-42 and
+* Before2Late for lines 0-41 (0-46 and 0-45 at 70 Hz).  So:
+*
+*   armed during the VISIBLE frame - Before2Late low, no rising edge yet -
+*   the engine waits in WAIT_2_TRF for line 0 and gets the WHOLE window.
+*   The CPU is not halted while it waits.
+*
+*   armed INSIDE the window - Before2Late high - it starts AT ONCE with
+*   only (43 - line) lines of window left, and halts the CPU immediately.
+*   A whole-bitmap fill is 384 us, 12.1 lines, so arming at line 31 or
+*   later overruns the window - and an overrun does not simply stop: the
+*   "not at the end" branch of VRAM_1D_FILL_ST01 parks in WAIT_NEXT_SOF
+*   with Write_Strobe STILL HIGH and the destination pointer runs for the
+*   rest of the frame, ~1.5 million clocks and some 3 MB past the end.
+*
+* That is 11 lines in 525, so about 2% of calls made at a random moment.
+* The cure is to arm only in the visible frame, which is what DmaFill's
+* raster spin does.  Arming near line 0 would also be safe, so the wrap
+* from the last line to line 0 between the test and the store costs
+* nothing - which is why the test is a simple "line < DMA_ArmLine".
+DMA_ArmLine         equ       48        arm at this raster line or later
+* The spin's ceiling, and it is a safety net rather than a timing figure.
+* One window is 48 lines, 1.5 ms, which is about 180 passes of the loop at
+* 1.79 MHz - so 1000 is five times what the real wait can ever need, and
+* it bounds a read-back that turns out to be stuck at zero to ~8 ms of
+* masked interrupts instead of for ever.
+DMA_ArmSpin         equ       1000
 
 
 * MIDI Synth Chip
