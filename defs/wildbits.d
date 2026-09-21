@@ -1206,12 +1206,21 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * It is rock solid under hammering where the poll wedged on the first
 * press.  (K2 hardware, 2026-09-21, the user's experiment.)
 *
-* SO THE HAZARD IS TOUCHING THE DMA REGISTERS WHILE A TRANSFER IS LIVE,
-* NOT EXECUTING DURING THE WINDOW.  A caller may do real work between
-* arming and completion; it must simply stay off $FEC0-$FECF.  F$Sleep
-* is therefore a convenient way to pass the time, not a safety
-* requirement - which is the opposite of what was written here earlier
-* in the day.
+* THAT CONCLUSION WAS WRONG AND IS WITHDRAWN.  Two later runs killed it:
+* a loop reading $FE20 - the interrupt-pending register, nowhere near
+* the DMA - wedged the machine, and so did one reading ordinary RAM.  So
+* it is neither the DMA's own registers nor I/O space.
+*
+* And the surviving loop was too short to prove anything: 3.6 ms against
+* a wait of up to 16.7 ms, so it usually finished BEFORE the halt
+* arrived, leaving the CPU back in F$Sleep when it landed.  It covered
+* about 22% of the window where the loops that failed covered 37% -
+* most of the difference it was supposed to be measuring.
+*
+* WHAT IS ESTABLISHED is only what has been hammered without a failure:
+* arm, F$Sleep, read the status once afterwards.  Everything else tried
+* during the window has eventually wedged the machine.  F$Sleep is a
+* safety requirement until something shows otherwise.
 *
 * Two more figures from the same source, neither of them ours to guess:
 *   - a timeout must be AT LEAST TWO FRAMES, ~40 ms.  A transfer armed
@@ -1264,7 +1273,19 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * $FEC0-$FECF.  So it separates the two, which nothing else has.
 *
 * 4096 passes is ~28,700 cycles, about half a 60 Hz tick at 3.58 MHz.
-DmaDelay            equ       4096
+* SIZED TO COVER THE WHOLE WAIT, which the first version was not.  The
+* window opens at the next line 0, up to 16.7 ms after arming, but a
+* 4,096-pass loop is only ~3.6 ms - so it usually ENDED before the halt
+* arrived and the CPU was back in F$Sleep when it landed.  That made
+* "register-only is safe" unsupportable: it was covering about 22% of
+* the window where the 12-cycle loops covered 37%, which is most of the
+* difference it was supposed to be measuring.
+*
+* Both counts below are ~25 ms at 10 MHz, longer at any slower clock, so
+* every variant now spans the whole wait and they are duration-matched
+* against each other.  Only the instruction mix differs.
+DmaDly7             equ       35714     register-only loop, 7 cycles a pass
+DmaDly12            equ       20833     the data-reading loops, 12 a pass
 DMA_ArmLine         equ       48        arm at this raster line or later
 * The spin's ceiling, and it is a safety net rather than a timing figure.
 * One window is 48 lines, 1.5 ms, which is about 180 passes of the loop at

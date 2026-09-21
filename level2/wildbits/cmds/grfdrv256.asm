@@ -2180,7 +2180,7 @@ bcrow2@             stb       >gr.b4              the row count
                     bne       bcdio@              bit 2: the same loop, reading I/O
                     bita      #2
                     beq       bcnod@
-                    ldy       #DmaDelay
+                    ldy       #DmaDly7
 bcdly@              leay      -1,y
                     bne       bcdly@
                     bra       bcnod@
@@ -2195,7 +2195,7 @@ bcdly@              leay      -1,y
 * Safe   -> the fault is specific to the DMA register block.
 * Wedges -> it is any I/O access during a transfer, which is a much
 *           broader finding and points at the bus rather than the DMA.
-bcdio@              ldy       #DmaDelay
+bcdio@              ldy       #DmaDly12
 bcdio2@             lda       INT_PENDING_0
                     leay      -1,y
                     bne       bcdio2@
@@ -2212,7 +2212,7 @@ bcdio2@             lda       INT_PENDING_0
 * Wedges -> it is any data access, or simply time in the window, and
 *           bit 1's loop was only safe because it was shorter.
 bcdram@             leax      <bcdram@,pcr
-                    ldy       #DmaDelay
+                    ldy       #DmaDly12
 bcdrm2@             lda       ,x
                     leay      -1,y
                     bne       bcdrm2@
