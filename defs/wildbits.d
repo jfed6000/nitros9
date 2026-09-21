@@ -1225,11 +1225,26 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 *   lda $FE20 + that loop    fetches + I/O read    wedged in ~4
 *   lda $FEC1 / bmi          continuous DMA read   wedged on the first
 *
-* IT IS BUS ACTIVITY AS SUCH, and the failure rate tracks bus-cycle
-* density.  Not the DMA's registers, not I/O space, not data versus
-* code.  The only state that has never failed is the CPU issuing NO
-* VALID MEMORY ACCESSES - which is exactly what CWAI does, rAVMA = 0
-* with the address parked at $FFFF.
+* NOT the DMA's registers, not I/O space, not data versus code.  The
+* only state that has never failed is the CPU issuing NO VALID MEMORY
+* ACCESSES - which is exactly what CWAI does, rAVMA = 0 with the address
+* parked at $FFFF.
+*
+* AND THE EXPOSURE IS ONE INSTANT, NOT A DURATION.  Bus_RDY = Available
+* & Progress, so through the whole visible frame - 92% of it - a
+* transfer is outstanding and HALT is NOT asserted; the CPU runs
+* normally.  What matters is only what it is doing when HALT asserts at
+* line 0.  The loops above exist to guarantee it is executing then
+* rather than idle; they are not "running during the transfer".
+*
+* WHY THE HANDSHAKE THEN FAILS IS NOT KNOWN.  The CPU should reach
+* CPUSTATE_FETCH_I1 within a few cycles, see ~HALTLatched, and raise
+* BA/BS.  Sometimes it does not, and the engine waits for ever.  The
+* profile - probabilistic, on a 8 MHz / 100 MHz crossing, with resync
+* chains both ways, rate rising with CPU activity - looks like a
+* marginal timing path rather than a logic error, but that is beyond
+* what can be settled from this side.  docs/rc16-dma-report.md is what
+* was sent to the core developer.
 *
 * So F$Sleep is a safety requirement, and it works because the kernel
 * idles in CWAI, not because it passes time.  A caller can do NOTHING
