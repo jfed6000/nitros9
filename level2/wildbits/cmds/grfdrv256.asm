@@ -2056,18 +2056,24 @@ bdlive@             tst       V.TermLive,u
 * the evidence are beside DMA_STATUS_TRF_IP in wildbits.d.
 *
 * IT WAS BRIEFLY MADE SYNCHRONOUS, parking here with CWAI so the caller
-* needed no rule, and that was WRONG FOR ONE REASON THAT OUTWEIGHS THE
-* REST: parking holds grfdrv.  gr.Busy stays set and the MMU stays
-* flipped to task 1 for up to a tick per call, on the single-instance
-* driver that also serves the keyboard and every line of text.
-* CallGrfDrvGo's own note says re-entrancy "opens only if something
-* inside the grfdrv window blocks" - which is precisely what a park
-* does.  Starting a second clear before the first reported complete
-* crashed the machine (user, 2026-09-21).
+* needed no rule, and a second clear started before the first reported
+* complete crashed the machine.  BLOCKING HERE IS NOT THE REASON:
+* grfdrv is designed to be synchronous and process one call at a time,
+* so holding it is what it is for (user, 2026-09-21).
 *
-* Bit 5 still selects the park for experiments.  If it is ever wanted
-* for real, the place to put it is VTIO - its SetStat runs in process
-* context, outside CallGrfDrvGo, so the park would leave grfdrv free.
+* The reason is that A BARE CWAI IS WOKEN BY ANY INTERRUPT.  A keypress
+* wakes it long before the transfer window opens, and the CPU is then
+* executing when HALT asserts.  Worse, the 60 Hz tick fires at line 0 -
+* the same instant HALT asserts - so every frame the CPU is woken into
+* the clock ISR at exactly the wrong moment.  Parking reduces exposure;
+* it does not remove it, and no arrangement of software can, because
+* interrupts are asynchronous and one of them coincides with the halt
+* by construction.
+*
+* Bit 6 is the answer being tried: park, read the status, park again if
+* it still says busy - so a spurious wake costs one lda instead of
+* leaving the CPU running.  If that holds up it should become the
+* default and this call becomes synchronous again.
 *
 * GetStat SS.BmClear remains, but only as a diagnostic: it reports the
 * destination the engine holds, and by the time anyone can call it the
