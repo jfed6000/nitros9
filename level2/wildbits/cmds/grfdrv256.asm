@@ -2122,10 +2122,19 @@ bcrow2@             stb       >gr.b4              the row count
 bccnt@              equ       *
                     leax      ,s
                     lbsr      DmaFill             armed; it runs in the next vblank
+* LEAS does not touch the flags - only LEAX and LEAY set Z - so DmaFill's
+* carry survives it.
                     leas      7,s
+                    bcs       BmClrRas
                     lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy
+                    jmp       >GrfMod+SysRet
+* The raster read-back is not answering, so the safe moment to arm cannot
+* be found.  Arming anyway is what put a transfer in the middle of the
+* blanking window, so this refuses instead; the caller falls back.
+BmClrRas            comb
+                    ldb       #E$NotRdy
                     jmp       >GrfMod+SysRet
 BmClrUnd            comb
                     ldb       #E$WUndef
@@ -2191,27 +2200,41 @@ DmaFillGo           stb       DMA.Base+DMA_CTRL_REG   the mode, start bit clear
                     sta       DMA.Base+DMA_SIZE_1D_L
                     puls      b
 * The raster guard, as late as it can be put: everything else is already
-* in the registers, so nothing but the start edge follows it.  Line 256
-* and over is deep in the visible frame and needs no second read.
-* THE SPIN IS COUNTED, because this driver runs with interrupts masked
-* and the read-back itself has never been exercised.  If those two bytes
-* turn out not to be the raster, every reading is either large (arm at
-* once) or stuck at zero - and the count is what stops the stuck case
-* from hanging the machine on the first SS.BmClear.  Falling out of the
-* count arms anyway, which is exactly what the driver did before.
+* in the registers, so nothing but the start edge follows it.
+*
+* IT REFUSES RATHER THAN GUESSES, and that is the whole point of this
+* version.  The first one trusted the read-back and had no way to say it
+* was not working - so if those two bytes are not the raster at all, and
+* an undecoded read returning $FF is the obvious way for that to happen,
+* the high byte is non-zero, the test concludes "deep in the visible
+* frame" and arms AT ONCE.  A guard that silently does nothing looks
+* exactly like no guard, which is how the arming hazard survived a whole
+* session of hardware runs while this code was supposedly preventing it.
+*
+* So both failure modes are now loud.  A raster line is 0-524, so its
+* high byte can only be 0, 1 or 2; anything above that is not a raster
+* and the call fails with E$NotRdy.  A read stuck low runs the spin out
+* and fails the same way, instead of hanging a driver that has interrupts
+* masked.  Failing is safe: the caller falls back to a CPU clear, which
+* is what src/gfx.a BmClear already does on any error.
                     pshs      x,y
                     ldy       #DMA_ArmSpin
 dfwt@               lda       TXT.Base+VKY_LINE_Y_POS_HI
-                    bne       dfgo@
+                    cmpa      #2
+                    bhi       dfbad@              not a raster: refuse to arm blind
+                    bne       dfgo@               256 or over: the visible frame
                     lda       TXT.Base+VKY_LINE_Y_POS_LO
                     cmpa      #DMA_ArmLine
                     bhs       dfgo@
                     leay      -1,y
                     bne       dfwt@
+dfbad@              puls      x,y
+                    comb                          COMB sets the carry
+                    rts
 dfgo@               puls      x,y                 PULS leaves CC and B alone
                     orb       #DMA_CTRL_Start_Trf
                     stb       DMA.Base+DMA_CTRL_REG
-                    clrb
+                    clrb                          and CLRB clears the carry
                     rts
 
 *******************************************************************
