@@ -1170,6 +1170,23 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * A driver-side spin was built on 2026-09-21 and wedged the machine at
 * once; it is reverted, and this note is why it must not come back.
 *
+* AND F$Sleep IS NOT AN ARBITRARY CHOICE - IT ENDS IN CWAI.  A process
+* that sleeps leaves the active queue, F$NProc finds nothing else
+* runnable, and the kernel executes "cwai #^IntMasks"
+* (level2/modules/kernel/ccbfnproc.asm:23): the 6809 stacks its whole
+* state and STOPS, waiting for an interrupt.  Nothing is part-finished,
+* so when the DMA asserts its halt the CPU grants the bus at once and
+* BA and BS come up together, which is exactly what the engine is
+* waiting for.  A spin loop can never do that - it is permanently
+* mid-instruction, and an MRDY stretch on one of its bus cycles means
+* the instruction never completes and the handshake never happens.
+*
+* The caveat, because it is a dependency and not a guarantee: CWAI is
+* only reached when NOTHING ELSE IS RUNNABLE.  On a busier machine
+* F$Sleep would hand the CPU to another process and it would be
+* executing instructions again through the window.  Joust's machine is
+* idle, which may be flattering these results.
+*
 * Two more figures from the same source, neither of them ours to guess:
 *   - a timeout must be AT LEAST TWO FRAMES, ~40 ms.  A transfer armed
 *     just after the window shuts moves nothing for most of a frame.
