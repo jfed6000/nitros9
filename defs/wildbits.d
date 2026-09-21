@@ -1320,13 +1320,21 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * Both counts below are ~25 ms at 10 MHz, longer at any slower clock, so
 * every variant now spans the whole wait and they are duration-matched
 * against each other.  Only the instruction mix differs.
-* HOW MANY SYNCs THE BIT-4 VARIANT EXECUTES.  One should be enough - a
-* SYNC exits at the next interrupt, and the 60 Hz tick fires at line 0,
-* the same instant HALT asserts - but SYNC exits IMMEDIATELY if a line
-* is already asserted rather than waiting for an edge, so a tick latched
-* but not yet serviced makes it a no-op.  Four covers that without being
-* able to eat many frames.
-DmaSyncs            equ       4
+* HOW MANY SYNCs OR CWAIs THE BIT-4 AND BIT-5 VARIANTS EXECUTE.
+*
+* ONE, because each waits for the NEXT interrupt and the 60 Hz tick
+* fires at line 0 - the same instant the transfer window opens and HALT
+* asserts.  So one park lands exactly where it is needed: the CPU is
+* already issuing no bus cycles when the engine asks for the bus, the
+* transfer runs, and by the time the instruction returns the fill is
+* done.  More than one just waits out more whole ticks - four cost
+* ~67 ms a call, four times what F$Sleep does.
+*
+* The caveat is SYNC's alone: it exits IMMEDIATELY if a line is already
+* asserted rather than waiting for an edge, so a tick latched but not
+* yet serviced makes a single SYNC a no-op.  CWAI has no such problem
+* and is the one to build on.
+DmaSyncs            equ       1
 * The same count for the CWAI variant (bit 5).  CWAI is the instruction
 * the kernel's own idle uses, and grfdrv runs with interrupts ENABLED -
 * CallGrfDrvGo's orcc #IntMasks covers only the stack switch, because it
