@@ -2093,6 +2093,22 @@ bcrow2@             stb       >gr.b4              the row count
                     leas      -7,s
                     ldb       >gr.b3
                     stb       6,s                 the fill value
+* THE DESTINATION FIRST, while A is still the block BmGetAddr returned.
+* The row arithmetic below uses MUL, and MUL DESTROYS A - putting it
+* first cost a hardware run: the block $E2 became the $3A that rows*64
+* left in A, so Blk2Addr produced $07 where it should have produced $1C
+* and the engine filled $075000 instead of $1C5000.  Low memory, not the
+* bitmap, which is why nothing appeared and the machine fell over.
+* block*$2000 + offset - the same arithmetic as BmRegAddr, and the same
+* argument that it cannot carry out of the high byte.
+                    clrb
+                    lbsr      Blk2Addr            D = address bits 23:8
+                    sta       ,s                  destination bits 23:16
+                    tfr       b,a
+                    clrb                          D = bits 15:0, low 13 clear
+                    leax      d,x                 X = that plus the offset
+                    stx       1,s                 destination bits 15:8 and 7:0
+* NOW the count, because from here A is expendable.
                     lda       >gr.b4              rows
                     ldb       #64
                     mul                           D = rows*64
@@ -2104,15 +2120,6 @@ bcrow2@             stb       >gr.b4              the row count
                     bcc       bccnt@
                     inc       3,s
 bccnt@              equ       *
-* block*$2000 + offset - the same arithmetic as BmRegAddr, and the same
-* argument that it cannot carry out of the high byte.
-                    clrb
-                    lbsr      Blk2Addr            D = address bits 23:8
-                    sta       ,s                  destination bits 23:16
-                    tfr       b,a
-                    clrb                          D = bits 15:0, low 13 clear
-                    leax      d,x                 X = that plus the offset
-                    stx       1,s                 destination bits 15:8 and 7:0
                     leax      ,s
                     lbsr      DmaFill             armed; it runs in the next vblank
                     leas      7,s
