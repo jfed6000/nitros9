@@ -2021,6 +2021,18 @@ bdlive@             tst       V.TermLive,u
 *   R$Y      = bitmap # (0-2)
 *   R$X high = reserved, must be 0
 *   R$X low  = the fill value (a CLUT index; 0 = transparent)
+*   R$U      = ROWS to fill, 1-240.  0 means the whole bitmap (240).
+*
+* THE ROW COUNT EXISTS BECAUSE THE ENGINE CANNOT SAFELY BE INTERRUPTED.
+* If a transfer does not finish inside one vertical-blanking window the
+* state machine parks in WAIT_NEXT_SOF with Write_Strobe STILL HIGH, and
+* the destination pointer goes on incrementing every 100 MHz clock for
+* the whole visible frame - about 1.5 million clocks, some 3 MB past the
+* end.  On resume Write_Reached_End is already false, so it reports
+* complete having written only part of the bitmap, and the writes it made
+* while running away landed wherever the pointer had got to.  So the
+* caller must ask for an amount that FITS, and until the real throughput
+* is measured only the caller knows what that is.
 *
 * ASYNCHRONOUS.  Carry clear means ACCEPTED, not done.  The call arms the
 * engine and returns; the program does not block.  The fill happens in
@@ -2057,6 +2069,19 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     tsta
                     lbne      BmBad
                     stb       >gr.b3
+* Rows -> a 24-bit byte count.  rows*320 = rows*256 + rows*64, and the
+* product reaches 76,800, so it does not fit 16 bits and is built in
+* three bytes below.
+                    ldd       R$U,x
+                    tsta
+                    lbne      BmBad               above 255 rows
+                    tstb
+                    bne       bcrow@
+                    ldb       #BmPixels/320       0 means the whole bitmap (240)
+                    bra       bcrow2@
+bcrow@              cmpb      #BmPixels/320
+                    lbhi      BmBad
+bcrow2@             stb       >gr.b4              the row count
                     lda       DMA.Base+DMA_STATUS_REG
                     bmi       BmClrBsy            a fill is still outstanding
                     lda       >gr.b2
@@ -2068,11 +2093,17 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     leas      -7,s
                     ldb       >gr.b3
                     stb       6,s                 the fill value
-                    ldb       #BmPixels/65536     76,800 = $01 2C 00
-                    stb       3,s
-                    ldb       #(BmPixels/256)&255
+                    lda       >gr.b4              rows
+                    ldb       #64
+                    mul                           D = rows*64
+                    std       4,s                 into the count's M and L
+                    clr       3,s
+                    ldb       >gr.b4              + rows*256: add rows to M
+                    addb      4,s
                     stb       4,s
-                    clr       5,s
+                    bcc       bccnt@
+                    inc       3,s
+bccnt@              equ       *
 * block*$2000 + offset - the same arithmetic as BmRegAddr, and the same
 * argument that it cannot carry out of the high byte.
                     clrb

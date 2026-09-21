@@ -95,6 +95,10 @@ colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 clrtck              rmb       1         C: frames waited for the fill to finish
 clrans              rmb       2         C: what the GetStat answered in R$X
+scanrow             rmb       2         C: scan - the row being checked
+scancol             rmb       2         C: scan - the column being checked
+scanbad             rmb       1         C: scan - non-zero once a mismatch is found
+clrrows             rmb       2         C: rows to fill, creeping up one per press
 lnleft              rmb       1         L/F: records still to build
 lndrawn             rmb       2         L/F: records the driver says it drew
 lnbuf               rmb       NFLOOD*8  the line records, 8 bytes each
@@ -110,6 +114,11 @@ name                fcs       /bmtest/
 * start
 ********************************************************************
 start               clr       gotslab,u
+* C starts at the TOP OF THE RED BOTTOM BAR and adds one row per press,
+* so the first fill is known to be well inside one vertical-blanking
+* window and the count creeps up to the first size that does not fit.
+                    ldd       #BMROWS-BARROWS
+                    std       clrrows,u
                     clr       gotdrv,u
                     clr       defined,u
                     clr       hires,u
@@ -687,9 +696,20 @@ ShowErrAt           pshs      b
 * of the slab - so the byte after it, at $1C00, is still inside the slab
 * and safe to read.
 ********************************************************************
-DoClear             ldy       #0                  bitmap 0
+* Say what is about to be attempted BEFORE attempting it, so a row count
+* that kills the machine is on the screen when it does.
+DoClear             leax      RowTxt,pcr
+                    lbsr      StartLine
+                    lda       clrrows,u
+                    lbsr      AppHex
+                    lda       clrrows+1,u
+                    lbsr      AppHex
+                    lbsr      EndLine
+                    ldy       #0                  bitmap 0
                     ldx       #CLRVAL             high byte 0 = reserved
+                    ldd       clrrows,u           the rows to fill this time
                     pshs      u
+                    tfr       d,u                 R$U = the row count
                     lda       #BMPATH
                     ldb       #SS.BmClear
                     os9       I$SetStt
@@ -762,7 +782,77 @@ ClrDone             leax      ClrTxt,pcr
                     lbsr      UnmapCur
                     puls      y
 ClrNoMap            lbsr      EndLine
-                    lbra      Loop
+* And now WHERE the fill reached.  Walk the bitmap for the first byte
+* that is not the fill value and report it as a row and column.  This is
+* the measurement that separates the two readings of a short fill: a
+* COUNT bug stops partway through a row, a BASE mismatch between what the
+* DMA writes and what VICKY reads loses whole rows and stops at column 0.
+                    lbsr      ClrScan
+* One more row next time, up to the whole bitmap.
+                    ldd       clrrows,u
+                    cmpd      #BMROWS
+                    bhs       clrmax@
+                    addd      #1
+                    std       clrrows,u
+clrmax@             lbra      Loop
+
+********************************************************************
+* ClrScan - find the first byte of bitmap 0 that is not CLRVAL.
+*   Sets scanbad, scanrow and scancol, and prints the answer.
+********************************************************************
+ClrScan             clr       scanbad,u
+                    lda       slabblk,u
+                    sta       curblk,u
+                    lbsr      MapCur
+                    lbcs      ScErr
+                    ldd       winaddr,u
+                    addd      #BMOFF
+                    std       bmptr,u
+                    ldd       #BLKSIZE-BMOFF
+                    std       blkleft,u
+                    ldd       #0
+                    std       scanrow,u
+scrow@              ldd       #0
+                    std       scancol,u
+sccol@              ldx       bmptr,u
+                    lda       ,x+
+                    stx       bmptr,u
+                    cmpa      #CLRVAL
+                    bne       scfnd@
+                    ldd       blkleft,u
+                    subd      #1
+                    std       blkleft,u
+                    bne       scnb@
+                    lbsr      NextBlk             release this block, map the next
+                    lbcs      ScErr
+scnb@               ldd       scancol,u
+                    addd      #1
+                    std       scancol,u
+                    cmpd      #BMCOLS
+                    blo       sccol@
+                    ldd       scanrow,u
+                    addd      #1
+                    std       scanrow,u
+                    cmpd      #BMROWS
+                    blo       scrow@
+                    lbsr      UnmapCur
+                    leax      ScOkTx,pcr
+                    lbra      PutLine
+scfnd@              inc       scanbad,u
+                    lbsr      UnmapCur
+                    leax      ScBadTx,pcr
+                    lbsr      StartLine
+                    lda       scanrow+1,u
+                    lbsr      AppHex
+                    leax      ScBad2Tx,pcr
+                    lbsr      AppStr
+                    lda       scancol,u
+                    lbsr      AppHex
+                    lda       scancol+1,u
+                    lbsr      AppHex
+                    lbra      EndLine
+ScErr               leax      ScErrTx,pcr
+                    lbra      PutLine
 
 ********************************************************************
 * L - SS.BmLine: a fan of NLINES lines from the centre to points all the
@@ -1077,10 +1167,20 @@ LnTx2               fcc       / of them/
                     fcb       $00
 LnTx3               fcc       /, then stopped with error /
                     fcb       $00
-ClrSetE             fcc       /  C: the SS.BmClear SetStat failed, error /
+RowTxt              fcc       /  C rows $/
                     fcb       $00
-ClrGetE             fcc       /  C: the fill was armed but the GetStat failed, error /
+ClrSetE             fcc       /  C SetStt err /
                     fcb       $00
+ClrGetE             fcc       /  C GetStt err /
+                    fcb       $00
+ScOkTx              fcc       /  C scan: every one of 240 rows holds the fill value/
+                    fcb       C$CR
+ScBadTx             fcc       /  C scan: first byte not the fill value at row $/
+                    fcb       $00
+ScBad2Tx            fcc       / col $/
+                    fcb       $00
+ScErrTx             fcc       /  C scan: could not map the bitmap/
+                    fcb       C$CR
 ErrTxt              fcc       /bmtest: error /
                     fcb       $00
 
