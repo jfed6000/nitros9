@@ -1196,7 +1196,10 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 *      instructions later at the next fetch.
 *
 * WHY A TIGHT POLL FAILS IS NOW MEASURED, and the answer narrows the
-* rule considerably.  A register-only delay loop was run in grfdrv in
+* rule considerably.  (The MRDY clock-stretch theory that stood here
+* earlier is DEAD: MRDY_i is a port on mc6809.v that nothing reads - the
+* only block using it is commented out, and mc6809i.v never mentions it.
+* Nothing stalls this CPU; it only ever receives nHALT.)  A register-only delay loop was run in grfdrv in
 * exactly the place the poll had been - same masked, MMU-flipped
 * context, same ~8 ms, hitting instruction-fetch boundaries every 7
 * cycles - differing from it in ONE way: it never reads $FEC0-$FECF.
