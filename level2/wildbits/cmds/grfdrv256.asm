@@ -2098,7 +2098,7 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     lbhi      BmBad
                     stb       >gr.b2
                     ldd       R$X,x               A = flags, B = the fill value
-                    bita      #$C0                only bits 0-5 are defined
+                    bita      #$80                only bits 0-6 are defined
                     lbne      BmBad
                     sta       >gr.d1              the width flag
                     stb       >gr.b3
@@ -2191,6 +2191,8 @@ bcrow2@             stb       >gr.b4              the row count
 * Wedges    -> the hazard is executing at all, and only the woken-from-
 *              idle path is safe.
                     lda       >gr.d1
+                    bita      #64
+                    bne       bccwck@             bit 6: park, then check, repeat
                     bita      #32
                     bne       bccwai@             bit 5: park with CWAI
                     bita      #16
@@ -2220,6 +2222,27 @@ bcrow2@             stb       >gr.b4              the row count
 * design (user, 2026-09-21): a second caller serialises behind this one
 * rather than re-entering it.
 bccwai@             cwai      #^IntMasks
+                    bra       bcnod@
+* BIT 6 - PARK, CHECK, PARK AGAIN UNTIL THE ENGINE SAYS IT IS DONE.
+*
+* A bare CWAI is woken by ANY interrupt, not only the tick, so a
+* keystroke can put the CPU back to executing long before the transfer
+* window even opens.  This costs one lda per wake instead: if the status
+* still reads busy, park again.  The CPU is running for a handful of
+* cycles per interrupt rather than continuously.
+*
+* IT DOES READ $FEC1 WHILE A TRANSFER IS PENDING, which is the access
+* that wedges the machine when done in a tight loop.  The bet is that
+* frequency is what matters - one read per interrupt against one every
+* seven cycles - and that is exactly what this measures.
+*
+* Counted, because a wedged engine never clears the bit.
+bccwck@             ldy       #DmaCwChk
+bccwc2@             cwai      #^IntMasks
+                    lda       DMA.Base+DMA_STATUS_REG
+                    bpl       bcnod@              done
+                    leay      -1,y
+                    bne       bccwc2@
                     bra       bcnod@
 bcdly@              ldy       #DmaDly7
 bcdly2@             leay      -1,y

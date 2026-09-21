@@ -1335,6 +1335,12 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * yet serviced makes a single SYNC a no-op.  CWAI has no such problem
 * and is the one to build on.
 DmaSyncs            equ       1
+* How many times the CWAI-and-check variant will park before giving up.
+* Each park lasts until the next interrupt, so this is a ceiling in
+* interrupts, not in time - at 60 Hz with no other source that is eight
+* ticks, ~134 ms.  It exists because a wedged engine never clears the
+* status bit and the loop would otherwise never end.
+DmaCwChk            equ       8
 * The same count for the CWAI variant (bit 5).  CWAI is the instruction
 * the kernel's own idle uses, and grfdrv runs with interrupts ENABLED -
 * CallGrfDrvGo's orcc #IntMasks covers only the stack switch, because it

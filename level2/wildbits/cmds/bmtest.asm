@@ -98,7 +98,7 @@ barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 wide                rmb       1         non-zero = ask for 16-bit transfers
-pmode               rmb       1         driver wait: 0 none 1 cwai 2 sync 3 reg 4 io 5 ram
+pmode               rmb       1         wait: 0 none 1 cwai 2 cwai+check 3 sync 4 reg 5 io 6 ram
 clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
@@ -1046,7 +1046,7 @@ dw@                 lbsr      PutLine
 ********************************************************************
 DoPmode             lda       pmode,u
                     inca
-                    cmpa      #6
+                    cmpa      #7
                     blo       dp1@
                     clra
 dp1@                sta       pmode,u
@@ -1057,6 +1057,9 @@ dp1@                sta       pmode,u
                     tsta
                     beq       dp2@
                     leax      PmCwai,pcr
+                    deca
+                    beq       dp2@
+                    leax      PmCwCk,pcr
                     deca
                     beq       dp2@
                     leax      PmSync,pcr
@@ -1114,6 +1117,9 @@ cow@                lbsr      AppStr
                     tsta
                     beq       cop@
                     leax      PmCwai,pcr
+                    deca
+                    beq       cop@
+                    leax      PmCwCk,pcr
                     deca
                     beq       cop@
                     leax      PmSync,pcr
@@ -1707,6 +1713,8 @@ PmNone              fcc       /none/
                     fcb       $00
 PmCwai              fcc       /cwai - holds grfdrv/
                     fcb       $00
+PmCwCk              fcc       /cwai+check/
+                    fcb       $00
 PmSync              fcc       /sync/
                     fcb       $00
 PmReg               fcc       /regloop - WEDGES/
@@ -1715,7 +1723,7 @@ PmIo                fcc       /ioloop - WEDGES/
                     fcb       $00
 PmRam               fcc       /ramloop - WEDGES/
                     fcb       $00
-PmFlags             fcb       0,32,16,2,4,8       none cwai sync reg io ram
+PmFlags             fcb       0,32,64,16,2,4,8    none cwai cwaick sync reg io ram
 OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
