@@ -112,6 +112,12 @@ dcsup               rmb       1         AppDc16: non-zero once a digit has gone 
 clrrows             rmb       2         C: rows to fill, creeping up one per press
 clrnow              rmb       2         C: what THIS press asked for
 befbsy              rmb       1         C: the busy bit BEFORE this press armed
+cofrow              rmb       1         ClrOne: the first row passed
+corows              rmb       1         ClrOne: the row count passed
+coerr               rmb       1         ClrOne: the GetStat's REAL error code
+cobusy              rmb       2         ClrOne: 0 idle, 1 still outstanding
+codsth              rmb       1         ClrOne: the engine's dst, high byte
+codstl              rmb       2         ClrOne: ... and its mid and low
 dsthi               rmb       2         C: destination the DMA engine holds, high byte
 dstlo               rmb       2         C: ... and its mid and low bytes
 armbsy              rmb       1         C: the busy bit read straight after arming
@@ -961,16 +967,40 @@ dh3@                lbsr      ClrScan
 * NEITHER TFR NOR PULS TOUCHES CC, which is what lets the call's carry
 * survive all the way to the bcs below it.
 ********************************************************************
-ClrOne              pshs      u
+ClrOne              sta       cofrow,u
+                    stb       corows,u
+* SAY WHAT IS BEING PASSED, BEFORE PASSING IT.  Every register the call
+* gets, in the order the driver reads them, so a rejected argument can be
+* checked against the driver's own limits without guessing.
+                    leax      OneTxt,pcr
+                    lbsr      StartLine
+                    lda       #CLRVAL
+                    lbsr      AppDec
+                    leax      OneRw,pcr
+                    lbsr      AppStr
+                    lda       cofrow,u
+                    lbsr      AppDec
+                    leax      OneCt,pcr
+                    lbsr      AppStr
+                    lda       corows,u
+                    lbsr      AppDec
+                    lbsr      EndLine
+                    lda       cofrow,u
+                    ldb       corows,u
+                    pshs      u
                     tfr       d,u                 R$U = first row : row count
                     ldy       #0                  bitmap 0
                     ldx       #CLRVAL             high byte 0 = reserved
                     lda       #BMPATH
                     ldb       #SS.BmClear
                     os9       I$SetStt
-                    puls      u
-                    bcs       co9@
-                    clr       clrtck,u
+                    puls      u                   PULS leaves CC and B alone
+                    bcc       co0@
+                    leax      OneSE,pcr
+                    lbsr      ShowErrAt
+                    comb
+                    rts
+co0@                clr       clrtck,u
 co1@                ldx       #2                  one 60 Hz tick
                     pshs      u
                     os9       F$Sleep
@@ -979,20 +1009,52 @@ co1@                ldx       #2                  one 60 Hz tick
                     lda       #BMPATH
                     ldb       #SS.BmClear
                     os9       I$GetStt
-                    tfr       x,d                 D = 0 idle, 1 still outstanding
+* KEEP THE CARRY, THE ERROR AND THE ANSWERS BEFORE ANYTHING TOUCHES
+* THEM.  A "tfr x,d" stood here and overwrote B with X's low byte, so a
+* failing call reported "err 187" - a number that is not an error code at
+* all.  That is the SECOND time this exact trap has cost a hardware run
+* in this file; docs/status.md records the first.
+                    pshs      cc,b,x,y,u          ,s=CC 1,s=B 2,s=X 4,s=Y 6,s=U 8,s=data ptr
+                    ldu       8,s
+                    ldb       1,s
+                    stb       coerr,u
+                    ldd       2,s                 R$X = 0 idle, 1 outstanding
+                    std       cobusy,u
+                    ldd       4,s                 R$Y = the engine's dst, high byte
+                    stb       codsth,u
+                    ldd       6,s                 R$U = its mid and low
+                    std       codstl,u
+                    puls      cc,b,x,y,u
                     puls      u
-                    bcs       co9@
-                    tstb
+                    bcc       co2@
+                    leax      OneGE,pcr
+                    lbsr      ShowErrAt           B is the REAL error here
+                    comb
+                    rts
+co2@                ldd       cobusy,u
                     beq       co8@
                     inc       clrtck,u
                     lda       clrtck,u
                     cmpa      #CLRWAIT
                     blo       co1@
+                    leax      OneNR,pcr
+                    lbsr      PutLine
                     comb
                     ldb       #E$NotRdy           it never came back
                     rts
-co8@                andcc     #^Carry
-co9@                rts
+* Done.  Say where the ENGINE thinks it was writing, which is the one
+* reading that does not depend on the driver being right.
+co8@                leax      OneOk,pcr
+                    lbsr      StartLine
+                    lda       codsth,u
+                    lbsr      AppHex
+                    lda       codstl,u
+                    lbsr      AppHex
+                    lda       codstl+1,u
+                    lbsr      AppHex
+                    lbsr      EndLine
+                    andcc     #^Carry
+                    rts
 
 ********************************************************************
 * ClrScan - walk BITMAP 0, not the slab, and say where the fill value
@@ -1460,6 +1522,20 @@ DrvTxt              fcc       /SS.BmAlloc gave bitmap 1 block $/
 RdyTxt              fcc       /Bitmap 0 is at offset $1000 in that slab.  THE TOP BAR MUST BE WHITE./
                     fcb       C$CR
 HlfTxt              fcc       /  2 - clearing in two halves: rows 0-119, then rows 120-239/
+                    fcb       C$CR
+OneTxt              fcc       /  clear bm 0 val /
+                    fcb       $00
+OneRw               fcc       / row /
+                    fcb       $00
+OneCt               fcc       / rows /
+                    fcb       $00
+OneOk               fcc       /   -> done, engine dst $/
+                    fcb       $00
+OneSE               fcc       /  SetStt err /
+                    fcb       $00
+OneGE               fcc       /  GetStt err /
+                    fcb       $00
+OneNR               fcc       /  it never came back/
                     fcb       C$CR
 Hlf1E               fcc       /  2 first half err /
                     fcb       $00
