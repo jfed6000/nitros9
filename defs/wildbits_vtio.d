@@ -632,6 +632,15 @@ WD.Vicky            equ       1         ; live $C2/$C3 at LUT1 $2000/$4000
 * which point setting this to 1 works - but only on that FPGA and later.  The
 * mirror approach described below works on every version, so prefer it unless
 * you control which bitstream the board is running.
+*
+* THAT RELEASE HAS LANDED (noted 2026-09-20, read from the RTL, NOT TESTED).
+* TinyVKY2K2_IO_Page0_Devices.v carries "wb 2026-09-08: text FG/BG LUT
+* read-back (shadow copies)": the core keeps TEXT_FG_Shadow / TEXT_BG_Shadow
+* and returns them for $18_1700-$18_177F.  So this CAN go to 1 now, subject
+* to which bitstream is actually flashed - the same open question as the DMA
+* halt.  LEFT AT 0 DELIBERATELY: flipping it is a behaviour change to the
+* terminal switch path and wants a hardware run of its own.  See the open
+* item in docs/status.md.
 TermSaveFont0       equ       1         font bank 0     - CONFIRMED works
 TermSaveTextLUT     equ       0         text LUT fg/bg  - BROKEN before the FPGA fix
 * TermSaveSprite0 is gone with T.SPRITE0: PushBuf no longer reads the

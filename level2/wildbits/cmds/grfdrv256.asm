@@ -444,6 +444,31 @@ PushCore            lbsr      SetBlkC2C3
 * registers from it.  A program that poked $C0+$1000 behind the driver's
 * back would no longer have its bitmap carried per terminal - nothing
 * does; SS.AScrn is the only way in.
+*
+* CORRECTION, 2026-09-20, READ FROM THE RTL AND NOT TESTED.  The reason
+* recorded above and in c187585a - "reading a Vicky register back is not
+* something the hardware owes us" - is WRONG for the bitmap registers,
+* though the remedy was right and the failure was real.  They read back
+* fine; the READ MAP IS THE WRITE MAP REVERSED.
+*   write  +1,+2,+3 -> REG[1],REG[2],REG[3] = High, Mid, Low  (BmRegAddr)
+*   read   +1,+2,+3 -> REG[3],REG[2],REG[1] = Low,  Mid, High
+* (TinyVicky_BM_Registers.v, the Bus_D_o case: its comments label each
+* read by what it MEANS, which is the opposite order from the write.)
+* So the old capture read +1,+2,+3 and stored them as H,M,L, getting
+* L,M,H - a bitmap at $1B0000 comes back as $00001B.  A wildly wrong
+* address is fine-grained noise, which is exactly the "pure static"
+* c187585a reported.
+*
+* Which means the capture COULD be made to work, with the byte swap, and
+* then a bitmap would be carried per terminal again.  NOT DONE, and not
+* to be done casually: this is the code path that put static on the
+* user's board, so it wants a hardware run of its own.  See the open item
+* in docs/status.md.
+*
+* THE TILE REGISTERS ARE A DIFFERENT CASE AND CANNOT BE CAPTURED AT ALL:
+* TinyVicky_TL_Registers.v has no read path - "assign DataOut_Tile_MAP_o
+* = 8'h33;" - so the whole $18_1100-$18_11FF page reads as $33 forever.
+* Lumping the two together is what made the one look like the other.
                     puls      y,u
 end@                clrb
                     rts
