@@ -1147,6 +1147,36 @@ DMA_CTRL_NotUsed2   equ       DMA_CTRL_16Bit     old name, wrong meaning
 
 * DMA_STATUS_REG bit definitions
 DMA_STATUS_TRF_IP   equ       $80       transfer in progress
+*
+* WHY NOTHING MAY SPIN ON THIS BIT.  From the Wildbits DMA documentation,
+* and it is the authoritative statement of what cost a day of hardware
+* runs on 2026-09-21:
+*
+*   "Starting a transfer halts the CPU and waits for BA and BS to come
+*    back together, with no timeout.  If that handshake does not
+*    complete, the state machine stops there permanently, the status bit
+*    stays $80, and the CPU is re-halted every vertical blank for the
+*    rest of the session.  That state is unrecoverable without a reset."
+*
+* The CPU has to RELEASE THE BUS for the transfer to go.  So the one
+* thing a caller must not do between arming and completion is execute
+* bus cycles that might be stretched when the halt lands - and a tight
+* poll of this register is the worst case of all, because every
+* iteration is a bus cycle to the DMA's own address space.  The same
+* document notes that its own probe "deliberately never starts a
+* transfer for this reason".
+*
+* So: arm, F$Sleep to get the CPU out of the way, THEN read this bit.
+* A driver-side spin was built on 2026-09-21 and wedged the machine at
+* once; it is reverted, and this note is why it must not come back.
+*
+* Two more figures from the same source, neither of them ours to guess:
+*   - a timeout must be AT LEAST TWO FRAMES, ~40 ms.  A transfer armed
+*     just after the window shuts moves nothing for most of a frame.
+*   - a fill over about 130 KB "stops early and still reports success",
+*     so chunk well under 100 KB.  A 76,800-byte bitmap is safe; this is
+*     what the first-row and row-count arguments are for if it ever
+*     is not.
 
 * WHEN IT IS SAFE TO ARM, IN RASTER LINES, AND WHY IT MATTERS.  Read from
 * TinyVKY_DMA_Controller.v's WAIT_2_TRF and VideoTimingGenerator.v's two
