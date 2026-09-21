@@ -97,7 +97,12 @@ clrtck              rmb       1         C: frames waited for the fill to finish
 clrans              rmb       2         C: what the GetStat answered in R$X
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
-scanbad             rmb       1         C: scan - non-zero once a mismatch is found
+scanbad             rmb       1         C: scan - non-zero once the fill has begun
+scansr              rmb       2         C: scan - the row the fill starts on
+scansc              rmb       2         C: scan - the column it starts at
+dcval               rmb       2         AppDc16: what is left to print
+dcdig               rmb       1         AppDc16: the digit being built
+dcsup               rmb       1         AppDc16: non-zero once a digit has gone out
 clrrows             rmb       2         C: rows to fill, creeping up one per press
 dsthi               rmb       2         C: destination the DMA engine holds, high byte
 dstlo               rmb       2         C: ... and its mid and low bytes
@@ -618,12 +623,19 @@ frchk@              ldd       rowleft,u
                     bne       fnxt@
                     lda       #BARROWS
                     sta       barleft,u
-                    inc       colour,u
+* Advance the bar colour and STEP OVER CLRVAL.  The scan's whole argument
+* is that no byte of the drawn picture can be mistaken for a filled one,
+* and a bar in the fill colour would break it - colour 9 used to land on
+* rows 72-79 and 184-191, which is exactly where a badly short fill would
+* be read.
+fbcl@               inc       colour,u
                     lda       colour,u
                     cmpa      #15
-                    blo       fnxt@
+                    blo       fbc2@
                     lda       #1
                     sta       colour,u
+fbc2@               cmpa      #CLRVAL
+                    beq       fbcl@
 fnxt@               ldd       rowsleft,u
                     subd      #1
                     std       rowsleft,u
@@ -703,10 +715,8 @@ ShowErrAt           pshs      b
 * that kills the machine is on the screen when it does.
 DoClear             leax      RowTxt,pcr
                     lbsr      StartLine
-                    lda       clrrows,u
-                    lbsr      AppHex
-                    lda       clrrows+1,u
-                    lbsr      AppHex
+                    ldd       clrrows,u
+                    lbsr      AppDc16
                     lbsr      EndLine
                     ldy       #0                  bitmap 0
                     ldx       #CLRVAL             high byte 0 = reserved
@@ -831,55 +841,138 @@ ClrNoMap            lbsr      EndLine
 clrmax@             lbra      Loop
 
 ********************************************************************
-* ClrScan - find the first byte of bitmap 0 that is not CLRVAL.
-*   Sets scanbad, scanrow and scancol, and prints the answer.
+* ClrScan - walk BITMAP 0, not the slab, and say where the fill value
+*   starts and where it stops, each as a row and a column.
+*
+* THE OLD SCAN ANSWERED THE WRONG QUESTION AND ANSWERED IT BADLY.  It
+* swept all twelve blocks for a SINGLE byte equal to the fill value.  The
+* $1000 of slab in front of the bitmap is uninitialised, so it reported
+* garbage hits from memory the fill never touches - "blk $00 off $0145"
+* in the last hardware run was one.  And "where did the fill land" is
+* what GetStat's dma dst now answers exactly, from the engine's own
+* registers, so the scan should be answering the question only the pixels
+* can: DID IT FINISH, and if not, where did it stop?
+*
+* So this walks the bitmap's 76,800 bytes in row order and reports two
+* positions: the first byte that IS the fill value, which catches a fill
+* that started late, and the first one after it that is NOT, which is
+* where it stopped.  A column of 0 there means it stopped ON A ROW
+* BOUNDARY - the vertical-blanking window problem; any other column means
+* it stopped MID-ROW - a count problem.  Separating those two is the
+* whole reason the scan exists.
+*
+* It rests on FillBm leaving CLRVAL out of the bars, so no byte of the
+* drawn picture can be mistaken for a filled one.
 ********************************************************************
 ClrScan             clr       scanbad,u
-                    ldd       #0
-                    std       scanrow,u           block index within the slab
+                    ldx       #0
+                    stx       scanrow,u
+                    stx       scancol,u
                     lda       slabblk,u
                     sta       curblk,u
                     lbsr      MapCur
                     lbcs      ScErr
-scblk@              ldd       winaddr,u
+                    ldd       winaddr,u
+                    addd      #BMOFF              the bitmap, not the slab
                     std       bmptr,u
-                    ldd       #0
-                    std       scancol,u           offset within this block
-scoff@              ldx       bmptr,u
+                    ldd       #BLKSIZE-BMOFF
+                    std       blkleft,u
+                    ldd       #BMROWS
+                    std       rowsleft,u
+scrow@              ldx       #BMCOLS
+                    stx       rowleft,u
+scbyte@             ldx       blkleft,u
+                    bne       scb2@
+                    lbsr      NextBlk
+                    lbcs      ScErr
+scb2@               ldx       bmptr,u
                     lda       ,x+
                     stx       bmptr,u
                     cmpa      #CLRVAL
-                    beq       scfnd@
-                    ldd       scancol,u
-                    addd      #1
-                    std       scancol,u
-                    cmpd      #BLKSIZE
-                    blo       scoff@
-* this block holds none of it - on to the next
-                    ldd       scanrow,u
-                    addd      #1
-                    std       scanrow,u
-                    cmpd      #NBLKS
-                    bhs       scnone@
+                    beq       scfill@
+* Not the fill value.  If the fill has already begun, this is where it
+* stopped and the walk is over; scanrow and scancol are still this byte's
+* own position, because they are stepped on afterwards.
+                    tst       scanbad,u
+                    bne       scstop@
+                    bra       scnext@
+scfill@             tst       scanbad,u
+                    bne       scnext@
+                    inc       scanbad,u           the first filled byte
+                    ldx       scanrow,u
+                    stx       scansr,u
+                    ldx       scancol,u
+                    stx       scansc,u
+* LEAX and LEAY are used for the counters rather than ADDD/SUBD because A
+* is carrying the byte just read all the way down to here.
+scnext@             ldx       blkleft,u
+                    leax      -1,x
+                    stx       blkleft,u
+                    ldx       scancol,u
+                    leax      1,x
+                    stx       scancol,u
+                    ldx       rowleft,u
+                    leax      -1,x
+                    stx       rowleft,u
+                    bne       scbyte@
+                    ldx       #0
+                    stx       scancol,u
+                    ldx       scanrow,u
+                    leax      1,x
+                    stx       scanrow,u
+                    ldx       rowsleft,u
+                    leax      -1,x
+                    stx       rowsleft,u
+                    lbne      scrow@
+* Off the end of the bitmap with nothing to stop us: either the fill ran
+* all the way, and scanrow is BMROWS with scancol 0, or it never began.
                     lbsr      UnmapCur
-                    inc       curblk,u
-                    lbsr      MapCur
-                    lbcs      ScErr
-                    bra       scblk@
-scnone@             leax      ScNoneTx,pcr
+                    tst       scanbad,u
+                    bne       screp@
+                    leax      ScNoneTx,pcr
                     lbra      PutLine
-scfnd@              inc       scanbad,u
-                    lbsr      UnmapCur
-                    leax      ScBadTx,pcr
+scstop@             lbsr      UnmapCur
+screp@              leax      ScFrTx,pcr
                     lbsr      StartLine
-                    lda       scanrow+1,u
-                    lbsr      AppHex
-                    leax      ScBad2Tx,pcr
+                    ldd       scansr,u
+                    lbsr      AppDc16
+                    leax      ScComTx,pcr
                     lbsr      AppStr
-                    lda       scancol,u
-                    lbsr      AppHex
-                    lda       scancol+1,u
-                    lbsr      AppHex
+                    ldd       scansc,u
+                    lbsr      AppDc16
+                    leax      ScToTx,pcr
+                    lbsr      AppStr
+                    ldd       scanrow,u
+                    lbsr      AppDc16
+                    leax      ScComTx,pcr
+                    lbsr      AppStr
+                    ldd       scancol,u
+                    lbsr      AppDc16
+* The verdict, and it is the reason the two positions are measured rather
+* than just printed: a late start, a short fill on a row boundary and a
+* short fill inside a row are three different faults.
+                    ldd       scansr,u
+                    bne       sclate@
+                    ldd       scansc,u
+                    bne       sclate@
+                    ldd       scanrow,u
+                    cmpd      clrrows,u
+                    bhi       scover@
+                    blo       scshort@
+                    ldd       scancol,u
+                    bne       scshort@
+                    leax      ScOkTx,pcr
+                    bra       scsay@
+scshort@            ldd       scancol,u
+                    bne       scmid@
+                    leax      ScRowTx,pcr
+                    bra       scsay@
+scmid@              leax      ScMidTx,pcr
+                    bra       scsay@
+scover@             leax      ScOverTx,pcr
+                    bra       scsay@
+sclate@             leax      ScLateTx,pcr
+scsay@              lbsr      AppStr
                     lbra      EndLine
 ScErr               leax      ScErrTx,pcr
                     lbra      PutLine
@@ -1105,6 +1198,41 @@ one@                pshs      a
                     sta       ,y+
                     puls      a,b,pc
 
+********************************************************************
+* AppDc16 - D as decimal, 0-65535, with no leading zeros.  AppDec only
+*   takes a byte and a column runs to 319, so the scan needs this one.
+*   Y is the line pointer, as everywhere else here.
+********************************************************************
+AppDc16             pshs      a,b,x
+                    std       dcval,u
+                    clr       dcsup,u
+                    leax      DcTab,pcr
+dc1@                ldd       ,x                  10000, 1000, 100, 10, then 0
+                    beq       dc4@
+                    clr       dcdig,u
+dc2@                ldd       dcval,u
+                    cmpd      ,x
+                    blo       dc3@
+                    subd      ,x
+                    std       dcval,u
+                    inc       dcdig,u
+                    bra       dc2@
+dc3@                lda       dcdig,u
+                    bne       dc3b@
+                    tst       dcsup,u
+                    beq       dc3c@               a leading zero: drop it
+dc3b@               adda      #'0
+                    sta       ,y+
+                    ldb       #1
+                    stb       dcsup,u
+dc3c@               leax      2,x
+                    bra       dc1@
+dc4@                ldb       dcval+1,u           the units, always printed
+                    addb      #'0
+                    stb       ,y+
+                    puls      a,b,x,pc
+DcTab               fdb       10000,1000,100,10,0
+
 * EndLine FALLS THROUGH INTO PutLine, so it terminates the line AND
 * prints it.  Calling PutLine after it prints the line twice, which is
 * exactly what the C, L and F keys did on their first MAME run.
@@ -1199,7 +1327,7 @@ LnTx3               fcc       /, then stopped with error /
                     fcb       $00
 ArmTxt              fcc       /  C armed, busy now $/
                     fcb       $00
-RowTxt              fcc       /  C rows $/
+RowTxt              fcc       /  C rows /
                     fcb       $00
 ClrSetE             fcc       /  C SetStt err /
                     fcb       $00
@@ -1207,11 +1335,23 @@ ClrGetE             fcc       /  C GetStt err /
                     fcb       $00
 DstTxt              fcc       / dma dst $/
                     fcb       $00
-ScNoneTx            fcc       /  C scan: the fill value is NOWHERE in the 12-block slab/
+ScNoneTx            fcc       /  C scan: NOT ONE BYTE of the bitmap holds the fill value/
                     fcb       C$CR
-ScBadTx             fcc       /  C scan: fill value first at slab blk $/
+ScFrTx              fcc       /  C scan: fill /
                     fcb       $00
-ScBad2Tx            fcc       / off $/
+ScComTx             fcc       /,/
+                    fcb       $00
+ScToTx              fcc       / to /
+                    fcb       $00
+ScOkTx              fcc       / COMPLETE/
+                    fcb       $00
+ScRowTx             fcc       / SHORT, on a row boundary/
+                    fcb       $00
+ScMidTx             fcc       / SHORT, mid-row/
+                    fcb       $00
+ScOverTx            fcc       / PAST THE ROWS ASKED FOR/
+                    fcb       $00
+ScLateTx            fcc       / LATE START/
                     fcb       $00
 ScErrTx             fcc       /  C scan: could not map the bitmap/
                     fcb       C$CR
