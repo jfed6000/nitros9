@@ -2049,12 +2049,23 @@ bdlive@             tst       V.TermLive,u
 * caller must ask for an amount that FITS, and until the real throughput
 * is measured only the caller knows what that is.
 *
-* ASYNCHRONOUS.  Carry clear means ACCEPTED, not done.  The call arms the
-* engine and returns; the program does not block.  The fill happens in
-* the next vertical blank - up to 15.3 ms away and 768 us long - during
-* which the hardware freezes the CPU mid-stream and then releases it.
-* GetStat SS.BmClear says whether it has finished, and a program that
-* writes pixels into the bitmap before then will have them erased.
+* SYNCHRONOUS SINCE 2026-09-21.  Carry clear means DONE - the pixels are
+* there and the bitmap may be written immediately.  The call arms the
+* engine and then waits on the status bit itself, returning the moment
+* the fill completes: about 1 ms if the blanking window was about to
+* open, up to 16 ms if it had just shut.
+*
+* It used to arm and return, leaving the caller to poll with a GetStat.
+* That was wrong twice over.  It cost ~474 us of kernel round trip to
+* read one bit 1.4 us away, and a caller that slept a tick between polls
+* paid a whole frame however early the fill really finished.  Worse, it
+* put callers in the position of reading the DMA registers while a
+* transfer was live, which is what wedged a K2 repeatedly - see
+* docs/status.md.  Now nothing outside this routine touches them.
+*
+* GetStat SS.BmClear remains, but only as a diagnostic: it reports the
+* destination the engine holds, and by the time anyone can call it the
+* transfer is over.
 *
 * IT ALWAYS FILLS BmPixels (76,800) BYTES - see the note beside that equ
 * in wildbits_vtio.d for why that is neither the allocation nor what the
@@ -2156,7 +2167,28 @@ bcrow2@             stb       >gr.b4              the row count
                     leax      ,s
                     lbsr      DmaFill             armed; it runs in the next vblank
                     leas      11,s
-                    lbra      StatOK
+* AND WAIT FOR IT HERE, which is the whole reason this call is no longer
+* asynchronous.  Asking from outside cost an I$GetStt per look - 132 us
+* of SVC dispatch, 88 of IOMan/SCF/vtio, 227 of the vtio->grfdrv round
+* trip and 27 in the handler, plus an interrupt mask and an MMU task flip
+* on every entry - about 474 us to read ONE BIT that is 1.4 us away from
+* here.  And a caller that slept instead paid a whole tick however early
+* the fill finished, where this returns the moment it is done: ~1 ms if
+* the window was about to open, 16 ms if it had just shut.
+*
+* It is counted, not open-ended.  On a core whose DMA halt is not wired
+* to Drive_RDY the engine parks in CPU_STOPPED_ST0 for ever, writing
+* nothing, and an unbounded spin in masked system state would take the
+* machine with it.  See DmaSpin in wildbits.d for the arithmetic.
+                    ldy       #DmaSpin
+bcwait@             lda       DMA.Base+DMA_STATUS_REG
+                    bpl       bcfin@              bit 7 low: the engine is done
+                    leay      -1,y
+                    bne       bcwait@
+                    comb
+                    ldb       #E$DevBsy           it never finished
+                    jmp       >GrfMod+SysRet
+bcfin@              lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy
                     jmp       >GrfMod+SysRet
