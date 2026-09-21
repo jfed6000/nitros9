@@ -1236,6 +1236,18 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * raster spin does.  Arming near line 0 would also be safe, so the wrap
 * from the last line to line 0 between the test and the store costs
 * nothing - which is why the test is a simple "line < DMA_ArmLine".
+* A REGISTER-ONLY DELAY LOOP, for the experiment described beside
+* DMA_STATUS_TRF_IP: does EXECUTING during the pending window hurt, or
+* only TOUCHING THE DMA REGISTERS during it?
+*
+* The loop is "leay -1,y / bne" - 7 cycles, of which 4 are instruction
+* fetches from the module's own code and 3 are dead cycles.  It reaches
+* instruction-fetch boundaries at the same rate as the poll that wedged
+* the machine and differs from it in exactly one way: it never reads
+* $FEC0-$FECF.  So it separates the two, which nothing else has.
+*
+* 4096 passes is ~28,700 cycles, about half a 60 Hz tick at 3.58 MHz.
+DmaDelay            equ       4096
 DMA_ArmLine         equ       48        arm at this raster line or later
 * The spin's ceiling, and it is a safety net rather than a timing figure.
 * One window is 48 lines, 1.5 ms, which is about 180 passes of the loop at

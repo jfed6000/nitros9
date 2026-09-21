@@ -2081,7 +2081,7 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     lbhi      BmBad
                     stb       >gr.b2
                     ldd       R$X,x               A = flags, B = the fill value
-                    bita      #$FE                only bit 0 is defined
+                    bita      #$FC                only bits 0 and 1 are defined
                     lbne      BmBad
                     sta       >gr.d1              the width flag
                     stb       >gr.b3
@@ -2156,7 +2156,30 @@ bcrow2@             stb       >gr.b4              the row count
                     leax      ,s
                     lbsr      DmaFill             armed; it runs in the next vblank
                     leas      11,s
-                    lbra      StatOK
+* THE EXPERIMENT, bit 1 of the flags, and it is OFF unless asked for.
+* A driver-side POLL of $FEC1 wedges the machine at once; sleeping and
+* polling afterwards is reliable.  What that cannot tell apart is
+* whether the harm is EXECUTING during the pending window or TOUCHING
+* THE DMA'S OWN REGISTERS during it, because the poll did both.
+*
+* This loop does the first and not the second.  "leay -1,y / bne" is 7
+* cycles - 4 instruction fetches from this module's code, 3 dead cycles
+* - so it hits fetch boundaries at the same rate the poll did, while
+* never going near $FEC0-$FECF.  It does NOT read the status afterwards:
+* the caller still sleeps and polls as before, so the only new thing
+* under test is the executing.
+*
+* Survives  -> the hazard is the register access, and a caller may work
+*              during the window as long as it stays away from the DMA.
+* Wedges    -> the hazard is executing at all, and only the woken-from-
+*              idle path is safe.
+                    lda       >gr.d1
+                    bita      #2
+                    beq       bcnod@
+                    ldy       #DmaDelay
+bcdly@              leay      -1,y
+                    bne       bcdly@
+bcnod@              lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy
                     jmp       >GrfMod+SysRet

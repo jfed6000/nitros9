@@ -98,6 +98,7 @@ barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 wide                rmb       1         non-zero = ask for 16-bit transfers
+dlay                rmb       1         non-zero = ask the driver to delay after arming
 clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
@@ -142,6 +143,7 @@ start               clr       gotslab,u
                     clr       defined,u
                     clr       hires,u
                     clr       wide,u              8-bit until W says otherwise
+                    clr       dlay,u              no driver-side delay until D says so
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -279,6 +281,8 @@ Loop                leax      keybuf,u
                     anda      #$5F                letters fold to upper case
                     cmpa      #'W
                     lbeq      DoWide
+                    cmpa      #'D
+                    lbeq      DoDlay
                     cmpa      #'Q
                     lbeq      Quit
                     cmpa      #'H
@@ -951,6 +955,33 @@ dw@                 lbsr      PutLine
                     lbra      Loop
 
 ********************************************************************
+* D - ask the driver to run a REGISTER-ONLY delay loop after arming.
+*
+* The experiment this whole session has not been able to run.  A poll of
+* $FEC1 inside grfdrv wedges the machine at once; sleeping first and
+* polling afterwards is reliable.  Those differ in TWO ways - one
+* executes during the pending window and one touches the DMA registers
+* during it - and nothing so far has separated them.
+*
+* With D on, grfdrv spins "leay -1,y / bne" for about half a tick right
+* after arming: same instruction-fetch rate as the poll, but it never
+* reads $FEC0-$FECF.  Everything after that is unchanged, so the only
+* new variable is the executing.
+*
+* Survives hammering with 3 -> the hazard is the register access.
+* Wedges -> the hazard is executing at all during the window.
+********************************************************************
+DoDlay              lda       dlay,u
+                    eora      #1
+                    sta       dlay,u
+                    leax      DlOffTx,pcr
+                    tst       dlay,u
+                    beq       dd@
+                    leax      DlOnTx,pcr
+dd@                 lbsr      PutLine
+                    lbra      Loop
+
+********************************************************************
 * ClrOne - one SS.BmClear and wait for it.  A = first row, B = rows.
 *   Returns the carry and B: clear means it finished, set means B is
 *   the error - either the SetStat's own or E$NotRdy for a fill that
@@ -989,7 +1020,14 @@ cow@                lbsr      AppStr
                     tst       wide,u
                     beq       cox@
                     ldx       #$0100+CLRVAL
-cox@                lda       cofrow,u
+cox@                tst       dlay,u
+                    beq       cox2@
+                    pshs      x
+                    lda       ,s
+                    ora       #2                  bit 1: delay inside the driver
+                    sta       ,s
+                    puls      x
+cox2@               lda       cofrow,u
                     ldb       corows,u
                     pshs      u
                     tfr       d,u                 R$U = first row : row count
@@ -1544,6 +1582,10 @@ OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
                     fcb       $00
+DlOffTx             fcc       /  D - driver delay OFF: arm and return, as normal/
+                    fcb       C$CR
+DlOnTx              fcc       /  D - driver delay ON: register-only loop in grfdrv after arming/
+                    fcb       C$CR
 W8Txt               fcc       /  W - transfers are 8-BIT now (768 us a bitmap)/
                     fcb       C$CR
 W16Txt              fcc       /  W - transfers are 16-BIT now (384 us a bitmap, the untried path)/
@@ -1554,7 +1596,7 @@ Hlf2E               fcc       /  2 second half err /
                     fcb       $00
 * The key line was one string of 97 characters and I$WritLn is given 80,
 * so "G guard Q quit" never reached the screen.  Two lines now.
-KeyTx2              fcc       /C clear  2 halves  3 full  W width  L lines  F flood  K kill  G guard/
+KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  L lines  F flood  K kill  G guard/
                     fcb       C$CR
 KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  Q quit/
                     fcb       C$CR
