@@ -101,6 +101,7 @@ scanbad             rmb       1         C: scan - non-zero once a mismatch is fo
 clrrows             rmb       2         C: rows to fill, creeping up one per press
 dsthi               rmb       2         C: destination the DMA engine holds, high byte
 dstlo               rmb       2         C: ... and its mid and low bytes
+armbsy              rmb       1         C: the busy bit read straight after arming
 lnleft              rmb       1         L/F: records still to build
 lndrawn             rmb       2         L/F: records the driver says it drew
 lnbuf               rmb       NFLOOD*8  the line records, 8 bytes each
@@ -720,7 +721,26 @@ DoClear             leax      RowTxt,pcr
                     leax      ClrSetE,pcr         say WHICH call failed
                     lbsr      ShowErrAt
                     lbra      Loop
-ClrArm              clr       clrtck,u
+* Read the busy bit back IMMEDIATELY, before any sleep.  The engine sets
+* VDMA_Status_Progress the moment it sees the start edge, at IDLE ->
+* VALIDATE0, long before it waits for a window - so a 1 here means the
+* start was accepted and a 0 means the engine never moved at all.  That
+* is the difference between "the transfer went somewhere wrong" and
+* "there is no working DMA on this core", and nothing else we print
+* separates them.
+ClrArm              pshs      u
+                    lda       #BMPATH
+                    ldb       #SS.BmClear
+                    os9       I$GetStt
+                    tfr       x,d
+                    puls      u
+                    stb       armbsy,u
+                    leax      ArmTxt,pcr
+                    lbsr      StartLine
+                    lda       armbsy,u
+                    lbsr      AppHex
+                    lbsr      EndLine
+                    clr       clrtck,u
 ClrTick             ldx       #2                  one 60 Hz tick
                     pshs      u
                     os9       F$Sleep
@@ -1176,6 +1196,8 @@ FldTxt              fcc       /  SS.BmLine flood: drew /
 LnTx2               fcc       / of them/
                     fcb       $00
 LnTx3               fcc       /, then stopped with error /
+                    fcb       $00
+ArmTxt              fcc       /  C armed, busy now $/
                     fcb       $00
 RowTxt              fcc       /  C rows $/
                     fcb       $00
