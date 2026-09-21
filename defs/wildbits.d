@@ -1217,10 +1217,23 @@ DMA_STATUS_TRF_IP   equ       $80       transfer in progress
 * about 22% of the window where the loops that failed covered 37% -
 * most of the difference it was supposed to be measuring.
 *
-* WHAT IS ESTABLISHED is only what has been hammered without a failure:
-* arm, F$Sleep, read the status once afterwards.  Everything else tried
-* during the window has eventually wedged the machine.  F$Sleep is a
-* safety requirement until something shows otherwise.
+* THE FINAL RESULT, five variants, all sized to span the whole wait:
+*
+*   idle in CWAI (F$Sleep)   no valid bus cycles   never failed
+*   leay -1,y / bne          fetches only          wedged after many
+*   lda ,x  + that loop      fetches + RAM read    wedged in ~3
+*   lda $FE20 + that loop    fetches + I/O read    wedged in ~4
+*   lda $FEC1 / bmi          continuous DMA read   wedged on the first
+*
+* IT IS BUS ACTIVITY AS SUCH, and the failure rate tracks bus-cycle
+* density.  Not the DMA's registers, not I/O space, not data versus
+* code.  The only state that has never failed is the CPU issuing NO
+* VALID MEMORY ACCESSES - which is exactly what CWAI does, rAVMA = 0
+* with the address parked at $FFFF.
+*
+* So F$Sleep is a safety requirement, and it works because the kernel
+* idles in CWAI, not because it passes time.  A caller can do NOTHING
+* between arming and completion.
 *
 * Two more figures from the same source, neither of them ours to guess:
 *   - a timeout must be AT LEAST TWO FRAMES, ~40 ms.  A transfer armed
