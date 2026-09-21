@@ -2081,7 +2081,7 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     lbhi      BmBad
                     stb       >gr.b2
                     ldd       R$X,x               A = flags, B = the fill value
-                    bita      #$FC                only bits 0 and 1 are defined
+                    bita      #$F8                only bits 0, 1 and 2 are defined
                     lbne      BmBad
                     sta       >gr.d1              the width flag
                     stb       >gr.b3
@@ -2174,11 +2174,29 @@ bcrow2@             stb       >gr.b4              the row count
 * Wedges    -> the hazard is executing at all, and only the woken-from-
 *              idle path is safe.
                     lda       >gr.d1
+                    bita      #4
+                    bne       bcdio@              bit 2: the same loop, reading I/O
                     bita      #2
                     beq       bcnod@
                     ldy       #DmaDelay
 bcdly@              leay      -1,y
                     bne       bcdly@
+                    bra       bcnod@
+* BIT 2 - THE SAME LOOP WITH AN I/O READ THAT IS NOT THE DMA BLOCK.
+* Bit 1's loop touches no memory at all and is safe; a poll of $FEC1 is
+* not.  That leaves two possibilities and this separates them: is the
+* hazard reading THE DMA'S OWN REGISTERS, or reading ANY I/O during a
+* live transfer?  $FE20 is the interrupt-pending register - a real I/O
+* read, on the same bus, through the same decode, but nowhere near
+* $FEC0-$FECF.  Reading it has no side effect; clearing is write-1.
+*
+* Safe   -> the fault is specific to the DMA register block.
+* Wedges -> it is any I/O access during a transfer, which is a much
+*           broader finding and points at the bus rather than the DMA.
+bcdio@              ldy       #DmaDelay
+bcdio2@             lda       INT_PENDING_0
+                    leay      -1,y
+                    bne       bcdio2@
 bcnod@              lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy

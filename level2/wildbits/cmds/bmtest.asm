@@ -99,6 +99,7 @@ colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
 wide                rmb       1         non-zero = ask for 16-bit transfers
 dlay                rmb       1         non-zero = ask the driver to delay after arming
+dio                 rmb       1         non-zero = that delay loop reads $FE20 each pass
 clrtck              rmb       1         C: frames waited for the fill to finish
 scanrow             rmb       2         C: scan - the row being checked
 scancol             rmb       2         C: scan - the column being checked
@@ -144,6 +145,7 @@ start               clr       gotslab,u
                     clr       hires,u
                     clr       wide,u              8-bit until W says otherwise
                     clr       dlay,u              no driver-side delay until D says so
+                    clr       dio,u               and it reads nothing until E says so
 
                     leax      BanTxt,pcr
                     lbsr      PutLine
@@ -283,6 +285,8 @@ Loop                leax      keybuf,u
                     lbeq      DoWide
                     cmpa      #'D
                     lbeq      DoDlay
+                    cmpa      #'E
+                    lbeq      DoDio
                     cmpa      #'Q
                     lbeq      Quit
                     cmpa      #'H
@@ -982,6 +986,29 @@ dd@                 lbsr      PutLine
                     lbra      Loop
 
 ********************************************************************
+* E - the driver's delay loop, but reading $FE20 every pass.
+*
+* D's loop touches no memory and is safe; a poll of $FEC1 wedges the
+* machine.  Two readings fit that: the hazard is the DMA'S OWN
+* REGISTERS, or it is ANY I/O read during a live transfer.  This
+* separates them - $FE20 is the interrupt-pending register, a real I/O
+* read on the same bus through the same decode, nowhere near the DMA.
+*
+* Safe   -> the fault is specific to $FEC0-$FECF.
+* Wedges -> any I/O access during a transfer is unsafe, which is far
+*           broader and points at the bus rather than the DMA.
+********************************************************************
+DoDio               lda       dio,u
+                    eora      #1
+                    sta       dio,u
+                    leax      EiOffTx,pcr
+                    tst       dio,u
+                    beq       de@
+                    leax      EiOnTx,pcr
+de@                 lbsr      PutLine
+                    lbra      Loop
+
+********************************************************************
 * ClrOne - one SS.BmClear and wait for it.  A = first row, B = rows.
 *   Returns the carry and B: clear means it finished, set means B is
 *   the error - either the SetStat's own or E$NotRdy for a fill that
@@ -1020,14 +1047,20 @@ cow@                lbsr      AppStr
                     tst       wide,u
                     beq       cox@
                     ldx       #$0100+CLRVAL
-cox@                tst       dlay,u
+cox@                lda       #0
+                    tst       dlay,u
+                    beq       cox1@
+                    lda       #2                  bit 1: delay inside the driver
+cox1@               tst       dio,u
                     beq       cox2@
+                    lda       #4                  bit 2: that delay, reading $FE20
+cox2@               tsta
+                    beq       cox3@
                     pshs      x
-                    lda       ,s
-                    ora       #2                  bit 1: delay inside the driver
+                    ora       ,s
                     sta       ,s
                     puls      x
-cox2@               lda       cofrow,u
+cox3@               lda       cofrow,u
                     ldb       corows,u
                     pshs      u
                     tfr       d,u                 R$U = first row : row count
@@ -1582,6 +1615,10 @@ OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
                     fcb       $00
+EiOffTx             fcc       /  E - the delay loop reads NOTHING (register-only)/
+                    fcb       C$CR
+EiOnTx              fcc       /  E - the delay loop READS $FE20 each pass - real IO, but not the DMA/
+                    fcb       C$CR
 DlOffTx             fcc       /  D - driver delay OFF: arm and return, as normal/
                     fcb       C$CR
 DlOnTx              fcc       /  D - driver delay ON: register-only loop in grfdrv after arming/
@@ -1596,7 +1633,7 @@ Hlf2E               fcc       /  2 second half err /
                     fcb       $00
 * The key line was one string of 97 characters and I$WritLn is given 80,
 * so "G guard Q quit" never reached the screen.  Two lines now.
-KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  L lines  F flood  K kill  G guard/
+KeyTx2              fcc       /C clear  2 halves  3 full  W width  D delay  E ioread  L lines  F flood  K kill/
                     fcb       C$CR
 KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  Q quit/
                     fcb       C$CR
