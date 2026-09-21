@@ -1322,6 +1322,10 @@ GetSttTbl           fcb       SS.ScSiz
                     fdb       GrfMod+StatOK
                     fcb       SS.BmBlk
                     fdb       GrfMod+GSBmBlk
+                    fcb       SS.BmClear
+                    fdb       GrfMod+GSBmClear
+                    fcb       SS.BmLine
+                    fdb       GrfMod+GSBmLine
                     fcb       0
 * The bitmap calls go first: StatDisp searches this table linearly, and a
 * game's set-up walks all of them.
@@ -1335,6 +1339,10 @@ SetSttTbl           fcb       SS.AScrn
                     fdb       GrfMod+SSBmCfg
                     fcb       SS.BmKill
                     fdb       GrfMod+SSBmKill
+                    fcb       SS.BmClear
+                    fdb       GrfMod+SSBmClear
+                    fcb       SS.BmLine
+                    fdb       GrfMod+SSBmLine
                     fcb       SS.GfxAlloc
                     fdb       GrfMod+SSGfxAlloc
                     fcb       SS.GfxFree
@@ -1981,6 +1989,335 @@ bdlive@             tst       V.TermLive,u
                     sta       >gr.b3
                     lbsr      BmEnCore
                     lbra      StatOK
+
+*******************************************************************
+* SetStat SS.BmClear ($E5) - fill a bitmap with one colour, using the
+*   rc16's DMA engine.
+*   R$Y      = bitmap # (0-2)
+*   R$X high = reserved, must be 0
+*   R$X low  = the fill value (a CLUT index; 0 = transparent)
+*
+* ASYNCHRONOUS.  Carry clear means ACCEPTED, not done.  The call arms the
+* engine and returns; the program does not block.  The fill happens in
+* the next vertical blank - up to 15.3 ms away and 384 us long - during
+* which the hardware freezes the CPU mid-stream and then releases it.
+* GetStat SS.BmClear says whether it has finished, and a program that
+* writes pixels into the bitmap before then will have them erased.
+*
+* IT ALWAYS FILLS BmPixels (76,800) BYTES - see the note beside that equ
+* in wildbits_vtio.d for why that is neither the allocation nor what the
+* current video mode fetches.
+*
+* WHY THIS IS A DRIVER CALL AT ALL: $FEC0 is inside $FD00-$FFFF, which is
+* not in a Level 2 process's address space.  A program cannot reach the
+* DMA at any price, and clearing a bitmap by hand costs ~82 ms.
+*
+* THE BUSY CHECK IS ALSO THE CORE CHECK, and no start-up probe is needed.
+* On a core whose DMA halt is not wired to Drive_RDY the transfer machine
+* waits for ever in CPU_STOPPED_ST0 - which sits in front of every state
+* that raises Write_Strobe - so it writes NOTHING and the busy bit never
+* clears.  A caller whose fill never completes therefore learns the
+* engine is dead with nothing corrupted, and every later call fails
+* loudly with E$DevBsy instead of the first one lying.
+*
+* A BACKGROUND TERMINAL MAY CLEAR ITS BITMAP: the destination comes from
+* the mirror, not from the live registers.  SS.BmLine cannot, and that
+* difference is exactly why.
+*******************************************************************
+SSBmClear           ldd       R$Y,x               bitmap # 0-2
+                    cmpd      #2
+                    lbhi      BmBad
+                    stb       >gr.b2
+                    ldd       R$X,x               A = reserved, B = the fill value
+                    tsta
+                    lbne      BmBad
+                    stb       >gr.b3
+                    lda       DMA.Base+DMA_STATUS_REG
+                    bmi       BmClrBsy            a fill is still outstanding
+                    lda       >gr.b2
+                    lbsr      BmGetAddr           A = block, X = offset
+                    tsta
+                    beq       BmClrUnd            no blocks: nothing to fill
+* Build DmaFill's parameter block.  X stopped being the caller's register
+* image at BmGetAddr, which is why nothing below uses it.
+                    leas      -7,s
+                    ldb       >gr.b3
+                    stb       6,s                 the fill value
+                    ldb       #BmPixels/65536     76,800 = $01 2C 00
+                    stb       3,s
+                    ldb       #(BmPixels/256)&255
+                    stb       4,s
+                    clr       5,s
+* block*$2000 + offset - the same arithmetic as BmRegAddr, and the same
+* argument that it cannot carry out of the high byte.
+                    clrb
+                    lbsr      Blk2Addr            D = address bits 23:8
+                    sta       ,s                  destination bits 23:16
+                    tfr       b,a
+                    clrb                          D = bits 15:0, low 13 clear
+                    leax      d,x                 X = that plus the offset
+                    stx       1,s                 destination bits 15:8 and 7:0
+                    leax      ,s
+                    lbsr      DmaFill             armed; it runs in the next vblank
+                    leas      7,s
+                    lbra      StatOK
+BmClrBsy            comb
+                    ldb       #E$DevBsy
+                    jmp       >GrfMod+SysRet
+BmClrUnd            comb
+                    ldb       #E$WUndef
+                    jmp       >GrfMod+SysRet
+
+*******************************************************************
+* DmaFill - arm a 1D fill on the DMA engine and return.  Factored out of
+*   SS.BmClear so that the 2D blit this engine can also do grows from the
+*   same place: a blit adds a source, two strides and the 2D control bit,
+*   and changes nothing here.
+*   Entry: X -> a 7-byte parameter block
+*            0,1,2  destination address, bits 23:16, 15:8, 7:0
+*            3,4,5  byte count,          bits 23:16, 15:8, 7:0
+*            6      the fill value
+*   Exit:  armed.  B = 0.  A, B and X clobbered.
+*
+* 16-BIT WHEN THE DESTINATION IS EVEN, 8-BIT WHEN IT IS ODD.  In 16-bit
+* mode the engine takes Addy[23:1] and enables both byte lanes, so an odd
+* start would also write the byte before it - and SS.BmDef allows any
+* offset, so that is reachable.  8-bit halves the rate, which still
+* finishes a whole bitmap inside one vertical blank.
+*
+* THE START BIT IS EDGE-TRIGGERED (Fire_Transfer[1:0] == 2'b01), so the
+* control register is written twice: once with the mode and the start bit
+* CLEAR, then once with it set.
+*
+* The count is NOT three consecutive registers.  Count1D is
+* {Y_Size[7:0], X_Size}, so its three bytes live at $FECF, $FECC and
+* $FECD - which is what the DMA_SIZE_1D_* aliases in wildbits.d say.
+*******************************************************************
+DmaFill             lda       2,x                 the destination's low byte
+                    bita      #1
+                    bne       DmaFill8
+                    lda       6,x                 16-bit: the value in both halves
+                    sta       DMA.Base+DMA_FILL_16_H
+                    sta       DMA.Base+DMA_FILL_16_L
+                    ldb       #DMA_CTRL_Enable+DMA_CTRL_Fill+DMA_CTRL_16Bit
+                    bra       DmaFillGo
+DmaFill8            lda       6,x
+                    sta       DMA.Base+DMA_DATA_2_WRITE
+                    ldb       #DMA_CTRL_Enable+DMA_CTRL_Fill
+DmaFillGo           stb       DMA.Base+DMA_CTRL_REG   the mode, start bit clear
+                    pshs      b
+                    lda       ,x
+                    sta       DMA.Base+DMA_DEST_ADDR_H
+                    lda       1,x
+                    sta       DMA.Base+DMA_DEST_ADDR_M
+                    lda       2,x
+                    sta       DMA.Base+DMA_DEST_ADDR_L
+                    lda       3,x
+                    sta       DMA.Base+DMA_SIZE_1D_H
+                    lda       4,x
+                    sta       DMA.Base+DMA_SIZE_1D_M
+                    lda       5,x
+                    sta       DMA.Base+DMA_SIZE_1D_L
+                    puls      b
+                    orb       #DMA_CTRL_Start_Trf
+                    stb       DMA.Base+DMA_CTRL_REG
+                    clrb
+                    rts
+
+*******************************************************************
+* SetStat SS.BmLine ($E7) - draw a BATCH of lines into a bitmap with the
+*   rc16's hardware line engine (source/LineDraw.v).
+*   R$Y = bitmap # (0-2)
+*   R$X = the caller's array of 8-byte records
+*   R$U = record count, 1-255; RETURNS the number actually drawn
+*
+*   Record:  +0,1 X0 (0-319)  +2,3 X1  +4 Y0 (0-239)  +5 Y1
+*            +6 colour        +7 reserved, write 0
+*
+* A BATCH, NOT A LINE.  The engine walks a 320-pixel line in 3.2 us and
+* an I$SetStt costs ~474 us, so one line per call would be 99% transport
+* - the per-sprite-call mistake again.  Three separate changes have now
+* shown CALL COUNT is the only lever that moves (docs/driver-work.md).
+*
+* COLOUR IS PER RECORD AND THAT IS FREE: the address and the colour are
+* baked into each FIFO entry as it is enqueued, so changing colour or
+* plane between lines needs no flush and no wait.
+*
+* IT STOPS EARLY RATHER THAN OVERFLOWING.  The pixel FIFO holds 4,096
+* entries, its full flag is NOT connected and its write enable is
+* unconditional, so an overrun loses pixels silently - and the engine
+* enqueues about four times faster than the video engine drains it.  So
+* the count is read before each record and a batch that would run it
+* short stops, with R$U = the number drawn for the caller to resume from.
+* GetStat SS.BmLine reports the count for a caller that would rather pace
+* itself than be told it came up short.
+*
+* LIVE TERMINAL ONLY.  The plane's start-address registers hold whichever
+* terminal is on screen, so a line drawn on behalf of a background
+* terminal would land in the FOREGROUND one's bitmap.  E$NotRdy.
+*
+* R$U IS SET ON EVERY PATH, errors included, so a caller that got
+* E$IllArg knows which record was bad without a second call.
+*******************************************************************
+SSBmLine            ldd       R$Y,x               bitmap # 0-2
+                    cmpd      #2
+                    lbhi      BmLnArg
+                    stb       >gr.b2
+                    lslb
+                    lslb                          the plane select, bits 3:2
+                    stb       >gr.b3
+                    ldd       R$U,x               the record count
+                    tsta
+                    lbne      BmLnArg
+                    tstb
+                    lbeq      BmLnArg             a count of 0 is an error
+                    pshs      b                   1,s = records left
+                    clr       ,-s                 ,s = records drawn
+* The bitmap must have blocks, and this terminal must be on screen.
+                    lda       >gr.b2
+                    lsla                          two mirror bytes per bitmap
+                    leay      V.BM0Cl_En,u
+                    leay      a,y
+                    tst       1,y                 its block
+                    lbeq      BmLnUnd
+                    tst       V.TermLive,u
+                    lbeq      BmLnNRdy
+* The engine's real enable, $FFCA bit 0, in the mirror and in the live
+* register.  It sits inside the $FFC0-$FFCF block PullCore copies, so
+* this survives a terminal switch, and it costs nothing while idle: with
+* it clear the video master engine goes DrawingLine_Begin ->
+* WAIT4LINE2FINISH, with it set DrawingLine_Begin -> DrawingLine_End ->
+* WAIT4LINE2FINISH, and both wait out the rest of the scanline.
+                    lda       V.V_MCR2,u
+                    bita      #VKY_MCR2_LineDraw
+                    bne       BmLnOn
+                    ora       #VKY_MCR2_LineDraw
+                    sta       V.V_MCR2,u
+                    sta       TXT.Base+VKY_MCR2
+* The caller's array through slots 1 and 2, then $C0 through slot 3.
+BmLnOn              ldb       1,s                 records left
+                    lda       #8
+                    mul                           D = the array's length in bytes
+                    tfr       d,y
+                    ldd       R$X,x               the array, in the caller
+                    lbsr      MapCallBuf          U = it, through slot 1
+                    bcs       BmLnMap             it runs off the top of the map
+                    lbsr      LineMapC0           X = $7080, the line registers
+* The record loop.  ,s = drawn, 1,s = left, U = this record, X = the
+* registers.  U stopped being the statics at MapCallBuf and X stopped
+* being the register image at LineMapC0; the exits use gr.PDRGS directly.
+BmLnLp              tst       1,s
+                    beq       BmLnOK              all of them drawn
+* Room in the FIFO?  Stop rather than lose pixels silently.
+                    lda       LD.FifoH,x
+                    ldb       LD.FifoL,x
+                    cmpd      #LD.Room
+                    bhs       BmLnOK              short: R$U tells the caller
+* Range-check the record.  An endpoint outside 0-319 / 0-239 means the
+* engine NEVER STARTS and never signals complete, so this check is what
+* stands between the poll below and a hang.
+                    ldd       ,u                  X0
+                    cmpd      #LD.MaxX
+                    bhi       BmLnRng
+                    ldd       2,u                 X1
+                    cmpd      #LD.MaxX
+                    bhi       BmLnRng
+                    lda       4,u                 Y0
+                    cmpa      #LD.MaxY
+                    bhi       BmLnRng
+                    lda       5,u                 Y1
+                    cmpa      #LD.MaxY
+                    bhi       BmLnRng
+* The endpoints, and then GO in a store of its own: the endpoint
+* registers are NOT resynchronised into the engine's 100 MHz clock
+* domain, so they have to be stable before GO rises.
+                    lda       6,u                 colour
+                    sta       LD.Color,x
+                    ldd       ,u
+                    sta       LD.X0H,x
+                    stb       LD.X0L,x
+                    ldd       2,u
+                    sta       LD.X1H,x
+                    stb       LD.X1L,x
+                    lda       4,u
+                    sta       LD.Y0,x
+                    lda       5,u
+                    sta       LD.Y1,x
+                    lda       >gr.b3              the plane bits
+                    ora       #LD_CTRL_Go
+                    sta       LD.Ctrl,x
+* COMPLETE means the Bresenham WALK finished, not that a pixel reached
+* memory: the pixels are in the FIFO and the video engine drains them on
+* odd visible lines.  It arrives in about 3.2 us, ~26 cycles at 8 MHz, so
+* LD.Poll is fifty times the headroom it needs and cannot hang.
+                    ldb       #LD.Poll
+BmLnPoll            lda       LD.Ctrl,x
+                    bmi       BmLnGot
+                    decb
+                    bne       BmLnPoll
+* It never came.  The machine is still in IDLE - the only way that can
+* happen once GO is up, since RUN always terminates - so LOWERING GO IS
+* THE WHOLE RECOVERY.  LD_CTRL_RstFIFO would clear the FIFO as well and
+* discard pixels belonging to lines already counted as drawn, so it is
+* not used here, and nowhere else either.
+                    lda       >gr.b3
+                    sta       LD.Ctrl,x
+                    ldb       #E$DevBsy
+                    bra       BmLnX
+BmLnGot             lda       >gr.b3
+                    sta       LD.Ctrl,x           GO down: DONE -> IDLE
+                    inc       ,s                  one more drawn
+                    dec       1,s
+                    leau      8,u                 the next record
+                    bra       BmLnLp
+* Exits.  B = the error code, 0 = none; ,s = drawn, 1,s = left.
+BmLnRng             ldb       #E$IllArg
+                    bra       BmLnX
+BmLnMap             ldb       #E$IllArg
+                    bra       BmLnX
+BmLnUnd             ldb       #E$WUndef
+                    bra       BmLnX
+BmLnNRdy            ldb       #E$NotRdy
+                    bra       BmLnX
+BmLnOK              clrb
+BmLnX               pshs      b                   ,s = err, 1,s = drawn
+                    ldb       1,s
+                    clra
+                    std       >gr.PDRGS+R$U       the records actually drawn
+                    puls      b                   PULS does not touch CC
+                    leas      2,s
+                    tstb
+                    bne       BmLnErr
+                    andcc     #^Carry
+                    jmp       >GrfMod+SysRet
+BmLnErr             orcc      #Carry
+                    jmp       >GrfMod+SysRet
+* A malformed call, before anything was pushed or drawn.  R$U is still
+* set, so the answer to "how many did you draw" is never undefined.
+BmLnArg             clra
+                    clrb
+                    std       R$U,x
+                    lbra      BmBad
+
+*******************************************************************
+* LineMapC0 - $C0 through slot 3, so the line drawing registers are at
+*   $7080: $6000 for the slot, $1000 for the bitmap register page inside
+*   the block, $80 for the line half of it.  SLOTS 1 AND 2 ARE LEFT
+*   ALONE, because SS.BmLine needs them for the caller's array -
+*   SetBlkC0C1 wants slot 1 for $C0 and so cannot be used here.  GFDfPal
+*   already reaches $C1 through slot 3 exactly this way.
+*   Exit: X = $7080.  Every other register is kept.
+*******************************************************************
+LineMapC0           pshs      cc,d
+                    orcc      #IntMasks
+                    lda       #EDIT_LUT_1+ACT_LUT_1
+                    sta       MMU_MEM_CTRL
+                    clra
+                    ldb       #$C0
+                    stb       MMU_SLOT_3          $6000
+                    std       >gr.DATImg+6
+                    ldx       #$7080
+                    puls      cc,d,pc
 
 *******************************************************************
 * SetStat SS.GfxAlloc ($D4) - N consecutive blocks of graphics memory.
@@ -3479,6 +3816,31 @@ GSBmBlk             ldd       R$Y,x               bitmap #
                     clra
                     ldb       1,y
                     std       R$X,x
+                    lbra      StatOK
+
+* GetStat SS.BmClear - R$X = 0 idle, 1 a fill is still outstanding.
+*   The companion to the SetStat, which is asynchronous: a program that
+*   means to write pixels into the bitmap itself must wait for this to
+*   read 0 or have them erased.  It is also the core check - see the
+*   SetStat's header for why a fill that never finishes is the safe
+*   failure and not a corrupting one.
+GSBmClear           clra
+                    ldb       DMA.Base+DMA_STATUS_REG
+                    andb      #$80
+                    beq       GSBmClrX
+                    ldb       #1
+GSBmClrX            std       R$X,x
+                    lbra      StatOK
+
+* GetStat SS.BmLine - R$X = the pixels still queued in the line engine's
+*   FIFO, 0 to LD.Depth.  For a caller that would rather pace itself
+*   across frames than be told its batch came up short.  The FIFO is one
+*   piece of hardware shared by every terminal, so this answers for the
+*   machine and not for this terminal.
+GSBmLine            lbsr      LineMapC0           X = the line registers
+                    lda       LD.FifoH,x
+                    ldb       LD.FifoL,x
+                    std       >gr.PDRGS+R$X
                     lbra      StatOK
 
 

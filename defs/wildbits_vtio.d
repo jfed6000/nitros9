@@ -105,6 +105,16 @@ V.V_MCR             RMB       2         2 bytes for Vicky Control Register
 
 V.V_LayerCTL        RMB       2
 V.BordBack          RMB       12
+
+* $FFCA - "VKY Master Ctrl Reg 2", whose bit 0 is the REAL enable for the
+* line drawing engine (VKY_MCR2/VKY_MCR2_LineDraw in wildbits.d; the line
+* control register's own bit 0 is dead).  It is the seventh byte of the
+* border/background block, which means it is inside the 16-byte
+* $FFC0-$FFCF span PullCore copies on every terminal switch - so the
+* line-draw enable is per-terminal state that survives a switch already,
+* for free, and SS.BmLine only has to set it in the mirror.
+* An EQU, not an RMB: it names a byte that is already there.
+V.V_MCR2            EQU       V.BordBack+6
 * BITMAPS
 * Store starting page for bitmaps, and CLUT# and bitmap enable bits.  Must be in first 512K RAM.
 * $01_0000-$07_FFFF (OS9 Memory Blocks $01-$3F)
@@ -166,6 +176,16 @@ BM.Small            equ       %00000001 bitmap 0's "8 blocks, not 10" bit
 BM.Owned            equ       %00010000 bitmap 0's "the driver allocated it" bit
 BmBlk240            equ       10        blocks in a 320x240 bitmap (76,800 bytes)
 BmBlk200            equ       8         blocks in a 320x200 bitmap (64,000 bytes)
+
+* The bytes a bitmap can DISPLAY, which is what SS.BmClear fills.
+* Deliberately neither the allocation (BmBlk240*8192 = 81,920) nor what
+* the current video mode happens to fetch.  Filling the allocation would
+* wipe the slack that a program laying a slew of assets into one
+* SS.GfxAlloc slab may have put the next asset in; filling what the mode
+* fetches would make the result depend on a mode that may legally change
+* afterwards, which is the two-sources-of-truth shape of the defect
+* SS.FScrn used to have.  A 640x240 4bpp bitmap is the same 76,800 bytes.
+BmPixels            equ       320*240
 
 
 * CLUT - need to store mirror of CLUT data so switching windows will work

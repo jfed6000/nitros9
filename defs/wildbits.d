@@ -224,11 +224,18 @@ SS.GfxFree          equ       $D5                 R$X = first block, R$U = count
 * the MCR - and newly allocated blocks hold whatever was there before, so
 * enabling on allocate means showing garbage.  SS.AScrn, the compatibility
 * shim, supplies the enable to keep its old contract.
+* SS.BmClear and SS.BmLine are BUILT (2026-09-20) and are the two calls
+* that exist because only the driver can reach the hardware behind them:
+* the DMA engine and the line engine both live at addresses outside a
+* Level 2 process's address space.  SS.BmClear is ASYNCHRONOUS - its
+* GetStat says when the fill has finished - and SS.BmLine takes a BATCH,
+* because a line is 3.2 us of hardware behind a 474 us call.  Both are
+* documented in docs/bitmap-api.md in the joust tree.
 SS.BmAlloc          equ       $E3                 R$Y = bitmap #, R$X = screen type; returns R$X = first block
 SS.BmBlk            equ       $E4                 GetStat: bitmap first block and control byte
-SS.BmClear          equ       $E5                 clear a bitmap to a color (reserved, no handler)
+SS.BmClear          equ       $E5                 R$Y = bitmap #, R$X low = fill value; GetStat: R$X = 1 while a fill is outstanding
 SS.BmDef            equ       $E6                 R$Y = mode/bitmap #, R$X = block (0 = clear), R$U = offset
-SS.BmLine           equ       $E7                 draw a line into a bitmap (reserved, no handler)
+SS.BmLine           equ       $E7                 R$Y = bitmap #, R$X = 8-byte records, R$U = count in / drawn out; GetStat: R$X = pixels queued
 SS.BmKill           equ       $EA                 R$Y = bitmap #: undefine, and free if the driver allocated
 SS.BmCfg            equ       $ED                 R$Y = bitmap #, R$X = enable/CLUT, R$U = HIRES4/GROUP
 * $E8, $E9, $EB and $EC are free (user, 2026-09-20).  They were SS.BmOn,
@@ -637,9 +644,27 @@ BORDER_COLOR_G      rmb       1
 BORDER_COLOR_R      rmb       1
 BORDER_X_SIZE       rmb       1         X values: 0 - 32 (default: 32)
 BORDER_Y_SIZE       rmb       1         Y values: 0 - 32 (default: 32)
-VKY_RESERVED_02     rmb       1
-VKY_RESERVED_03     rmb       1
+VKY_RESERVED_02     rmb       1         $FFCA - NOT reserved: see VKY_MCR2
+VKY_RESERVED_03     rmb       1         $FFCB - GFX MODE: b0 global HIRES4,
+*                                       b3:1 palette group.  Not exposed:
+*                                       it forces ALL THREE bitmaps to 4bpp
+*                                       with no per-plane way back out, so
+*                                       SS.BmCfg does it per bitmap instead
 VKY_RESERVED_04     rmb       1
+
+* $FFCA is VICKY_MASTER_REG[10], "VKY Master Ctrl Reg 2", and its bit 0
+* is the REAL enable for the line drawing engine
+* (TinyVickyControl_Registers.v:93, 220-223, 251 -> Mstr_Ctrl_DrawLine_Enable).
+* LD_CTRL's own bit 0 is dead.  With this bit clear the video master
+* engine skips DrawingLine_Begin entirely and the pixel FIFO never
+* drains; with it set it runs a drain window on odd visible lines.
+* LEAVING IT ON COSTS NOTHING - both paths wait out the rest of the
+* scanline either way.
+* It is the seventh byte of V.BordBack, inside the 16-byte $FFC0-$FFCF
+* block PullCore copies on every terminal switch, so the line-draw enable
+* is already per-terminal state that survives a switch, for free.
+VKY_MCR2            equ       VKY_RESERVED_02
+VKY_MCR2_LineDraw   equ       %00000001
 * Valid in graphics mode only
 BACKGROUND_COLOR_B  rmb       1         when in graphic mode, if a pixel is "0" then the background pixel is chosen
 BACKGROUND_COLOR_G  rmb       1
@@ -716,6 +741,84 @@ BM2_LUT2            equ       $08       LUT2
 TyVKY_BM2_START_ADDY_H equ       $F011
 TyVKY_BM2_START_ADDY_M equ       $F012
 TyVKY_BM2_START_ADDY_L equ       $F013
+
+********************************************************************
+* Line drawing engine (source/LineDraw.v)
+*
+* The registers live INSIDE the bitmap register block, selected by
+* address bit 7, so they sit at the bitmap base + $80.  CS_VICKY_BITMAP
+* covers $18_1000-$18_10FF, i.e. offset $1000 within block $C0, and only
+* address bits 2:0 are decoded - so the eight bytes alias through the
+* whole $x080-$x0FF half.  grfdrv256 maps $C0 into slot 3 and reaches
+* them at $7080 ($6000 slot + $1000 page + $80).
+*
+* WRITE and READ are different registers at the same addresses, and the
+* read side is not the write side reversed - see LD_FIFO_* below.
+LD.Base             equ       $F080
+LD_CTRL             equ       LD.Base+0           write: control
+LD_COLOR            equ       LD.Base+1           write: colour (CLUT index)
+LD_X0_H             equ       LD.Base+2
+LD_X0_L             equ       LD.Base+3
+LD_X1_H             equ       LD.Base+4
+LD_X1_L             equ       LD.Base+5
+LD_Y0               equ       LD.Base+6
+LD_Y1               equ       LD.Base+7
+* Read side.  LD_CTRL reads back as written except bit 7, which is
+* COMPLETE.  X0 and Y0 cannot be read back at all; +4..+7 return X1 and
+* Y1 with their bytes swapped, and the RTL's comments on the two Y reads
+* contradict its own reset block.  Nothing should read them.
+LD_FIFO_H           equ       LD.Base+2           read: pixels queued, bits 12:8
+LD_FIFO_L           equ       LD.Base+3           read: pixels queued, bits 7:0
+* These are offsets from LD.Base for code that has the block mapped
+* somewhere of its own choosing.
+LD.Ctrl             equ       0
+LD.Color            equ       1
+LD.X0H              equ       2
+LD.X0L              equ       3
+LD.X1H              equ       4
+LD.X1L              equ       5
+LD.Y0               equ       6
+LD.Y1               equ       7
+LD.FifoH            equ       2                   read
+LD.FifoL            equ       3                   read
+*
+* Control bits.  BIT 0 IS DEAD: it reaches LineDrawingEnable_i, which
+* LineDraw.v resynchronises into LineDrawingEnable_ReSync and then never
+* reads.  The real enable is $FFCA bit 0 (VKY_MCR2_LineDraw below).
+LD_CTRL_Go          equ       %00000010           a LEVEL, not a pulse
+LD_CTRL_BM0         equ       %00000000           plane select, bits 3:2
+LD_CTRL_BM1         equ       %00000100
+LD_CTRL_BM2         equ       %00001000
+LD_CTRL_Plane       equ       %00001100
+LD_CTRL_RstFIFO     equ       %00010000           clears the FIFO AND the
+*                                                 Bresenham machine - see below
+LD_STAT_Complete    equ       %10000000           read-only, in LD_CTRL
+*
+* GO is a level.  The machine is IDLE -> RUN -> DONE, and it sits in DONE
+* until GO returns to 0, so the sequence is: write the endpoints, raise
+* GO in a store of its own (the endpoint registers are NOT resynchronised
+* into the engine's 100 MHz domain), poll COMPLETE, lower GO.
+*
+* COMPLETE MEANS THE BRESENHAM WALK FINISHED, NOT THAT A PIXEL REACHED
+* MEMORY.  Pixels go into a 4,096-entry FIFO (24-bit address + colour per
+* entry) which the video engine drains on ODD VISIBLE LINES ONLY, and
+* only on cycles the CPU is not using the SRAM.  The FIFO's full flag is
+* NOT connected and its write enable is unconditional, so an overrun
+* loses pixels silently: pace on LD_FIFO_H/L, which is the only defence.
+LD.Depth            equ       4096                FIFO entries, i.e. pixels
+LD.Room             equ       LD.Depth-320        stop enqueueing above this
+LD.MaxX             equ       319                 an endpoint outside 0..319 /
+LD.MaxY             equ       239                 0..239 means the engine NEVER
+*                                                 starts and never completes
+LD.Poll             equ       200                 COMPLETE poll limit: the walk
+*                                                 takes ~3.2us, ~26 cycles at 8MHz
+*
+* RECOVERY FROM A POLL TIMEOUT IS TO LOWER GO, AND NOTHING ELSE.  A
+* timeout means the machine is still in IDLE - the only way COMPLETE
+* fails to arrive once GO is up, since RUN always terminates - and
+* clearing GO returns it to IDLE cleanly.  LD_CTRL_RstFIFO must NOT be
+* used for it: it clears the FIFO as well, discarding pixels that belong
+* to lines already counted as drawn.
 
 **  THESE ARE DUPLICATES, RECONCILE THIS LATER
 ********************************************************************

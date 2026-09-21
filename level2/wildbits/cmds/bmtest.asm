@@ -62,6 +62,12 @@ BMROWS              equ       240
 BMCOLS              equ       320
 BARROWS             equ       8         rows per colour bar
 BLKSIZE             equ       $2000
+NLINES              equ       16        L: the fan from the centre
+NFLOOD              equ       255       F: the batch that must run the FIFO short
+FANCX               equ       160       the centre the fan radiates from
+FANCY               equ       120
+CLRVAL              equ       15        C: white, so a missed byte shows
+CLRWAIT             equ       10        C: frames to wait before calling it dead
 
                     mod       eom,name,tylg,atrv,start,size
 
@@ -82,6 +88,10 @@ runlen              rmb       2         fill: bytes in this run
 barleft             rmb       1         fill: rows left in this bar
 colour              rmb       1         fill: the colour being laid down
 hires               rmb       1         non-zero = bitmap 0 is in 640x240 4bpp
+clrtck              rmb       1         C: frames waited for the fill to finish
+lnleft              rmb       1         L/F: records still to build
+lndrawn             rmb       2         L/F: records the driver says it drew
+lnbuf               rmb       NFLOOD*8  the line records, 8 bytes each
 keybuf              rmb       1
 linebuf             rmb       80
                     rmb       300       stack
@@ -226,6 +236,12 @@ Loop                leax      keybuf,u
                     lbeq      DoGuard
                     cmpa      #'R
                     lbeq      DoRedraw
+                    cmpa      #'C
+                    lbeq      DoClear
+                    cmpa      #'L
+                    lbeq      DoLines
+                    cmpa      #'F
+                    lbeq      DoFlood
                     lbra      Loop
 
 * H - hide it.  Enable off; CLUT, HIRES4 and GROUP all left alone, and
@@ -236,9 +252,9 @@ DoHide              lda       #0
                     leax      HidTxt,pcr
                     bcc       hok@
                     lbsr      ShowErr
-                    bra       Loop
+                    lbra      Loop
 hok@                lbsr      PutLine
-                    bra       Loop
+                    lbra      Loop
 
 DoShow              lda       #1
                     ldb       #$FF
@@ -246,16 +262,16 @@ DoShow              lda       #1
                     leax      ShwTxt,pcr
                     bcc       sok@
                     lbsr      ShowErr
-                    bra       Loop
+                    lbra      Loop
 sok@                lbsr      PutLine
-                    bra       Loop
+                    lbra      Loop
 
 * B - what does the driver think it has?
 DoBlk               clra
                     lbsr      RepBm
                     lda       #1
                     lbsr      RepBm
-                    bra       Loop
+                    lbra      Loop
 
 * K - SS.BmKill on the PROGRAM-owned bitmap.  It must undefine it and
 * leave the slab alone, so the SS.GfxFree at the end must still succeed.
@@ -632,6 +648,246 @@ ShowErr             pshs      b
                     lbsr      EndLine
                     puls      b,pc
 
+
+********************************************************************
+* C - SS.BmClear: the DMA fill.
+*
+* Clears bitmap 0 to white, waits for the GetStat to say it finished,
+* and then reads the LAST byte of the bitmap and the byte just past it.
+* That pair is the off-by-one check, and it is the one thing about this
+* call that could not be settled by reading the RTL: the engine computes
+* Dst_Stop = Dst + Count - 1 and loops while ptr < Stop, and whether that
+* writes Count or Count-1 bytes depends on a write strobe and a pointer
+* increment that share a clock.  "last 0F, next XX" is right; "last XX"
+* means the fill is one byte short.
+*
+* BMOFF + 76,800 - 1 = $13BFF, which is offset $1BFF of the TENTH block
+* of the slab - so the byte after it, at $1C00, is still inside the slab
+* and safe to read.
+********************************************************************
+DoClear             ldy       #0                  bitmap 0
+                    ldx       #CLRVAL             high byte 0 = reserved
+                    pshs      u
+                    lda       #BMPATH
+                    ldb       #SS.BmClear
+                    os9       I$SetStt
+                    puls      u
+                    bcc       ClrArm
+                    lbsr      ShowErr
+                    lbra      Loop
+ClrArm              clr       clrtck,u
+ClrTick             ldx       #2                  one 60 Hz tick
+                    pshs      u
+                    os9       F$Sleep
+                    puls      u
+                    pshs      u
+                    lda       #BMPATH
+                    ldb       #SS.BmClear
+                    os9       I$GetStt
+                    tfr       x,d                 0 idle, 1 still outstanding
+                    puls      u                   PULS does not touch CC
+                    bcc       ClrPoll
+                    lbsr      ShowErr
+                    lbra      Loop
+ClrPoll             tstb
+                    beq       ClrDone
+                    inc       clrtck,u
+                    lda       clrtck,u
+                    cmpa      #CLRWAIT
+                    blo       ClrTick
+* It never finished.  This is what a core whose DMA halt is not wired to
+* Drive_RDY looks like, and NOTHING WAS WRITTEN: the engine parks in
+* CPU_STOPPED_ST0, which sits in front of its first write state.  So the
+* bitmap is untouched and a CPU clear would have been safe.
+                    leax      ClrHung,pcr
+                    lbsr      PutLine
+                    lbra      Loop
+ClrDone             leax      ClrTxt,pcr
+                    lbsr      StartLine
+                    lda       clrtck,u
+                    lbsr      AppDec
+                    leax      ClrTx2,pcr
+                    lbsr      AppStr
+                    lda       slabblk,u
+                    adda      #9                  the tenth block of the slab
+                    sta       curblk,u
+                    pshs      y                   MapCur goes through F$MapBlk
+                    lbsr      MapCur
+                    puls      y
+                    bcs       ClrNoMap
+                    ldx       winaddr,u
+                    lda       $1BFF,x             the bitmap's LAST byte
+                    lbsr      AppHex
+                    leax      ClrTx3,pcr
+                    lbsr      AppStr
+                    ldx       winaddr,u
+                    lda       $1C00,x             the byte just past it
+                    lbsr      AppHex
+ClrNoMap            lbsr      EndLine
+                    lbsr      PutLine
+                    lbra      Loop
+
+********************************************************************
+* L - SS.BmLine: a fan of NLINES lines from the centre to points all the
+* way round the border, each a different colour.  The border points are
+* chosen to put at least one line in every one of Bresenham's eight
+* octants, so a sign or a swap that is wrong shows as a missing or
+* mirrored spoke rather than as nothing at all.
+*
+* It also proves the two things the layout rests on: colour is per
+* record and needs no flush between lines, and the driver returns the
+* number it actually drew.
+********************************************************************
+DoLines             ldb       #NLINES
+                    lbsr      BldFan
+                    ldb       #NLINES
+                    lbsr      SendLn
+                    leax      LnTxt,pcr
+                    lbra      LnRep
+
+********************************************************************
+* F - the same call with NFLOOD full-width lines, which is far more than
+* the 4,096-entry FIFO can hold: 255 lines of 320 pixels is 81,600, and
+* the engine enqueues about four times faster than the video engine
+* drains it.  THE DRIVER MUST COME UP SHORT rather than lose pixels, so
+* a drawn count BELOW 255 with no error is the PASS here - and 255 would
+* mean the pacing check never fired.
+********************************************************************
+DoFlood             lbsr      BldFlood
+                    ldb       #NFLOOD
+                    lbsr      SendLn
+                    leax      FldTxt,pcr
+LnRep               pshs      cc,b
+                    lbsr      StartLine
+                    ldb       lndrawn+1,u
+                    tfr       b,a
+                    lbsr      AppDec
+                    leax      LnTx2,pcr
+                    lbsr      AppStr
+                    puls      cc,b
+                    bcc       lrok@
+                    leax      LnTx3,pcr
+                    lbsr      AppStr
+                    tfr       b,a
+                    lbsr      AppDec
+lrok@               lbsr      EndLine
+                    lbsr      PutLine
+                    lbra      Loop
+
+********************************************************************
+* SendLn - B records from lnbuf to bitmap 0.  Sets lndrawn from the
+*   driver's answer, and returns the call's carry and B.
+*   U is this program's data pointer AND the call's record count, so it
+*   goes on the stack across the call.
+********************************************************************
+SendLn              clra
+                    pshs      d                   ,s = the count, as a word
+                    ldy       #0                  bitmap 0
+                    leax      lnbuf,u
+                    pshs      u                   the data pointer
+                    ldu       2,s                 U = the record count
+                    lda       #BMPATH
+                    ldb       #SS.BmLine
+                    os9       I$SetStt
+                    tfr       u,y                 Y = the records actually drawn
+                    puls      u                   neither TFR nor PULS touches CC
+                    sty       lndrawn,u           nor does STY touch the carry
+                    leas      2,s
+                    rts
+
+********************************************************************
+* BldFan - B records: the centre to each of the FanPts border points,
+*   cycling colours 1-15.  Colour 0 is transparent and would draw
+*   nothing at all, which would look exactly like a broken engine.
+********************************************************************
+BldFan              stb       lnleft,u
+                    leax      lnbuf,u
+                    leay      FanPts,pcr
+                    lda       #1
+                    sta       colour,u
+bf@                 ldd       #FANCX
+                    std       ,x                  X0
+                    lda       ,y+
+                    sta       2,x                 X1 high
+                    lda       ,y+
+                    sta       3,x                 X1 low
+                    lda       #FANCY
+                    sta       4,x                 Y0
+                    lda       ,y+
+                    sta       5,x                 Y1
+                    bsr       NextClr
+                    sta       6,x
+                    clr       7,x                 reserved, write 0
+                    leax      8,x
+                    dec       lnleft,u
+                    bne       bf@
+                    rts
+
+********************************************************************
+* BldFlood - NFLOOD full-width horizontal lines, wrapping down the
+*   screen, so the batch is as expensive as the engine can be asked for.
+********************************************************************
+BldFlood            lda       #NFLOOD
+                    sta       lnleft,u
+                    leax      lnbuf,u
+                    lda       #1
+                    sta       colour,u
+                    clrb                          B = the row
+bl@                 clr       ,x                  X0 = 0
+                    clr       1,x
+                    lda       #BMCOLS/256
+                    sta       2,x                 X1 = 319
+                    lda       #(BMCOLS-1)&255
+                    sta       3,x
+                    stb       4,x                 Y0 = Y1 = this row
+                    stb       5,x
+                    pshs      b
+                    bsr       NextClr
+                    sta       6,x
+                    clr       7,x
+                    puls      b
+                    incb
+                    cmpb      #BMROWS
+                    blo       blr@
+                    clrb                          wrap: 255 lines, 240 rows
+blr@                leax      8,x
+                    dec       lnleft,u
+                    bne       bl@
+                    rts
+
+********************************************************************
+* NextClr - A = the next colour, 1-15, advancing the cycle.
+********************************************************************
+NextClr             lda       colour,u
+                    pshs      a
+                    inca
+                    cmpa      #15
+                    bls       nc@
+                    lda       #1
+nc@                 sta       colour,u
+                    puls      a,pc
+
+********************************************************************
+* The fan's border points: X high, X low, Y.  Right round the frame, so
+* every octant gets a line.
+********************************************************************
+FanPts              fcb       0,0,0               top left
+                    fcb       0,80,0
+                    fcb       0,160,0             top centre
+                    fcb       0,240,0
+                    fcb       1,63,0              top right (319,0)
+                    fcb       1,63,60
+                    fcb       1,63,120            right centre
+                    fcb       1,63,180
+                    fcb       1,63,239            bottom right
+                    fcb       0,240,239
+                    fcb       0,160,239           bottom centre
+                    fcb       0,80,239
+                    fcb       0,0,239             bottom left
+                    fcb       0,0,180
+                    fcb       0,0,120             left centre
+                    fcb       0,0,60
+
 ********************************************************************
 * Line building.  Y is the write pointer into linebuf throughout.
 ********************************************************************
@@ -734,7 +990,7 @@ DrvTxt              fcc       /SS.BmAlloc gave bitmap 1 block $/
                     fcb       $00
 RdyTxt              fcc       /Bitmap 0 is at offset $1000 in that slab.  THE TOP BAR MUST BE WHITE./
                     fcb       C$CR
-KeyTxt              fcc       /H hide  S show  B blocks  4 hires  8 normal  R redraw  K kill  G guard  Q quit/
+KeyTxt              fcc       /H hide S show B blocks 4 hires 8 normal R redraw C clear L lines F flood K kill G guard Q quit/
                     fcb       C$CR
 HiTxt               fcc       /  640x240 4bpp on - bars should halve into colour and clear stripes/
                     fcb       C$CR
@@ -766,6 +1022,22 @@ FreeTxt             fcc       /bmtest: the slab would not free, error /
                     fcb       $00
 DoneTxt             fcc       /bmtest done - the slab was freed, so SS.BmKill left it alone/
                     fcb       C$CR
+ClrTxt              fcc       /  SS.BmClear done after /
+                    fcb       $00
+ClrTx2              fcc       / frame(s); last byte $/
+                    fcb       $00
+ClrTx3              fcc       /, next $/
+                    fcb       $00
+ClrHung             fcc       /  SS.BmClear NEVER FINISHED - this core's DMA halt is not wired; nothing was written/
+                    fcb       C$CR
+LnTxt               fcc       /  SS.BmLine fan: drew /
+                    fcb       $00
+FldTxt              fcc       /  SS.BmLine flood: drew /
+                    fcb       $00
+LnTx2               fcc       / of them/
+                    fcb       $00
+LnTx3               fcc       /, then stopped with error /
+                    fcb       $00
 ErrTxt              fcc       /bmtest: error /
                     fcb       $00
 
