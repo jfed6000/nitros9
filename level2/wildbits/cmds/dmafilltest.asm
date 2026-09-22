@@ -698,10 +698,16 @@ rc1@                lbsr      BegLine
 * activity in user state and cases 1, 9 and 10 exist to measure exactly
 * that.  An instrument that contaminates its own measurement is worse
 * than no instrument.
+* THE PROGRESS LINE GOES DOWN BEFORE THE ATTEMPT, NOT AFTER IT.  Written
+* afterwards it names the last attempt that SURVIVED, so a wedge leaves
+* the log naming the attempt before the one that died - and the phase it
+* died on is the next one, which is a deduction the reader should not have
+* to make.  Written first, the last line in the log IS the attempt that
+* killed the machine, with the arming line it used.
 rc2@                ldx       ,s
+                    lbsr      PgTick
                     lbsr      Attempt
                     lbsr      Tally
-                    lbsr      PgTick
                     lbsr      PhTick
                     ldd       capleft,u
                     subd      #1
@@ -729,9 +735,24 @@ rc3@                clr       armline,u           free-running again
 * failure is a rate.  Log only, because nineteen extra lines a case would
 * scroll the table off the screen.
 ********************************************************************
+* A CASE THAT STEPS THE PHASE LOGS EVERY ATTEMPT, because it is the one
+* that dies, and it dies fast enough that one line in sixteen cannot say
+* which phase killed it.  The cases that park run 300 attempts and are not
+* expected to fail, so they stay on the sampled interval.
+*
+* THE WRITE CANNOT PERTURB WHAT IS BEING MEASURED, which was the reason
+* for sampling in the first place and was wrong: the driver SPINS TO THE
+* REQUESTED LINE before arming, so whatever jitter a log write adds is
+* absorbed by the spin and the arming phase is still exactly the one that
+* was asked for.
 PgTick              inc       progcnt,u
                     lda       progcnt,u
-                    cmpa      #PROGN
+                    ldb       #PROGN
+                    tst       phstep,u
+                    beq       pgn@
+                    ldb       #1
+pgn@                pshs      b
+                    cmpa      ,s+
                     blo       pgx@
                     clr       progcnt,u
                     leax      PgTx,pcr
@@ -740,7 +761,10 @@ PgTick              inc       progcnt,u
                     lbsr      AppDec
                     leax      PgArm,pcr
                     lbsr      AppStr
+* arms counts what has FINISHED, and this line is about the attempt that
+* is not made yet, so it is one more than that.
                     ldd       arms,u
+                    addd      #1
                     lbsr      AppDc16
                     tst       phstep,u
                     beq       pgend@
@@ -1871,7 +1895,7 @@ PhLn                fcc       /  line /
                     fcb       $00
 PgTx                fcc       /  .. case /
                     fcb       $00
-PgArm               fcc       / reached arm /
+PgArm               fcc       / about to try attempt /
                     fcb       $00
 PgLine              fcc       /, arming line /
                     fcb       $00
