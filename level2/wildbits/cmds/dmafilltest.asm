@@ -99,12 +99,14 @@ SENTVAL             equ       $AA       the four guard bytes past the end
 NGUARD              equ       4
 NCASES              equ       10
 CAPFAST             equ       300       attempts for the parked and caller cases
-CAPSLOW             equ       100       attempts for the three delay-loop cases
+CAPSLOW             equ       300       the loop cases get as many as the rest
 CLRWAIT             equ       10        frames before a fill is called HUNG
 POLLMAX             equ       2000      case 9: GetStat polls before giving up
 RAMSPIN             equ       6000      case 10: passes of the user-state RAM loop
 NOTBLT              equ       $FF       a case flag meaning "not built yet"
 PHMAX               equ       63        P: the last arming line swept
+PROGN               equ       16        attempts between progress lines in the log
+PHADV               equ       8         arming lines advanced per attempt (see PhTick)
 * The case table's shape.  Fixed-width names because they are also the
 * screen's second column.
 CE.FLAG             equ       0         the driver wait flags for SS.BmClear
@@ -182,7 +184,10 @@ dcval               rmb       2         AppDc16: what is left to print
 dcdig               rmb       1         AppDc16: the digit being built
 dcsup               rmb       1         AppDc16: non-zero once a digit has gone out
 logpath             rmb       1         $FF = no log
-logpos              rmb       2         bytes written, so a reopen can seek
+logposh             rmb       2         bytes written, high half - a long session passes 64K
+logposl             rmb       2         ... and low, so a reopen can seek to the end
+progcnt             rmb       1         attempts since the last progress line
+phstep              rmb       1         non-zero = step the arming line every attempt
 keybuf              rmb       1
 linebuf             rmb       100
                     rmb       300       stack
@@ -205,7 +210,8 @@ start               clr       gotslab,u
                     lda       #$FF
                     sta       logpath,u
                     ldd       #0
-                    std       logpos,u
+                    std       logposh,u
+                    std       logposl,u
 
                     leax      Ban1,pcr
                     lbsr      PutLine
@@ -640,6 +646,36 @@ RunCase             lda       case,u
                     ldx       ,s
                     ldd       CE.CAP,x
                     std       capleft,u
+                    clr       progcnt,u
+* WHETHER THIS CASE STEPS THE ARMING LINE, and it is every case whose CPU
+* sits in a loop - 5, 6, 7 and 8, which is CE.CALL 0 with a wait mode
+* above SYNC.
+*
+* WHY IT HAS TO.  Every attempt here is deterministic: a fixed-iteration
+* loop in the driver, an F$Sleep that resynchronises to the tick, then a
+* fixed amount of verify.  So the cycle is very nearly a whole number of
+* frames, and every attempt arms at THE SAME RASTER PHASE - which means a
+* case was sampling one phase three hundred times rather than three
+* hundred phases once.  That is why these cases sometimes survived a whole
+* run and sometimes died at once: the phase they locked to was decided by
+* when the case happened to start.  Stepping the arming line decorrelates
+* it AND records it, so a wedge becomes "armed at line 27" instead of
+* "died at attempt 41".
+                    clr       phstep,u
+                    lda       CE.CALL,x
+                    bne       rcps@               a caller-side case: leave it alone
+                    lda       CE.FLAG,x
+                    lsra
+                    lsra
+                    lsra
+                    lsra
+                    anda      #DmaWt.Mask
+                    cmpa      #DmaWt.Reg
+                    blo       rcps@               modes 0-3 park; they have no loop
+                    inc       phstep,u
+                    lda       #1
+                    sta       armline,u
+rcps@               equ       *
 * A case we have not built yet says so and is not silently skipped: an
 * empty row in this table would read as "it passed".
                     lda       CE.FLAG,x
@@ -665,6 +701,8 @@ rc1@                lbsr      BegLine
 rc2@                ldx       ,s
                     lbsr      Attempt
                     lbsr      Tally
+                    lbsr      PgTick
+                    lbsr      PhTick
                     ldd       capleft,u
                     subd      #1
                     std       capleft,u
@@ -675,8 +713,64 @@ rc2@                ldx       ,s
                     cmpa      #2
                     bne       rc3@
                     inc       abort,u
-rc3@                puls      x
+rc3@                clr       armline,u           free-running again
+                    clr       phstep,u
+                    puls      x
                     lbra      ResLine
+
+********************************************************************
+* PgTick - every PROGN attempts, put a line in the LOG ONLY saying how
+*   far the case has got and what arming line is in force.
+*
+* THIS IS THE ONLY THING THAT SURVIVES A WEDGE.  The result line is
+* printed when a case finishes, and a case that kills the machine never
+* finishes - so without this the log says which case died and nothing
+* about how far in, which is the whole measurement once you know the
+* failure is a rate.  Log only, because nineteen extra lines a case would
+* scroll the table off the screen.
+********************************************************************
+PgTick              inc       progcnt,u
+                    lda       progcnt,u
+                    cmpa      #PROGN
+                    blo       pgx@
+                    clr       progcnt,u
+                    leax      PgTx,pcr
+                    lbsr      StartLine
+                    lda       case,u
+                    lbsr      AppDec
+                    leax      PgArm,pcr
+                    lbsr      AppStr
+                    ldd       arms,u
+                    lbsr      AppDc16
+                    tst       phstep,u
+                    beq       pgend@
+                    leax      PgLine,pcr
+                    lbsr      AppStr
+                    lda       armline,u
+                    lbsr      AppDec
+pgend@              lbsr      EndLog
+pgx@                rts
+
+********************************************************************
+* PhTick - advance the arming line, if this case steps it.
+*
+* THE STEP HAS TO BE COPRIME WITH THE RANGE, and the first one was not.
+* PHADV was 7 against a range of 1-63; 7 divides 63, so it walked
+* 1, 8, 15 ... 57 and back to 1 - NINE lines, and it never tested the
+* other fifty-four.  A phase that is never sampled cannot be found, and
+* finding the lethal region is the entire point.  8 and 63 share no
+* factor, so this visits every line in the range, about five times each
+* over a 300-attempt case.
+********************************************************************
+PhTick              tst       phstep,u
+                    beq       phx@
+                    lda       armline,u
+                    adda      #PHADV
+                    cmpa      #PHMAX
+                    bls       phset@
+                    suba      #PHMAX
+phset@              sta       armline,u
+phx@                rts
 
 ********************************************************************
 * BegLine - "case n <name> <state> running" and FLUSH IT.  X -> entry.
@@ -1294,21 +1388,49 @@ ShowErr             pshs      b
 * reloaded U from scratch after every one rather than trust them.  A
 * clobbered U here does not fail loudly: it writes the path number into
 * whatever U happens to point at.
+* IT APPENDS, AND THE EARLIER VERSION DELETED.  That was a trap of the
+* worst kind on a card that starts this program at boot: the machine
+* wedges, you power-cycle to go and read the log, and the boot wipes the
+* log of the wedge before you can reach it.  Nothing about it looked
+* wrong - the file was always there, always readable, and always missing
+* the one run that mattered.
+*
+* Appending also makes the rate accumulate across the power cycles that a
+* wedge forces on you, which is the only way to measure something that
+* kills the machine it is being measured on.
 LogOpen             pshs      u
                     leax      LogName,pcr
-                    lda       #WRITE.
-                    os9       I$Delete            drop any earlier run's file
-                    puls      u
+                    lda       #UPDAT.
+                    os9       I$Open
+                    puls      u                   PULS leaves the carry alone
+                    bcs       locre@              no file yet: make one
+                    sta       logpath,u
+                    ldb       #SS.Size
                     pshs      u
+                    os9       I$GetStt            X = size high, U = size low
+                    tfr       u,d
+                    puls      u                   D and X survive the PULS
+                    bcs       lozer@
+                    std       logposl,u
+                    tfr       x,d
+                    std       logposh,u
+                    lbsr      LogSeek
+                    rts
+lozer@              ldd       #0
+                    std       logposh,u
+                    std       logposl,u
+                    rts
+locre@              pshs      u
                     leax      LogName,pcr
                     lda       #WRITE.
                     ldb       #PREAD.+PWRIT.+READ.+WRITE.
                     os9       I$Create
-                    puls      u                   PULS leaves the carry alone
+                    puls      u
                     bcs       lobad@              no log: the soak still runs
                     sta       logpath,u
                     ldd       #0
-                    std       logpos,u
+                    std       logposh,u
+                    std       logposl,u
                     rts
 * SAY WHY THERE IS NO LOG.  A silent failure here costs the whole run:
 * the table would still appear on screen, the card would carry nothing,
@@ -1344,9 +1466,13 @@ LogWrite            pshs      d,x,y
                     bcs       lwbad@
 * PSHS lays D, X and Y down in that order from S upward, so the count
 * this routine was handed is at 4,s and NOT at 2,s, which is X.
-                    ldd       logpos,u
+                    ldd       logposl,u
                     addd      4,s                 the count we were handed
-                    std       logpos,u
+                    std       logposl,u
+                    ldd       logposh,u           LDD leaves the carry alone
+                    adcb      #0
+                    adca      #0
+                    std       logposh,u
                     lbsr      LogFlush
 lwx@                puls      d,x,y,pc
 lwbad@              lda       #$FF                a broken log stops being used
@@ -1364,21 +1490,36 @@ LogFlush            lda       logpath,u
                     puls      u
                     bcs       lfbad@
                     sta       logpath,u
+                    lbsr      LogSeek
+lfx@                rts
+lfbad@              lda       #$FF
+                    sta       logpath,u
+                    rts
+
+********************************************************************
+* LogSeek - put the path at logposh:logposl.
+*
 * I$Seek takes the position in X:U, and U is this program's data area for
-* the whole run - so the path number is read out of it BEFORE the swap
-* and picked up off the stack afterwards.
-                    pshs      a
-                    ldd       logpos,u
-                    pshs      u
+* the whole run - so everything is read out of it BEFORE the swap and the
+* path number is picked up off the stack afterwards.
+********************************************************************
+* THE PATH IS PUSHED BEFORE THE POSITION IS LOADED, and that ordering is
+* the whole routine.  The first version read the path into A and THEN did
+* "ldd logposl,u", which overwrites A - so I$Seek was handed the
+* position's high byte as its path number, the seek never took, and every
+* line in the log was written at offset 0 on top of the last one.  The
+* file stayed the size of its longest line and looked like several runs
+* shredded together.
+LogSeek             lda       logpath,u
+                    pshs      a                   the path, BEFORE D is reused
+                    ldx       logposh,u
+                    ldd       logposl,u
+                    pshs      u                   the data pointer
                     tfr       d,u
-                    ldx       #0
                     lda       2,s
                     os9       I$Seek
                     puls      u
                     puls      a
-lfx@                rts
-lfbad@              lda       #$FF
-                    sta       logpath,u
                     rts
 
 ********************************************************************
@@ -1550,6 +1691,22 @@ PutLine             pshs      d,x,y
                     puls      d,x,y,pc
 
 ********************************************************************
+* EndLog - EndLine's other half: terminate the line and send it to the
+*   LOG ONLY, leaving the screen alone.
+********************************************************************
+EndLog              lda       #C$CR
+                    sta       ,y
+                    leay      1,y
+                    leax      linebuf,u
+                    pshs      x
+                    tfr       y,d
+                    subd      ,s++                D = bytes in the line
+                    tfr       d,y
+                    leax      linebuf,u
+                    lbsr      LogWrite
+                    rts
+
+********************************************************************
 * The cases.  flags : caller : state : cap : name.
 *
 * The flags are SS.BmClear's R$X high byte: the wait mode is a NUMBER in
@@ -1711,6 +1868,12 @@ PhHdr3              fcc       /Line 0 cannot be asked for - 0 means free-running
 PhFoot              fcc       /The line it got is what counts - an interrupt can cost the spin a few./
                     fcb       $00
 PhLn                fcc       /  line /
+                    fcb       $00
+PgTx                fcc       /  .. case /
+                    fcb       $00
+PgArm               fcc       / reached arm /
+                    fcb       $00
+PgLine              fcc       /, arming line /
                     fcb       $00
 PhGot               fcc       / armed /
                     fcb       $00
