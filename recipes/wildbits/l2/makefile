@@ -1,6 +1,6 @@
 LEVEL = 2
 SCF_EXTRA = SOLdrv fSOL wizfi wz wz0 wz1 wz2 wz3 vt vt1 vt2 vt3 vt4 vt5 vt6 vt7 vt8
-CMDS_EXTRA = grfdrv256 wsigtst vs ssbench joyview bmtest
+CMDS_EXTRA = grfdrv256 wsigtst vs ssbench joyview bmtest dmafilltest
 include ../wildbits.mak
 
 # vtio and grfdrv256 are driven almost entirely by defs/wildbits_vtio.d - the
@@ -9,7 +9,7 @@ include ../wildbits.mak
 # as a prerequisite, so editing one silently leaves a stale module behind.  That
 # already cost a hardware round trip: a TermSave* change appeared to build and
 # the .mods file was untouched.  (Same class as krn not depending on flink.asm.)
-$(MODDIR)/vtio $(MODDIR)/grfdrv256 $(MODDIR)/vtcmd $(MODDIR)/$(KEYSUB) $(MODDIR)/wsigtst $(MODDIR)/ssbench $(MODDIR)/joyview $(MODDIR)/bmtest: $(DEFSDIR)/wildbits_vtio.d $(DEFSDIR)/wildbits.d
+$(MODDIR)/vtio $(MODDIR)/grfdrv256 $(MODDIR)/vtcmd $(MODDIR)/$(KEYSUB) $(MODDIR)/wsigtst $(MODDIR)/ssbench $(MODDIR)/joyview $(MODDIR)/bmtest $(MODDIR)/dmafilltest: $(DEFSDIR)/wildbits_vtio.d $(DEFSDIR)/wildbits.d
 
 # wsigtst exercises SS.WSig ($E1); it lives with the other level 2 wildbits
 # commands, which have no generic rule here.
@@ -28,6 +28,14 @@ $(MODDIR)/joyview: $(LEVEL2)/wildbits/cmds/joyview.asm | $(MODDIR)
 # SS.BmDef with a non-zero offset, SS.BmCfg hide/show, and the two
 # ownership rules.  Same class as wsigtst - no generic rule here.
 $(MODDIR)/bmtest: $(LEVEL2)/wildbits/cmds/bmtest.asm | $(MODDIR)
+	$(AS) $(AFLAGS) $< $(ASOUT)$@
+
+# dmafilltest is the VDMA fill soak that goes to the core developer with
+# joust docs/rc16-dma-report.md: ten ways of keeping the CPU quiet across the
+# transfer window, each one a whole-bitmap fill, with a flushed log so a wedged
+# machine still says which case killed it.  Same class as bmtest - no generic
+# rule here.
+$(MODDIR)/dmafilltest: $(LEVEL2)/wildbits/cmds/dmafilltest.asm | $(MODDIR)
 	$(AS) $(AFLAGS) $< $(ASOUT)$@
 
 # vs - Roger Taylor's VS1053 tool (edition 13): the only instrument that exercises

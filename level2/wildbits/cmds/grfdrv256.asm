@@ -2019,8 +2019,20 @@ bdlive@             tst       V.TermLive,u
 * SetStat SS.BmClear ($E5) - fill a bitmap with one colour, using the
 *   rc16's DMA engine.
 *   R$Y      = bitmap # (0-2)
-*   R$X high = FLAGS.  Bit 0 = do a 16-bit transfer; all other bits must
-*              be 0.  16-bit is twice the rate, 384 us against 768 for a
+*   R$X high = FLAGS.
+*                bit 0    do a 16-bit transfer
+*                bits 3-1 RESERVED, must be 0
+*                bits 6-4 the WAIT MODE, DmaWt.* in wildbits.d: 0 arm and
+*                         return (the default, and what every shipping
+*                         caller passes), 1 CWAI, 2 CWAI + re-check,
+*                         3 SYNC, 4 register loop, 5 I/O loop, 6 RAM
+*                         loop, 7 poll the status register
+*                bit 7    RESERVED, must be 0
+*              Modes 1-7 are DIAGNOSTICS for dmafilltest and bmtest, not
+*              for shipping code; 4-7 wedge the machine on purpose.  This
+*              was a bitmask until 2026-09-21 and the note beside DmaWt.*
+*              says why it stopped being one.
+*              16-bit is twice the rate, 384 us against 768 for a
 *              whole bitmap, and it is a SEPARATE PATH THROUGH THE ENGINE
 *              - Double_Speed_DMA, with its own end comparison and its
 *              own byte-lane handling - so it is opt-in until it has been
@@ -2104,7 +2116,7 @@ SSBmClear           ldd       R$Y,x               bitmap # 0-2
                     lbhi      BmBad
                     stb       >gr.b2
                     ldd       R$X,x               A = flags, B = the fill value
-                    bita      #$80                only bits 0-6 are defined
+                    bita      #DmaWt.Rsvd         bit 0 is the width; 6-4 the wait mode
                     lbne      BmBad
                     sta       >gr.d1              the width flag
                     stb       >gr.b3
@@ -2196,20 +2208,30 @@ bcrow2@             stb       >gr.b4              the row count
 *              during the window as long as it stays away from the DMA.
 * Wedges    -> the hazard is executing at all, and only the woken-from-
 *              idle path is safe.
+* THE WAIT MODE IS A NUMBER NOW, not a mask - see DmaWt.* in wildbits.d
+* for why.  Every branch here is long: this block sits in front of all
+* seven wait routines, and inserting into this file has put short
+* branches out of range twice already.
                     lda       >gr.d1
-                    bita      #64
-                    bne       bccwck@             bit 6: park, then check, repeat
-                    bita      #32
-                    bne       bccwai@             bit 5: park with CWAI
-                    bita      #16
-                    bne       bcsync@             bit 4: park with SYNC
-                    bita      #8
-                    bne       bcdram@             bit 3: the same loop, reading RAM
-                    bita      #4
-                    bne       bcdio@              bit 2: the same loop, reading I/O
-                    bita      #2
-                    bne       bcdly@
-                    bra       bcnod@              the default: ARM AND RETURN
+                    lsra
+                    lsra
+                    lsra
+                    lsra
+                    anda      #DmaWt.Mask
+                    lbeq      bcnod@              0: ARM AND RETURN, the default
+                    cmpa      #DmaWt.Cwai
+                    lbeq      bccwai@
+                    cmpa      #DmaWt.CwChk
+                    lbeq      bccwck@
+                    cmpa      #DmaWt.Sync
+                    lbeq      bcsync@
+                    cmpa      #DmaWt.Reg
+                    lbeq      bcdly@
+                    cmpa      #DmaWt.Io
+                    lbeq      bcdio@
+                    cmpa      #DmaWt.Ram
+                    lbeq      bcdram@
+                    lbra      bcpoll@             7: poll the status register
 * THE DEFAULT, AND WHY THIS CALL IS SYNCHRONOUS: park the CPU until the
 * transfer has run.  CWAI puts it at $FFFF with rAVMA = 0 - NO VALID BUS
 * CYCLES - and waits for an interrupt.  The 60 Hz tick fires at line 0,
@@ -2310,7 +2332,28 @@ bcdrm2@             lda       ,x
 * The tick makes that very unlikely; it is not impossible.  This is an
 * experiment, not something to ship.
 bcsync@             sync
-                    bra       bcnod@
+                    lbra      bcnod@
+* MODE 7 - POLL THE DMA'S OWN STATUS REGISTER WHILE THE TRANSFER IS
+* PENDING.  This is the worst case we know of and it is here to be
+* reproduced, not used: on the K2 it wedges the machine on the FIRST
+* attempt, where the RAM and $FE20 loops take three or four and the
+* register-only loop takes many.
+*
+* It is also the reading the vendor documentation invites.  "Poll until
+* it goes low" is the natural instruction to follow, and following it is
+* the fastest way we have found to destroy the machine - which is most of
+* the reason this mode had to become askable rather than stay a paragraph
+* in a report.  The note beside DMA_STATUS_TRF_IP in wildbits.d is the
+* long version.
+*
+* Bounded by DmaDly12 like the other data-reading loops, and for the same
+* reason: a wedged engine never clears the bit, so an unbounded poll
+* would never come back even on a machine that survived.
+bcpoll@             ldy       #DmaDly12
+bcpol2@             lda       DMA.Base+DMA_STATUS_REG
+                    lbpl      bcnod@              done - it cleared
+                    leay      -1,y
+                    bne       bcpol2@
 bcnod@              lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy

@@ -1349,6 +1349,36 @@ DmaCwChk            equ       8
 * is BOUNDED: the tick always wakes it and it vectors normally.
 DmaDly7             equ       35714     register-only loop, 7 cycles a pass
 DmaDly12            equ       20833     the data-reading loops, 12 a pass
+* THE WAIT MODE IS A NUMBER IN BITS 6:4 OF SS.BmClear's R$X HIGH BYTE,
+* and it used to be a bitmask that the driver resolved highest-bit-first.
+* Two reasons it changed on 2026-09-21:
+*
+*   1. A MASK CANNOT SAY "ONLY THIS ONE".  Turning one toggle off left
+*      whatever was underneath it still in force, and nothing on screen
+*      said which had won.  Four independent toggles in bmtest cost a
+*      hardware run that way, and the fix there was one selector - which
+*      is what the driver should have taken in the first place.
+*   2. THERE WAS NO BIT LEFT for the variant that matters most.  Bits 1-6
+*      were all spoken for, bit 0 is the 16-bit flag and bit 7 is
+*      reserved, so the one case the vendor documentation invites - a
+*      tight poll of DMA_STATUS_REG while a transfer is pending - could
+*      not be asked for at all.  It is mode 7 below.
+*
+* Mode 0 is $00, which is what every existing caller already passes, so
+* nothing had to change in Joust.  Bits 1-3 are now REJECTED if set,
+* which turns a caller still using the old mask into a loud E$BadMod
+* rather than a silently different wait.
+DmaWt.Shift         equ       4         shift R$X high right this far
+DmaWt.Mask          equ       7         then keep this much
+DmaWt.Rsvd          equ       $8E       bits 7 and 3-1: must all be zero
+DmaWt.None          equ       0         arm and return - the shipping behaviour
+DmaWt.Cwai          equ       1         park in CWAI
+DmaWt.CwChk         equ       2         park, re-check the status, park again
+DmaWt.Sync          equ       3         park in SYNC
+DmaWt.Reg           equ       4         a register-only loop
+DmaWt.Io            equ       5         that loop reading $FE20
+DmaWt.Ram           equ       6         that loop reading RAM
+DmaWt.Poll          equ       7         that loop reading DMA_STATUS_REG
 DMA_ArmLine         equ       48        arm at this raster line or later
 * The spin's ceiling, and it is a safety net rather than a timing figure.
 * One window is 48 lines, 1.5 ms, which is about 180 passes of the loop at

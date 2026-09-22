@@ -1723,7 +1723,10 @@ PmIo                fcc       /ioloop - WEDGES/
                     fcb       $00
 PmRam               fcc       /ramloop - WEDGES/
                     fcb       $00
-PmFlags             fcb       0,32,64,16,2,4,8    none cwai cwaick sync reg io ram
+* THE WAIT MODE IS A NUMBER IN BITS 6:4 NOW, not a mask - DmaWt.* in
+* wildbits.d has the why.  The order of this table is P's cycle order and
+* is unchanged; only the values are.
+PmFlags             fcb       $00,$10,$20,$30,$40,$50,$60    none cwai cwaick sync reg io ram
 OneW8               fcc       / 8-bit/
                     fcb       $00
 OneW16              fcc       / 16-bit/
