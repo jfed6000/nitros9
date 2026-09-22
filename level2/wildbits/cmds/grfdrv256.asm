@@ -2018,7 +2018,16 @@ bdlive@             tst       V.TermLive,u
 *******************************************************************
 * SetStat SS.BmClear ($E5) - fill a bitmap with one colour, using the
 *   rc16's DMA engine.
-*   R$Y      = bitmap # (0-2)
+*   R$Y low  = bitmap # (0-2)
+*   R$Y high = ARMING LINE.  0 = arm as soon as the arguments are ready,
+*              which is what every shipping caller passes and what this
+*              has always done; 1-255 = wait for that raster line first.
+*              It exists to MEASURE the vertical-blanking window rather
+*              than to avoid it - see DMA_ArmWrap in wildbits.d.
+*   R$A out  = the line it ACTUALLY armed on, $FF if past 255.  An
+*              interrupt during the spin costs several lines, so this and
+*              the line asked for are different numbers and only this one
+*              is a measurement.  Set on every call, free-running too.
 *   R$X high = FLAGS.
 *                bit 0    do a 16-bit transfer
 *                bits 3-1 RESERVED, must be 0
@@ -2111,10 +2120,13 @@ bdlive@             tst       V.TermLive,u
 * the mirror, not from the live registers.  SS.BmLine cannot, and that
 * difference is exactly why.
 *******************************************************************
-SSBmClear           ldd       R$Y,x               bitmap # 0-2
-                    cmpd      #2
+SSBmClear           ldd       R$Y,x               A = arming line, B = bitmap # 0-2
+                    cmpb      #2
                     lbhi      BmBad
                     stb       >gr.b2
+* The arming line rides in gr.d2, which no part of this call uses, until
+* the parameter block exists to put it in.
+                    sta       >gr.d2
                     ldd       R$X,x               A = flags, B = the fill value
                     bita      #DmaWt.Rsvd         bit 0 is the width; 6-4 the wait mode
                     lbne      BmBad
@@ -2150,11 +2162,13 @@ bcrow2@             stb       >gr.b4              the row count
                     lbeq      BmClrUnd            no blocks: nothing to fill
 * Build DmaFill's parameter block.  X stopped being the caller's register
 * image at BmGetAddr, which is why nothing below uses it.
-                    leas      -11,s
+                    leas      -12,s
                     ldb       >gr.b3
                     stb       6,s                 the fill value
                     ldb       >gr.d1
                     stb       7,s                 the width flag
+                    ldb       >gr.d2
+                    stb       11,s                the arming line, 0 = free-running
 * THE DESTINATION FIRST, while A is still the block BmGetAddr returned.
 * The row arithmetic below uses MUL, and MUL DESTROYS A - putting it
 * first cost a hardware run: the block $E2 became the $3A that rows*64
@@ -2190,7 +2204,14 @@ bcrow2@             stb       >gr.b4              the row count
                     lbsr      Rows2Byt
                     leax      ,s
                     lbsr      DmaFill             armed; it runs in the next vblank
-                    leas      11,s
+* HAND BACK THE LINE IT ACTUALLY ARMED ON, not the one that was asked
+* for.  An interrupt during the spin costs several lines, so the two are
+* different numbers and only the second one is a measurement.  X stopped
+* being the caller's register image at BmGetAddr, which is why this goes
+* through gr.PDRGS - the same way SS.BmLine returns its drawn count.
+                    lda       11,s
+                    sta       >gr.PDRGS+R$A
+                    leas      12,s
 * THE EXPERIMENT, bit 1 of the flags, and it is OFF unless asked for.
 * A driver-side POLL of $FEC1 wedges the machine at once; sleeping and
 * polling afterwards is reliable.  What that cannot tell apart is
@@ -2473,9 +2494,65 @@ dfadr@              lda       ,x
                     sta       DMA.Base+DMA_SIZE_1D_M
                     lda       5,x
                     sta       DMA.Base+DMA_SIZE_1D_L
+* THE ARMING LINE.  11,x is 0 for free-running - every caller but
+* dmafilltest - or a raster line to wait for.  DMA_ArmWrap in wildbits.d
+* carries the argument for both the two phases and the ceiling; the short
+* version is that this is safe HERE and only here, because the start bit
+* below has not been written yet and so nothing can halt the CPU while it
+* turns.
+                    lda       11,x
+                    beq       dfgo@
+                    pshs      b                   the control byte, start bit still clear
+                    clra
+                    ldb       11,x
+                    pshs      d                   ,s = the requested line, 16-bit
+                    ldy       #DMA_ArmWrap
+dfbef@              lbsr      DmaLine
+                    cmpd      ,s
+                    blo       dfat@               before the target: now wait for it
+                    leay      -1,y
+                    bne       dfbef@
+                    bra       dfarm@
+dfat@               ldy       #DMA_ArmWrap
+dfat2@              lbsr      DmaLine
+                    cmpd      ,s
+                    bhs       dfarm@
+                    leay      -1,y
+                    bne       dfat2@
+dfarm@              leas      2,s                 drop the requested line
+                    puls      b                   the control byte again
+* READ THE LINE AS LATE AS IT CAN BE READ - the next thing written is the
+* start bit - and leave it in 11,x for the caller.  A line past 255 comes
+* back as $FF: the scale this is reported on is one byte, and every line
+* the window question is about is far below 255.
+dfgo@               pshs      b                   the control byte
+                    lbsr      DmaLine
+                    tsta
+                    beq       dfrec@
+                    ldb       #$FF
+dfrec@              stb       11,x
+                    puls      b
                     orb       #DMA_CTRL_Start_Trf
                     stb       DMA.Base+DMA_CTRL_REG
                     clrb                          and CLRB clears the carry
+                    rts
+
+*******************************************************************
+* DmaLine - the raster line in D, 0 to VTOTAL (524 at 60 Hz, 448 at 70).
+*   X and Y kept.
+*
+* $FFDA is HLineCount[11:8] and $FFDB is [7:0].  The middle two of these
+* four read-back registers were documented the wrong way round in
+* wildbits.d until 2026-09-21; nothing had used them, so the swap was
+* dormant.  TinyVickyControl_Registers.v:151-154 is the whole map.
+*
+* It is the WHOLE FRAME's line, counting from 0 at the top of vertical
+* blanking - not the visible line - which is the number DMA_ArmLine and
+* the transfer window are both measured in.
+*******************************************************************
+DmaLine             lda       TXT.Base+VKY_LINE_Y_POS_HI
+                    anda      #$0F
+                    ldb       TXT.Base+VKY_LINE_Y_POS_LO
                     rts
 
 *******************************************************************

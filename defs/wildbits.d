@@ -1386,6 +1386,30 @@ DMA_ArmLine         equ       48        arm at this raster line or later
 * it bounds a read-back that turns out to be stuck at zero to ~8 ms of
 * masked interrupts instead of for ever.
 DMA_ArmSpin         equ       1000
+* THE ARMING LINE, which is SS.BmClear's R$Y HIGH BYTE: 0 means "arm as
+* soon as the arguments are ready", which is what every caller but
+* dmafilltest passes and what this has always done, and 1-255 means "wait
+* for that raster line first".
+*
+* IT EXISTS TO MEASURE THE WINDOW, not to avoid it.  A whole 8-bit fill
+* needs 24.2 of the window's 43 lines, so it must be armed by about line
+* 19; at a free-running phase that makes roughly 4.4% of calls come up
+* short, and a rate is a much weaker thing to report than "armed at line
+* 19 and later, short fill; 0-18, complete".  A program cannot do this for
+* itself: $FFD8-$FFDB is inside $FD00-$FFFF.
+*
+* THE SPIN IS SAFE BECAUSE OF WHERE IT IS.  It runs BEFORE the start bit
+* is written, when no transfer is outstanding, so nothing can halt the CPU
+* while it turns.  The guard built and removed on 2026-09-21 was removed
+* for being aimed at the wrong fault, not for being unsafe.
+*
+* TWO PHASES: first wait until the raster is BEFORE the target, then wait
+* until it reaches it.  "Wait until the line is >= n" on its own would not
+* wait at all when the raster is already past n, which is most of the
+* time.  This is the ceiling for each phase - about two frames' worth of
+* iterations, so a read-back stuck at one value costs a lost measurement
+* rather than a hang.
+DMA_ArmWrap         equ       20000
 
 
 * MIDI Synth Chip

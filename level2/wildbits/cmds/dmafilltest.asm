@@ -58,7 +58,7 @@
 *
 * Keys: SPACE all ten cases   1-9 that case alone   0 case 10
 *       L list the cases and what a K2 does with each   S skip
-*       W 8/16-bit   ESC or Q quit
+*       P sweep the arming line 0-63   W 8/16-bit   ESC or Q quit
 *
 * Edt/Rev  YYYY/MM/DD  Modified by
 * Comment
@@ -104,6 +104,7 @@ CLRWAIT             equ       10        frames before a fill is called HUNG
 POLLMAX             equ       2000      case 9: GetStat polls before giving up
 RAMSPIN             equ       6000      case 10: passes of the user-state RAM loop
 NOTBLT              equ       $FF       a case flag meaning "not built yet"
+PHMAX               equ       63        P: the last arming line swept
 * The case table's shape.  Fixed-width names because they are also the
 * screen's second column.
 CE.FLAG             equ       0         the driver wait flags for SS.BmClear
@@ -135,6 +136,7 @@ COLSHRT             equ       52
 COLERR              equ       59
 COLHUNG             equ       66
 COLEXP              equ       38        L: where the expectation starts
+COLPHOU             equ       22        P: where the outcome starts
 COLNOTE             equ       72
 * The outcome of one attempt.
 O.OK                equ       0
@@ -167,6 +169,8 @@ nerr                rmb       2         ... that returned an error
 nhung               rmb       2         ... whose status never cleared
 lasterr             rmb       1         the last error code seen in this case
 tmperr              rmb       1         the GetStat's B, kept until its carry is read
+armline             rmb       1         P: the line to arm on, 0 = free-running
+gotline             rmb       1         ... and the line the driver says it got
 badrow              rmb       2         the first short row seen in this case
 gotbad              rmb       1         non-zero once badrow means something
 capleft             rmb       2         attempts still to make
@@ -195,6 +199,7 @@ start               clr       gotslab,u
                     clr       wide,u              8-bit until W says otherwise
                     clr       sweep,u
                     clr       abort,u
+                    clr       armline,u
                     lda       #FILLB              so the first attempt uses FILLA
                     sta       fillv,u
                     lda       #$FF
@@ -433,9 +438,98 @@ DoWide              lda       wide,u
 * raster line to arm on, and $FFD8-$FFDB is inside $FD00-$FFFF, which a
 * program cannot reach at any price.  Saying so is better than leaving a
 * key that appears to do nothing.
-DoPhase             leax      NoPhase,pcr
+********************************************************************
+* P - THE ARMING-PHASE SWEEP, which is the one measurement that turns a
+* rate into a mechanism.
+*
+* A whole 8-bit fill needs 24.2 of the vertical-blanking window's 43
+* lines, so it has to be armed by about line 19.  Armed at a free-running
+* phase - which is what every other key here does - that shows up as
+* "about 4.4% of attempts came up short", and a percentage is a weak
+* thing to hand anyone.  This arms ONE transfer on each raster line in
+* turn and prints what happened, so the answer reads "complete through
+* line 18, short from line 19" and the arithmetic can be checked against
+* it.
+*
+* It runs the CONTROL case's wait - arm, return, sleep - because the
+* window is what is being measured here, not the wedge.
+*
+* THE LINE ASKED FOR AND THE LINE IT GOT ARE BOTH PRINTED.  An interrupt
+* during the driver's spin costs several lines, so they differ often
+* enough that reporting only the request would quietly corrupt the map.
+********************************************************************
+DoPhase             leax      PhHdr,pcr
                     lbsr      PutLine
-                    bra       Loop
+                    leax      PhHdr2,pcr
+                    lbsr      PutLine
+                    leax      PhHdr3,pcr
+                    lbsr      PutLine
+* IT STARTS AT LINE 1, NOT 0.  Zero is the arming line's free-running
+* value - the one every shipping caller passes - so it cannot also mean
+* "line 0", and a sweep that began there reported "line 00 armed 237",
+* which is true and useless.  Line 1 is one line away from the ideal and
+* costs the measurement nothing.
+                    lda       #1
+                    sta       armline,u
+ph1@                lbsr      PhOne
+                    lbsr      KeyChk
+                    cmpa      #2
+                    beq       ph2@
+                    lda       armline,u
+                    inca
+                    sta       armline,u
+                    cmpa      #PHMAX
+                    lbls      ph1@
+ph2@                clr       armline,u
+                    leax      PhFoot,pcr
+                    lbsr      PutLine
+                    lbra      Loop
+
+********************************************************************
+* PhOne - one transfer at armline, reported.
+********************************************************************
+PhOne               lda       #1                  the control case
+                    lbsr      CaseEnt
+                    lbsr      Attempt
+                    leax      PhLn,pcr
+                    lbsr      StartLine
+                    lda       armline,u
+                    lbsr      AppDec
+                    leax      PhGot,pcr
+                    lbsr      AppStr
+                    lda       gotline,u
+                    lbsr      AppDec
+                    lda       #COLPHOU
+                    lbsr      AppCol
+                    lbsr      AppOut
+                    lbra      EndLine
+
+********************************************************************
+* AppOut - the attempt's outcome in words, with the number that goes
+*   with it.  A bare "SHORT" is half a measurement.
+********************************************************************
+AppOut              lda       outcome,u
+                    bne       ao1@
+                    leax      OutOk,pcr
+                    lbra      AppStr
+ao1@                cmpa      #O.SHORT
+                    bne       ao2@
+                    leax      OutShrt,pcr
+                    lbsr      AppStr
+                    ldd       stoprow,u
+                    lbra      AppDc16
+ao2@                cmpa      #O.OVER
+                    bne       ao3@
+                    leax      OutOver,pcr
+                    lbra      AppStr
+ao3@                cmpa      #O.ERR
+                    bne       ao4@
+                    leax      OutErr,pcr
+                    lbsr      AppStr
+                    lda       lasterr,u
+                    lbra      AppDec
+ao4@                leax      OutHung,pcr
+                    lbra      AppStr
 
 ********************************************************************
 * L - the ten cases and what a K2 has done with each of them.
@@ -746,13 +840,21 @@ at2@                sta       fillv,u
                     ora       #1
 at3@                ldb       fillv,u
                     tfr       d,x
-                    ldy       #0                  bitmap 0
+* R$Y = the arming line : the bitmap #.  armline is 0 for everything but
+* the P sweep, which is exactly what the ten cases want.
+                    lda       armline,u
+                    clrb                          bitmap 0
+                    tfr       d,y
                     pshs      u
                     ldu       #0                  first row 0, all 240 rows
                     lda       #BMPATH
                     ldb       #SS.BmClear
                     os9       I$SetStt
                     puls      u                   PULS leaves CC and B alone
+* R$A comes back as the line it ACTUALLY armed on.  STA touches N, Z and
+* V but NOT the carry, so the call's own result still survives to the
+* branch below.
+                    sta       gotline,u
                     bcc       at4@
                     stb       lasterr,u
                     lda       #O.ERR
@@ -1600,7 +1702,27 @@ RunTx               fcc       /running/
                     fcb       $00
 NoMode7             fcc       /not built yet - the driver has no wait mode for it/
                     fcb       $00
-NoPhase             fcc       /The phase sweep needs a driver that can be told which line to arm on./
+PhHdr               fcc       /Arming one fill on each raster line, 1 to 63.  A whole 8-bit fill needs/
+                    fcb       $00
+PhHdr2              fcc       /24.2 of the window's 43 lines, so it should go short partway down./
+                    fcb       $00
+PhHdr3              fcc       /Line 0 cannot be asked for - 0 means free-running - and 1 is next to it./
+                    fcb       $00
+PhFoot              fcc       /The line it got is what counts - an interrupt can cost the spin a few./
+                    fcb       $00
+PhLn                fcc       /  line /
+                    fcb       $00
+PhGot               fcc       / armed /
+                    fcb       $00
+OutOk               fcc       /filled/
+                    fcb       $00
+OutShrt             fcc       /SHORT, stopped at row /
+                    fcb       $00
+OutOver             fcc       /OVERRAN the bitmap/
+                    fcb       $00
+OutErr              fcc       /error /
+                    fcb       $00
+OutHung             fcc       /HUNG - the status never cleared/
                     fcb       $00
 SwDone              fcc       /Sweep finished.  DMATEST.LOG has the same table./
                     fcb       $00
