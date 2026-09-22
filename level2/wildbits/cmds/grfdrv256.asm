@@ -2037,8 +2037,10 @@ bdlive@             tst       V.TermLive,u
 *                         3 SYNC, 4 register loop, 5 I/O loop, 6 RAM
 *                         loop, 7 poll the status register
 *                bit 7    RESERVED, must be 0
-*              Modes 1-7 are DIAGNOSTICS for dmafilltest and bmtest, not
-*              for shipping code; 4-7 wedge the machine on purpose.  This
+*              Mode 7 is the SHIPPING wait on a core with the DMA fix
+*              (2026-09-22): it returns when the fill is done, or
+*              E$DevBsy if it never finishes.  Modes 1-6 are DIAGNOSTICS for dmafilltest and
+*              bmtest.  On an unfixed core, 4-7 wedge the machine.  This
 *              was a bitmask until 2026-09-21 and the note beside DmaWt.*
 *              says why it stopped being one.
 *              16-bit is twice the rate, 384 us against 768 for a
@@ -2354,27 +2356,33 @@ bcdrm2@             lda       ,x
 * experiment, not something to ship.
 bcsync@             sync
                     lbra      bcnod@
-* MODE 7 - POLL THE DMA'S OWN STATUS REGISTER WHILE THE TRANSFER IS
-* PENDING.  This is the worst case we know of and it is here to be
-* reproduced, not used: on the K2 it wedges the machine on the FIRST
-* attempt, where the RAM and $FE20 loops take three or four and the
-* register-only loop takes many.
+* MODE 7 - POLL THE DMA'S OWN STATUS REGISTER UNTIL THE FILL IS DONE.
+* THIS IS THE SHIPPING MODE NOW (2026-09-22): Joust clears with it.  On
+* the core this was written against it wedged a K2 on the FIRST attempt.
+* The FPGA developer's fix waits for HALT to be acknowledged before taking
+* the bus, and grants it only at a safe point, so the CPU may execute
+* whatever it likes while a transfer is pending.  All ten dmafilltest
+* cases pass on the fixed core, this one included.
 *
-* It is also the reading the vendor documentation invites.  "Poll until
-* it goes low" is the natural instruction to follow, and following it is
-* the fastest way we have found to destroy the machine - which is most of
-* the reason this mode had to become askable rather than stay a paragraph
-* in a report.  The note beside DMA_STATUS_TRF_IP in wildbits.d is the
-* long version.
+* It is the fastest correct wait.  The call returns within one poll of
+* the transfer ending, where F$Sleep plus a GetStat costs a second system
+* call and up to a tick more, and a CWAI only notices at the next
+* interrupt.  The CPU is halted for the transfer itself, so the
+* only CPU this burns is the wait for line 0, and nothing else could run
+* in that time anyway: grfdrv is synchronous by design.
 *
-* Bounded by DmaDly12 like the other data-reading loops, and for the same
-* reason: a wedged engine never clears the bit, so an unbounded poll
-* would never come back even on a machine that survived.
+* ON AN UNFIXED CORE THIS STILL WEDGES THE MACHINE, and there is no
+* register that says which core is running.
+*
+* It is bounded by DmaDly12, about 18 cycles a pass, so 47 ms at 8 MHz,
+* against a worst case of 15 ms to line 0 plus 0.4 ms of transfer.  A bit
+* that never clears returns E$DevBsy rather than a false success.
 bcpoll@             ldy       #DmaDly12
 bcpol2@             lda       DMA.Base+DMA_STATUS_REG
                     lbpl      bcnod@              done - it cleared
                     leay      -1,y
                     bne       bcpol2@
+                    lbra      BmClrBsy            never cleared: the engine is dead
 bcnod@              lbra      StatOK
 BmClrBsy            comb
                     ldb       #E$DevBsy

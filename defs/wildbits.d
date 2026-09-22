@@ -1378,7 +1378,7 @@ DmaWt.Sync          equ       3         park in SYNC
 DmaWt.Reg           equ       4         a register-only loop
 DmaWt.Io            equ       5         that loop reading $FE20
 DmaWt.Ram           equ       6         that loop reading RAM
-DmaWt.Poll          equ       7         that loop reading DMA_STATUS_REG
+DmaWt.Poll          equ       7         poll DMA_STATUS_REG until done - the shipping wait on a fixed core
 DMA_ArmLine         equ       48        arm at this raster line or later
 * The spin's ceiling, and it is a safety net rather than a timing figure.
 * One window is 48 lines, 1.5 ms, which is about 180 passes of the loop at
