@@ -2570,8 +2570,9 @@ DmaLine             lda       TXT.Base+VKY_LINE_Y_POS_HI
 *   R$X = the caller's array of 8-byte records
 *   R$U = record count, 1-255; RETURNS the number actually drawn
 *
-*   Record:  +0,1 X0 (0-319)  +2,3 X1  +4 Y0 (0-239)  +5 Y1
-*            +6 colour        +7 reserved, write 0
+*   Record:  +0,1 X0 (0-319; 0-639 on a HIRES4 plane)  +2,3 X1
+*            +4 Y0 (0-239)  +5 Y1  +6 colour (its low nibble on a
+*            HIRES4 plane)  +7 reserved, write 0
 *
 * A BATCH, NOT A LINE.  The engine walks a 320-pixel line in 3.2 us and
 * an I$SetStt costs ~474 us, so one line per call would be 99% transport
@@ -2621,6 +2622,23 @@ SSBmLine            ldd       R$Y,x               bitmap # 0-2
                     lbeq      BmLnUnd
                     tst       V.TermLive,u
                     lbeq      BmLnNRdy
+* A HIRES4 plane (control byte bit 4, SS.BmCfg) is 640 dots wide: the
+* engine takes X to 639 there (LineDraw.v valid_coords), and a line can
+* be 640 pixels long, so the FIFO needs that much room before a record.
+* gr.d1 = the last X, gr.d2 = the room.  $FFCB's global bit is never
+* set by this driver, so the plane's own bit is the whole answer.
+                    ldd       #LD.MaxX
+                    std       >gr.d1
+                    ldd       #LD.Room
+                    std       >gr.d2
+                    lda       ,y                  the control byte
+                    bita      #%00010000
+                    beq       BmLnLo
+                    ldd       #LD.MaxX4
+                    std       >gr.d1
+                    ldd       #LD.Room4
+                    std       >gr.d2
+BmLnLo
 * The engine's real enable, $FFCA bit 0, in the mirror and in the live
 * register.  It sits inside the $FFC0-$FFCF block PullCore copies, so
 * this survives a terminal switch, and it costs nothing while idle: with
@@ -2650,16 +2668,17 @@ BmLnLp              tst       1,s
 * Room in the FIFO?  Stop rather than lose pixels silently.
                     lda       LD.FifoH,x
                     ldb       LD.FifoL,x
-                    cmpd      #LD.Room
+                    cmpd      >gr.d2
                     bhs       BmLnOK              short: R$U tells the caller
-* Range-check the record.  An endpoint outside 0-319 / 0-239 means the
-* engine NEVER STARTS and never signals complete, so this check is what
-* stands between the poll below and a hang.
+* Range-check the record.  An endpoint outside 0-319 (0-639 on a HIRES4
+* plane) / 0-239 means the engine NEVER STARTS and never signals
+* complete, so this check is what stands between the poll below and a
+* hang.
                     ldd       ,u                  X0
-                    cmpd      #LD.MaxX
+                    cmpd      >gr.d1
                     bhi       BmLnRng
                     ldd       2,u                 X1
-                    cmpd      #LD.MaxX
+                    cmpd      >gr.d1
                     bhi       BmLnRng
                     lda       4,u                 Y0
                     cmpa      #LD.MaxY

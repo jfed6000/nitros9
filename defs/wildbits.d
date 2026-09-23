@@ -829,6 +829,8 @@ LD.Room             equ       LD.Depth-320        stop enqueueing above this
 LD.MaxX             equ       319                 an endpoint outside 0..319 /
 LD.MaxY             equ       239                 0..239 means the engine NEVER
 *                                                 starts and never completes
+LD.MaxX4            equ       639                 the same on a HIRES4 (640x240 4bpp) plane
+LD.Room4            equ       LD.Depth-640        and the room: a line there can be 640 pixels
 LD.Poll             equ       200                 COMPLETE poll limit: the walk
 *                                                 takes ~3.2us, ~26 cycles at 8MHz
 *
