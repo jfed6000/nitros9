@@ -819,12 +819,13 @@ LD_STAT_Complete    equ       %10000000           read-only, in LD_CTRL
 * into the engine's 100 MHz domain), poll COMPLETE, lower GO.
 *
 * COMPLETE MEANS THE BRESENHAM WALK FINISHED, NOT THAT A PIXEL REACHED
-* MEMORY.  Pixels go into a 4,096-entry FIFO (24-bit address + colour per
-* entry) which the video engine drains on ODD VISIBLE LINES ONLY, and
+* MEMORY.  Pixels go into an 8,192-entry FIFO (24-bit address + colour per
+* entry; 4,096 before the core of 2026-09-24, which doubled it and its
+* count - the FPGA developer, confirmed) which the video engine drains on ODD VISIBLE LINES ONLY, and
 * only on cycles the CPU is not using the SRAM.  The FIFO's full flag is
 * NOT connected and its write enable is unconditional, so an overrun
 * loses pixels silently: pace on LD_FIFO_H/L, which is the only defence.
-LD.Depth            equ       4096                FIFO entries, i.e. pixels
+LD.Depth            equ       8192                FIFO entries, i.e. pixels (4096 on cores before 2026-09-24)
 LD.Room             equ       LD.Depth-320        stop enqueueing above this
 LD.MaxX             equ       319                 an endpoint outside 0..319 /
 LD.MaxY             equ       239                 0..239 means the engine NEVER
