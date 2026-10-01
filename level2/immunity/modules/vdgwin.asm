@@ -27,8 +27,13 @@ atrv                set       ReEnt+rev
 rev                 set       $00
 
 * Window descriptor definitions
+                    ifne      COCODV
+szx                 set       80        CoCoDV 80x30 text (CoDV)
+szy                 set       30
+                    else
 szx                 set       32        number of columns for display
 szy                 set       16        number for rows for display
+                    endc
 wnum                set       WNUM      window number (1-7)
 sty                 set       1         window type
 cpx                 set       0         x cursor position

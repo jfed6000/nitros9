@@ -14,6 +14,9 @@ Sources here override same-named files elsewhere on the recipe vpath
   `-DALLCAPS=1` shows lower case letters as normal capitals.
 - `term_vdg.asm`: the `/Term` descriptor, the Level 2 VDG case of
   `level1/coco1/modules/term_vdg.asm`.
+- `codv.asm`, `codvfont.asm`: CoDV, the 80x30 console for a CoCoDV board
+  (`COCODV=1`), and its font. It replaces CoVDG and keeps the module name
+  `CoVDG`, so VTIO links it unchanged.
 - `vdgwin.asm`: the `/V1`-`/V7` VDG window descriptors, one source assembled
   with `-DWNUM=1..7`.
 

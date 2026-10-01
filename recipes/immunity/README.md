@@ -40,6 +40,24 @@ only a flag changes. The same applies after editing a file that a module
 includes with `use`, such as the kernel's `f*.asm` files. `make clean` also
 deletes the `.dsk` images in the recipe directory.
 
+## CoCoDV
+
+`COCODV=1` builds for a CoCo 2 with a CoCoDV digital video board. The console
+is then an 80x30 text screen in the CoCoDV's tile mode, from the CoDV
+co-module (`level2/immunity/modules/codv.asm`) instead of CoVDG. CoDV keeps
+the module name `CoVDG`, so `mdir` lists it as CoVDG:
+
+- `/term` and `/V1` to `/V4` are 80x30 screens (`VDG_WINDOWS`, 0-4, default
+  4). Each screen is a 6K screen in one of the 5 VDG pool blocks. CLEAR and
+  SHIFT-CLEAR switch between them.
+- The font is `FONT/CODVFONT` on the disk (from `codvfont.asm`). The first
+  screen loads it into the CoCoDV's tile RAM and switches on tile mode when
+  `/term` is opened. Without the file the text is not readable.
+- The CoCoDV is programmed the way the manual's BASIC examples do it: each
+  unlock value is held about 1ms, with timed waits. The faster sequence of the
+  Level 1 driver did not work on the i-MMU-nity machine.
+- There are no graphics display codes ($0F-$1F) on CoDV screens.
+
 ## Emulation
 
 XRoar's `-machine-opt immunity` emulates the i-MMU-nity MMU. In `floppy/`,

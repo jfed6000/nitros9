@@ -35,9 +35,24 @@ MEDIA ?= floppy
 # (display only; typed input is unchanged).
 VDG_T1 ?= 0
 UPPERCASE ?= 0
-# VDG_WINDOWS=n adds /V1../Vn, extra 32x16 screens (CLEAR/SHIFT-CLEAR
-# switch between them; start a shell with "shell i=/v1&"). 0 to 7.
+# COCODV=1: the console is an 80x30 text screen on a CoCoDV digital video
+# board (CoDV instead of CoVDG; its font is FONT/CODVFONT on the disk).
+COCODV ?= 0
+# VDG_WINDOWS=n adds /V1../Vn, extra screens (CLEAR/SHIFT-CLEAR switch
+# between them; start a shell with "shell i=/v1&"). 32x16, 0 to 7; with
+# COCODV=1 80x30, 0 to 4 (each takes one of the 5 VDG pool blocks).
+ifeq ($(COCODV),1)
+VDG_WINDOWS ?= 4
+ifneq ($(filter-out 0 1 2 3 4,$(VDG_WINDOWS)),)
+$(error VDG_WINDOWS=$(VDG_WINDOWS): COCODV=1 allows 0 to 4)
+endif
+VDGCO = codv.io
+AFLAGS_CODV = -DCOCODV=1
+else
 VDG_WINDOWS ?= 7
+VDGCO = covdg.io
+AFLAGS_CODV =
+endif
 TRACKS ?= 40
 PwrLnFrq ?= 60
 
@@ -86,7 +101,7 @@ KERNEL_TRACK ?= $(REL) $(BOOTER) krn
 KERNELFILE = kerneltrack
 
 VDGWINS = $(foreach n,$(wordlist 1,$(VDG_WINDOWS),1 2 3 4 5 6 7),v$(n).dw)
-SCF ?= scf.mn vtio.dr snddrv_cc3.sb joydrv_joy.sb covdg.io term_vdg.dt $(VDGWINS)
+SCF ?= scf.mn vtio.dr snddrv_cc3.sb joydrv_joy.sb $(VDGCO) term_vdg.dt $(VDGWINS)
 PIPE ?= pipeman.mn piper.dr pipe.dd
 CLOCK ?= clock_$(PwrLnFrq)hz clock2_soft
 
@@ -97,7 +112,7 @@ BOOTMODS ?= krnp2 ioman init \
 	$(CLOCK) \
 	$(BOOTMODS_EXTRA)
 
-$(addprefix $(MODDIR)/,vtio.dr covdg.io): $(DEFSDIR)/cocovtio.d
+$(addprefix $(MODDIR)/,vtio.dr covdg.io codv.io): $(DEFSDIR)/cocovtio.d
 
 # ---------------------------------------------------------------------------
 # Disk contents
@@ -133,7 +148,11 @@ kernelfile: $(addprefix $(MODDIR)/,$(KERNEL_TRACK))
 bootfile: $(addprefix $(MODDIR)/,$(BOOTMODS))
 	$(MERGE) $(addprefix $(MODDIR)/,$(BOOTMODS))>$@
 
-$(DSKIMAGE): libs kernelfile bootfile $(MODDIR)/sysgo_dd $(addprefix $(MODDIR)/,$(CMDS)) $(STARTUP) | $(SYSDIR)
+ifeq ($(COCODV),1)
+FONTFILES = CODVFONT
+endif
+
+$(DSKIMAGE): libs kernelfile bootfile $(MODDIR)/sysgo_dd $(addprefix $(MODDIR)/,$(CMDS)) $(STARTUP) $(FONTFILES) | $(SYSDIR)
 	$(RM) $@
 	$(OS9FORMAT_CMD) -q $@ -n"NitrOS-9/$(CPU) Level $(LEVEL)"
 	$(OS9GEN) $@ -b=bootfile -t=$(KERNELFILE)
@@ -153,6 +172,10 @@ endif
 	$(OS9COPY) $(addprefix $(MODDIR)/,$(CMDS)) $@,CMDS
 	$(OS9ATTR_EXEC) $(foreach file,$(CMDS),$@,CMDS/$(file))
 	$(OS9COPY) $(MODDIR)/sysgo_dd $@,sysgo
+ifneq ($(FONTFILES),)
+	$(MAKDIR) $@,FONT
+	$(OS9COPY) $(FONTFILES) $@,FONT
+endif
 	$(OS9ATTR_EXEC) $@,sysgo
 	$(CPL) $(STARTUP) $@,startup
 	$(OS9ATTR_TEXT) $@,startup
@@ -184,11 +207,16 @@ else
 TERM_VDG_FLAGS = -DPLAIN6847=1
 endif
 $(MODDIR)/term_vdg.dt: term_vdg.asm | $(MODDIR)
-	$(AS) $(AFLAGS) $< $(ASOUT)$@ $(TERM_VDG_FLAGS)
+	$(AS) $(AFLAGS) $< $(ASOUT)$@ $(TERM_VDG_FLAGS) $(AFLAGS_CODV)
+
+# CoCoDV font (raw 1024 bytes), loaded by CoDV from /DD/FONT/CODVFONT
+CODVFONT: codvfont.asm
+	$(ASROM) $< $(ASOUT)$@
+CLEAN_EXTRA += CODVFONT
 
 # /V1-/V7 from one source (level2/immunity/modules/vdgwin.asm)
 $(MODDIR)/v%.dw: vdgwin.asm | $(MODDIR)
-	$(AS) $(AFLAGS) $< $(ASOUT)$@ $(TERM_VDG_FLAGS) -DWNUM=$*
+	$(AS) $(AFLAGS) $< $(ASOUT)$@ $(TERM_VDG_FLAGS) $(AFLAGS_CODV) -DWNUM=$*
 
 $(MODDIR)/rel_32: rel.asm | $(MODDIR)
 	$(AS) $(AFLAGS) $< $(ASOUT)$@ -DWidth=32
